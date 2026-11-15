@@ -20,7 +20,7 @@ Based on the uploaded `AudioCityStudio-0.12-BuildReady (1).zip`, which is older 
 - These are **12 existing synthesizer presets**, not newly integrated internet-sourced realistic piano/strings/guitar multisample libraries. Sample instrument downloads are not included in this patch.
 - Device input/output latency, UI responsiveness on small screens, MIDI alignment and count-in timing must be checked on real Android hardware. The count-in is armed using the audio transport frame clock; visual updates use the UI handler and may be late by a frame.
 - Loop recording captures one continuous take whose notes may extend beyond the loop range. Proper lane-by-lane loop-comping/overdub placement is not implemented.
-- Stop Recording saves the take. An independent Keep/Retake audition workflow and MIDI quantization are not implemented yet.
+- Stop Recording saves each Play It take to its own instrument track in Arrange. Note onsets and releases are automatically snapped to the project tempo's 1/16-note grid; notes keep at least one grid step of duration. An independent Keep/Retake audition workflow is not implemented yet.
 - Signed APK updates require the original app signing key; keep existing projects backed up before installing a differently signed APK.
 
 ## Validation done

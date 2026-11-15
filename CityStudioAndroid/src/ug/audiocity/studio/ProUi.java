@@ -742,8 +742,7 @@ final class ProUi {
         voices.setSamplePack(15, samplePack);
         if (!a.liveMidi.running) a.liveMidi.start();
         long beat = Math.max(1, Core.beat(a.session.bpm));
-        long delay = beat - Math.floorMod(a.engine.position, beat);
-        voices.schedule(events, delay, 15);
+        voices.scheduleNextGrid(events, 15, beat, a.engine.position);
     }
 
     // ---------------------------------------------------------------- piano roll
@@ -1316,13 +1315,30 @@ final class ProUi {
     /** MIDI recordings become live, editable clips unless the user prefers printed audio. Returns true when handled. */
     boolean liveMidiTake(MidiTake take, Core.Track target, long start, String name) {
         if (!prefs().getBoolean("liveMidi", true)) return false;
-        List<Pro.Note> notes = ProMidi.fromTake(take);
+        boolean touchPerformance = "Touch performance".equals(name);
+        long clipStart = start;
+        MidiTake outputTake = take;
+        if (touchPerformance) {
+            ProMidi.QuantizedTake quantized = ProMidi.quantizePerformance(take, start);
+            outputTake = quantized.take;
+            clipStart = quantized.start;
+        }
+        final MidiTake capturedTake = outputTake;
+        List<Pro.Note> notes = ProMidi.fromTake(capturedTake);
         if (notes.isEmpty()) { a.toast("No MIDI notes were received."); return true; }
-        take.samplePackId = take.samplePack == null ? null : a.selectedSampleInstrumentId;
-        final Synth.Config instrument = take.config.copy();
-        a.busy("Creating live MIDI clip…", () -> { Core.Clip c = ProMidi.clip(name, notes, instrument, take.samplePack, take.samplePackId, start, Math.max(1, take.frames));
-            c.length = (int) Math.max(1, Math.min(c.length, Core.MAX_FRAMES - start));
-            a.runOnUiThread(() -> { target.clips.add(c); a.selected = target; a.clip = c; a.screen = "ARRANGE"; a.save(false); a.refresh(); a.toast("Performance saved as a live MIDI clip: edit notes or change the instrument any time from the clip menu."); }); });
+        capturedTake.samplePackId = capturedTake.samplePack == null ? null : a.selectedSampleInstrumentId;
+        final Synth.Config instrument = capturedTake.config.copy();
+        final Core.Session project = a.session;
+        final Core.Track destination = a.performanceTrack(capturedTake, name, target);
+        final long at = clipStart;
+        a.busy("Creating live MIDI clip…", () -> { Core.Clip c = ProMidi.clip(name, notes, instrument, capturedTake.samplePack, capturedTake.samplePackId, at, Math.max(1, capturedTake.frames));
+            c.length = (int) Math.max(1, Math.min(c.length, Core.MAX_FRAMES - at));
+            a.runOnUiThread(() -> {
+                if (a.session != project) { a.toast("Project changed; performance was not saved."); return; }
+                if (destination != target) project.tracks.add(destination);
+                destination.clips.add(c); a.selected = destination; a.clip = c; a.screen = "ARRANGE"; a.save(false); a.refresh();
+                a.toast(touchPerformance ? "Play It take saved to its own instrument track and quantized to 1/16 notes." : "Performance saved as a live MIDI clip: edit notes or change the instrument any time from the clip menu.");
+            }); });
         return true;
     }
     void newMidiClip(Core.Track t) {

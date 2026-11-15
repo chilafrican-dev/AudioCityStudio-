@@ -36,6 +36,17 @@ public class ModernDawTests {
         Core.Clip r = c.copy(); ProMidi.retime(r, 2); check(r.notes.get(2).start == R / 4 && r.start == 500 && r.length == R, "tempo change scales notes");
         MidiTake take = new MidiTake(Synth.factory(0), 100); take.recording = false; take.events.add(new MidiTake.Event(10, 0x90, 60, 90)); take.events.add(new MidiTake.Event(4810, 0x80, 60, 0)); take.frames = 4810;
         check(ProMidi.fromTake(take).size() == 1 && ProMidi.fromTake(take).get(0).length == 4800, "recording becomes notes");
+        ArrayList<Pro.Note> quantized = new ArrayList<>(Arrays.asList(new Pro.Note(60, 100, 0, 900, 0), new Pro.Note(64, 90, 1490, 700, 0)));
+        long clipStart = ProMidi.quantizeRecordedNotes(quantized, 1500, 1000);
+        check(clipStart == 1000 && quantized.get(0).start == 1000 && quantized.get(1).start == 2000, "recorded note onsets snap to the absolute project grid");
+        check(quantized.get(0).length == 1000 && quantized.get(1).length == 1000, "recorded note releases snap to the grid with at least one grid step of duration");
+        MidiTake performance = new MidiTake(Synth.factory(0), 120); performance.recording = false;
+        performance.events.add(new MidiTake.Event(0, 0x90, 60, 100)); performance.events.add(new MidiTake.Event(900, 0x80, 60, 0));
+        performance.events.add(new MidiTake.Event(4000, 0x90, 64, 90)); performance.events.add(new MidiTake.Event(4700, 0x80, 64, 0)); performance.frames = 5000;
+        ProMidi.QuantizedTake result = ProMidi.quantizePerformance(performance, 5000);
+        List<Pro.Note> saved = ProMidi.fromTake(result.take);
+        check(result.start == 0 && saved.get(0).start == 6000 && saved.get(1).start == 12000, "touch take conversion quantizes at the tempo-derived sixteenth grid");
+        check(saved.get(0).length == 6000 && saved.get(1).length == 6000, "touch take note releases quantize with their onsets");
     }
 
     static void midiScheduling() {
@@ -55,6 +66,27 @@ public class ModernDawTests {
             else audibleAfterStart |= Math.abs(block[2 * i]) > 0;
         }
         check(silentBeforeStart && audibleAfterStart, "sampled MIDI event starts at its scheduled sample");
+        SynthPoly routed = new SynthPoly(Synth.factory(0));
+        SampledInstruments.Pack melodic = SampledInstruments.monoPack("melodic", sample, 60, "test");
+        SampledInstruments.Pack drums = SampledInstruments.monoPack("drums", sample, 60, "test");
+        routed.setSamplePack(0, melodic);
+        routed.setSamplePack(9, drums);
+        routed.message(0x99, 60, 110);
+        routed.render(block, 512);
+        check(routed.getSamplePack(0) == melodic && routed.getSamplePack(9) == drums
+                && rms(block, 1, 100) > 0, "drum-channel samples play without replacing another channel's instrument");
+        SynthPoly aligned = new SynthPoly(Synth.factory(0));
+        aligned.setSamplePack(9, drums);
+        aligned.render(new float[200], 100, 350);
+        ArrayList<MidiTake.Event> beat = new ArrayList<>();
+        beat.add(new MidiTake.Event(0, 0x99, 60, 110));
+        check(aligned.scheduleNextGrid(beat, 9, 1000, 0) == 550, "pattern schedules to the next beat from the rendered transport position");
+        float[] alignedBlock = new float[1400];
+        aligned.render(alignedBlock, 700, 450);
+        boolean silentUntilBeat = true;
+        for (int i = 0; i < 550; i++) silentUntilBeat &= alignedBlock[2 * i] == 0;
+        check(silentUntilBeat && Math.abs(alignedBlock[2 * 551]) > 0,
+                "beat-aligned MIDI starts at its scheduled transport sample");
         voices.render(block, 512);
         voices.render(block, 512);
         voices.render(block, 512);

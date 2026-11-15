@@ -137,6 +137,39 @@ final class ProMidi {
     /** Converts a finished MIDI recording into notes (frames relative to the take start). */
     static List<Pro.Note> fromTake(MidiTake take) { return Pro.notes(take.events, null); }
 
+    /** Quantizes touch note onsets and releases to the project grid, with at least one grid step per note. */
+    static long quantizeRecordedNotes(List<Pro.Note> notes, long clipStart, long gridFrames) {
+        if (notes == null || clipStart < 0 || gridFrames < 1) throw new IllegalArgumentException("Invalid MIDI quantization");
+        long alignedStart = clipStart / gridFrames * gridFrames;
+        for (Pro.Note note : notes) {
+            long absoluteStart = clipStart + note.start;
+            long absoluteEnd = absoluteStart + note.length;
+            long alignedNoteStart = Math.round(absoluteStart / (double) gridFrames) * gridFrames;
+            long alignedNoteEnd = Math.round(absoluteEnd / (double) gridFrames) * gridFrames;
+            note.start = Math.max(0, alignedNoteStart - alignedStart);
+            note.length = Math.max(gridFrames, alignedNoteEnd - alignedNoteStart);
+        }
+        return alignedStart;
+    }
+
+    static QuantizedTake quantizePerformance(MidiTake source, long clipStart) {
+        ArrayList<MidiTake.Event> other = new ArrayList<>();
+        List<Pro.Note> notes = Pro.notes(source.events, other);
+        long start = quantizeRecordedNotes(notes, clipStart, Math.max(1, Core.beat(source.bpm) / 4));
+        MidiTake generated = Pro.take(source.config, source.bpm, notes, other);
+        MidiTake take = new MidiTake(source.config, source.bpm, null, 0, source.samplePack, source.samplePackId);
+        take.recording = false;
+        take.events.addAll(generated.events);
+        take.frames = generated.frames;
+        return new QuantizedTake(take, start);
+    }
+
+    static final class QuantizedTake {
+        final MidiTake take;
+        final long start;
+        QuantizedTake(MidiTake take, long start) { this.take = take; this.start = start; }
+    }
+
     /** After a project tempo change: note times scale by 1/speed (speed = new bpm / old bpm). */
     static void retime(Core.Clip c, double speed) {
         for (Pro.Note n : c.notes) { n.start = Math.round(n.start / speed); n.length = Math.max(1, Math.round(n.length / speed)); }

@@ -55,8 +55,8 @@ final class BeatPilotDrumScreen {
   if(a.dead||a.session==null)return;
   if(a.session.timeSignature!=4){a.toast("Drum machine currently supports 4/4 projects.");return;}
   if(pattern==null){try{pattern=initialClip!=null?BeatPilotDrumPattern.decode(initialClip.drumPattern):BeatPilotDrumPattern.starter(a.session.bpm,1);}catch(RuntimeException ex){a.toast("Saved drum pattern is invalid");return;}}
-  final SampledInstruments.Pack original=a.selectedSampleInstrument;
-  a.liveMidi.voices.setSamplePack(pack(samples));a.liveMidi.start();
+  final SampledInstruments.Pack originalDrumPack=a.liveMidi.voices.getSamplePack(9);
+  a.liveMidi.voices.setSamplePack(9,pack(samples));a.liveMidi.start();
   final Core.Session project=a.session;
   // Non-destructive monitoring track: loops sample data in lockstep with the project timeline.
   // Do not save this temporary track as a user recording.
@@ -72,7 +72,7 @@ final class BeatPilotDrumScreen {
   LinearLayout pads=new LinearLayout(a);pads.setOrientation(LinearLayout.VERTICAL);page.addView(pads,new LinearLayout.LayoutParams(-1,a.dp(168)));
   for(int row=0;row<2;row++){LinearLayout line=new LinearLayout(a);pads.addView(line,new LinearLayout.LayoutParams(-1,0,1));
    for(int col=0;col<4;col++){final int lane=row*4+col;Button button=a.button(BeatPilotDrums.LABELS[lane],()->{
-     a.liveMidi.voices.message(0x90,36+lane,110); // non-looping sample ends naturally
+     a.liveMidi.voices.message(0x99,36+lane,110); // non-looping sample ends naturally
      status.setText("Played: "+BeatPilotDrums.LABELS[lane]);
     });line.addView(button,new LinearLayout.LayoutParams(0,-1,1));}
   }
@@ -165,7 +165,7 @@ final class BeatPilotDrumScreen {
    });
   });
   close.setOnClickListener(v->dialog.dismiss());
-  dialog.setOnDismissListener(v->{closeLive();a.handler.removeCallbacks(ticker[0]);for(int i=0;i<8;i++)a.liveMidi.voices.message(0x80,36+i,0);a.liveMidi.voices.setSamplePack(original);});
+  dialog.setOnDismissListener(v->{closeLive();a.handler.removeCallbacks(ticker[0]);for(int i=0;i<8;i++)a.liveMidi.voices.message(0x89,36+i,0);a.liveMidi.voices.setSamplePack(9,originalDrumPack);});
   dialog.show();if(dialog.getWindow()!=null)dialog.getWindow().setLayout(-1,-1);a.handler.post(ticker[0]);
  }
  private static final String[] LOOP_FILES={

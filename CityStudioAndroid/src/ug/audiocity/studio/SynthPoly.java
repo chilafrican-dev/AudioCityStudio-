@@ -33,6 +33,7 @@ public final class SynthPoly {
  public synchronized void setSamplePack(SampledInstruments.Pack pack){silence();Arrays.fill(samplePacks,pack);}
  public synchronized void setSamplePack(int channel,SampledInstruments.Pack pack){if(channel<0||channel>15)throw new IllegalArgumentException("Invalid MIDI channel");samplePacks[channel]=pack;voices.removeIf(v->v.channel==channel);sampled.removeIf(v->v.channel==channel);scheduled.removeIf(e->(e.status&15)==channel);sustain[channel]=false;activeVoices=voices.size()+sampled.size();}
  public synchronized SampledInstruments.Pack getSamplePack(){return samplePacks[0];}
+ public synchronized SampledInstruments.Pack getSamplePack(int channel){if(channel<0||channel>15)throw new IllegalArgumentException("Invalid MIDI channel");return samplePacks[channel];}
  final ArrayList<Voice> voices=new ArrayList<>();final Synth.Config[] config=new Synth.Config[16];final boolean[] sustain=new boolean[16];final double[] bend=new double[16];public volatile int activeVoices;
  private final PriorityQueue<Scheduled> scheduled=new PriorityQueue<>((x,y)->{int byFrame=Long.compare(x.frame,y.frame);return byFrame!=0?byFrame:Long.compare(x.order,y.order);});
  private long scheduleOrder;
@@ -80,9 +81,27 @@ public final class SynthPoly {
   voices.removeIf(v->v.channel==channel);sampled.removeIf(v->v.channel==channel);
   sustain[channel]=false;activeVoices=voices.size()+sampled.size();
  }
- private long renderedFrames;
+ private long renderedFrames,transportPosition=-1;
  /** Renders queued events at exact sample offsets in the shared MIDI audio stream. */
  public synchronized void render(float[] out,int frames){
+  renderFrames(out,frames);
+  transportPosition=-1;
+ }
+ /** Renders MIDI at the project's current transport position for beat-aligned scheduling. */
+ public synchronized void render(float[] out,int frames,long projectFrame){
+  if(projectFrame<0)throw new IllegalArgumentException("Invalid transport position");
+  renderFrames(out,frames);
+  transportPosition=projectFrame+frames;
+ }
+ /** Schedules a pattern on the next transport grid using the same clock as its audio rendering. */
+ public synchronized long scheduleNextGrid(List<MidiTake.Event> events,int channel,long gridFrames,long fallbackFrame){
+  if(gridFrames<1||fallbackFrame<0)throw new IllegalArgumentException("Invalid MIDI schedule grid");
+  long position=transportPosition>=0?transportPosition:fallbackFrame;
+  long delay=gridFrames-Math.floorMod(position,gridFrames);
+  schedule(events,delay,channel);
+  return delay;
+ }
+ private void renderFrames(float[] out,int frames){
   if(frames<0||out.length<frames*2)throw new IllegalArgumentException("Invalid MIDI output buffer");
   if(scheduled.isEmpty()){renderVoices(out,frames);renderedFrames+=frames;return;}
   Arrays.fill(out,0,frames*2,0);float[] segment=new float[Math.max(2,frames*2)];int written=0;

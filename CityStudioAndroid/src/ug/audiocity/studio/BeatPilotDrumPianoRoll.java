@@ -21,12 +21,12 @@ final class BeatPilotDrumPianoRoll {
  TextView hint;
  BeatPilotDrumPianoRoll(MainActivity a,Core.Track t,Core.Clip c){this.a=a;track=t;original=c;data=BeatPilotDrumRollData.decode(c.drumPattern);}
  void load()throws IOException{for(int i=0;i<8;i++)try(InputStream in=a.getAssets().open("samples/builtin/soundza/"+BeatPilotDrums.FILES[i])){waves[i]=SampleAudio.readWav(in);}}
- void auditionLane(int lane,int velocity){a.liveMidi.voices.message(0x90,36+lane,velocity);}
+ void auditionLane(int lane,int velocity){a.liveMidi.voices.message(0x99,36+lane,velocity);}
  void snapshot(){history.push(data.copy());while(history.size()>40)history.removeLast();}
  void show(){if(!a.canEdit()||a.working)return;a.busy("Loading Audio City drum piano roll…",()->{load();a.runOnUiThread(this::editor);});}
  void editor(){
-  final SampledInstruments.Pack originalPack=a.selectedSampleInstrument;
-  a.liveMidi.voices.setSamplePack(BeatPilotDrumScreen.pack(waves));a.liveMidi.start();
+  final SampledInstruments.Pack originalDrumPack=a.liveMidi.voices.getSamplePack(9);
+  a.liveMidi.voices.setSamplePack(9,BeatPilotDrumScreen.pack(waves));a.liveMidi.start();
   LinearLayout root=a.column();root.setPadding(a.dp(9),a.dp(10),a.dp(9),a.dp(10));
   root.addView(a.label("AUDIO CITY · DRUM PIANO ROLL",18,MainActivity.TEXT,true));
   root.addView(a.label("Tap to add/select • drag to move • drag right edge to resize • long-press to delete",12,MainActivity.TEXT,false));
@@ -36,8 +36,8 @@ final class BeatPilotDrumPianoRoll {
   SeekBar bar=new SeekBar(a);bar.setMax(126);bar.setProgress(velocity-1);bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar s,int p,boolean u){velocity=p+1;vel.setText("Velocity: "+velocity);}public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}});root.addView(bar);
   LinearLayout actions=a.column();root.addView(actions);
   LinearLayout previewRow=new LinearLayout(a);actions.addView(previewRow);
-  previewRow.addView(a.button("▶ Hear drum pattern",()->{a.preview(data.copy().render(waves));}),new LinearLayout.LayoutParams(0,a.dp(46),1));
-  previewRow.addView(a.button("■ Stop preview",()->a.audition.stop()),new LinearLayout.LayoutParams(0,a.dp(46),1));
+  previewRow.addView(a.button("▶ Hear drum pattern",this::hearPattern),new LinearLayout.LayoutParams(0,a.dp(46),1));
+  previewRow.addView(a.button("■ Stop preview",()->a.liveMidi.voices.cancelScheduled(9)),new LinearLayout.LayoutParams(0,a.dp(46),1));
   root.addView(a.label("Tap a drum lane label or an existing note to hear its sample.",12,MainActivity.DIM,false));
   LinearLayout row=new LinearLayout(a);actions.addView(row);row.addView(a.button("Apply velocity",()->{if(canvas.selected!=null){snapshot();canvas.selected.velocity=velocity;canvas.invalidate();update();}}),new LinearLayout.LayoutParams(0,a.dp(46),1));row.addView(a.button("Delete",()->{if(canvas.selected!=null){snapshot();data.hits.remove(canvas.selected);canvas.selected=null;canvas.invalidate();update();}}),new LinearLayout.LayoutParams(0,a.dp(46),1));row.addView(a.button("Undo",()->{if(!history.isEmpty()){data=history.pop();canvas.selected=null;canvas.invalidate();update();}}),new LinearLayout.LayoutParams(0,a.dp(46),1));
   LinearLayout r2=new LinearLayout(a);actions.addView(r2);r2.addView(a.button("Grid 1/16",()->{grid=24;canvas.invalidate();}),new LinearLayout.LayoutParams(0,a.dp(42),1));r2.addView(a.button("Grid 1/32",()->{grid=12;canvas.invalidate();}),new LinearLayout.LayoutParams(0,a.dp(42),1));r2.addView(a.button("Free timing",()->{grid=1;canvas.invalidate();}),new LinearLayout.LayoutParams(0,a.dp(42),1));
@@ -45,8 +45,20 @@ final class BeatPilotDrumPianoRoll {
   ScrollView scroll=new ScrollView(a);scroll.setFillViewport(true);scroll.addView(root);
   AlertDialog dialog=new AlertDialog.Builder(a).setTitle(original.name).setView(scroll).setNegativeButton("Discard",null).setPositiveButton("Save MIDI + audio",null).create();
   dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->save(dialog)));
-  dialog.setOnDismissListener(d->{for(int i=0;i<8;i++)a.liveMidi.voices.message(0x80,36+i,0);a.liveMidi.voices.setSamplePack(originalPack);a.audition.stop();});
+  dialog.setOnDismissListener(d->{a.liveMidi.voices.cancelScheduled(9);a.liveMidi.voices.setSamplePack(9,originalDrumPack);});
   dialog.show();if(dialog.getWindow()!=null)dialog.getWindow().setLayout(-1,-1);
+ }
+ void hearPattern(){
+  ArrayList<MidiTake.Event> events=new ArrayList<>(data.auditionEvents(a.session.bpm));
+  if(events.isEmpty()){a.toast("Add MIDI notes to hear your drum pattern.");return;}
+  if(!a.requestAudioFocus())return;
+  if(!a.engine.playing){
+   if(!a.engine.loop&&a.session.end()>0&&a.engine.position>=a.session.end())a.engine.position=0;
+   a.engine.play(a.session);
+  }
+  if(!a.engine.playing){a.toast("Could not start Arrange playback. Retry the pattern preview.");return;}
+  a.liveMidi.voices.cancelScheduled(9);
+  a.liveMidi.voices.scheduleNextGrid(events,9,Math.max(1,Core.beat(a.session.bpm)),a.engine.position);
  }
  void update(){hint.setText("8 drum lanes • "+data.bars+" bars • "+data.hits.size()+" MIDI notes");}
  void save(AlertDialog dialog){if(a.working)return;final BeatPilotDrumRollData snapshot=data.copy();final Core.Session project=a.session;final long pos=original.start;

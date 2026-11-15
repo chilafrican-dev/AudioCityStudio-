@@ -64,7 +64,103 @@ public final class AudioIO {
   long heard(){return NativeAudio.framesRead(h);}int burst(){return NativeAudio.framesPerBurst(h);}int bufferFrames(){return NativeAudio.bufferFrames(h);}
   String describe(){return NativeAudio.exclusive(h)?"AAudio · exclusive (MMAP)":"AAudio · shared";}
   void interrupt(){NativeAudio.stop(h);}synchronized void close(){if(closed)return;closed=true;NativeAudio.stop(h);NativeAudio.close(h);}}
- public static final class Engine {volatile boolean playing,loop,click,recording;/** Low-latency mode uses the device burst size for blocks and a two-burst output buffer. */public volatile boolean lowLatency;public volatile int burstFrames=192,latencyFrames;/** Input monitoring: microphone frames pushed by Capture, optionally through a track's channel FX. */public volatile Pro.Ring monitor;public volatile double monitorGain=1;public volatile Core.Track monitorTrack;/** The renderer currently playing, for live loudness metering. */public volatile Core.Renderer live;volatile long position;public volatile long transportFrames;public volatile float clickVolume=1f;volatile SynthPoly midiMonitor;volatile float peak,peakLeft,peakRight,peakHold,reduction;volatile boolean overloaded;volatile String error;/** Prefer the native AAudio stream (libaudiocity.so) when it is built into the APK. */public volatile boolean useNative=true;public volatile String outputPath="";private Thread thread;private volatile Output device;public synchronized void play(Core.Session session){if(playing)return;if(thread!=null&&thread.isAlive()){error="Audio output is still stopping. Try Play again.";return;}if(loop&&session.loopEnd>session.loopStart){if(position<session.loopStart||position>=session.loopEnd)position=session.loopStart;}else if(loop&&position>=Math.max(Core.beat(session.bpm)*4,session.end()))position=0;playing=true;long start=position;transportFrames=start;thread=new Thread(()->{Core.Renderer renderer=new Core.Renderer(session);live=renderer;android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);Output track=null;try{track=Output.open(lowLatency,useNative,burstFrames);device=track;outputPath=track.describe();int block=lowLatency?Math.max(32,Math.min(512,track.burst())):512;latencyFrames=track.bufferFrames();track.start();float[] data=new float[Math.max(1024,block*2)],midiData=new float[Math.max(1024,block*2)],mon=new float[Math.max(1024,block*2)];Core.Processor monitorFx=null;Core.Fx monitorSource=null;long cursor=start,heardBase=start;while(playing){long end=recording?Core.MAX_FRAMES:Math.min(Core.MAX_FRAMES,Math.max(Core.beat(session.bpm)*4,session.end()+tailFrames(session)));boolean ranged=session.loopEnd>session.loopStart;long loopStart=ranged?session.loopStart:0,loopEnd=ranged?session.loopEnd:Math.max(Core.beat(session.bpm)*4,session.end());if(loop&&cursor>=loopEnd){cursor=loopStart;renderer=new Core.Renderer(session);live=renderer;}if(!loop&&cursor>=end){playing=false;break;}int n=(int)Math.min(block,(loop?loopEnd:end)-cursor);renderer.clickLevel=.12f*Math.max(0f,Math.min(2f,clickVolume));renderer.render(cursor,n,data,click);float midiPeakL=0,midiPeakR=0;SynthPoly midi=midiMonitor;if(midi!=null){midi.render(midiData,n);for(int i=0;i<n*2;i++){double combined=data[i]+midiData[i]*session.master;renderer.overloaded|=Math.abs(combined)>1;data[i]=(float)Math.max(-.89125,Math.min(.89125,combined));if(i%2==0)midiPeakL=Math.max(midiPeakL,Math.abs(data[i]));else midiPeakR=Math.max(midiPeakR,Math.abs(data[i]));}}Pro.Ring ring=monitor;if(ring!=null){java.util.Arrays.fill(mon,0,n*2,0);ring.mixInto(mon,n,1,Math.max(block*4,1024));Core.Track mt=monitorTrack;if(mt!=null&&!mt.bypassFx){if(monitorFx==null||monitorSource!=mt.fx){monitorFx=new Core.Processor();monitorSource=mt.fx;}monitorFx.configure(mt.fx,session.bpm);monitorFx.apply(mon,n);}double g=monitorGain*session.master;for(int i=0;i<n*2;i++){double combined=data[i]+mon[i]*g;data[i]=(float)Math.max(-.89125,Math.min(.89125,combined));}}int written=0;while(playing&&written<n*2){int v=track.write(data,written,n*2-written);if(v<=0){if(!playing)break;throw new IOException("Audio output error "+v);}written+=v;}cursor+=written/2;transportFrames+=written/2;long heard=heardBase+track.heard();position=loop?ProEdit.loopPosition(heard,loopStart,loopEnd):Math.min(heard,cursor);peakLeft=midi==null?renderer.peakLeft:midiPeakL;peakRight=midi==null?renderer.peakRight:midiPeakR;peak=Math.max(peakLeft,peakRight);peakHold=Math.max(peakHold,peak);reduction=renderer.limiterDb;overloaded|=renderer.overloaded;}if(!loop&&position>session.end())position=session.end();}catch(Exception e){error=e.getMessage();playing=false;}finally{if(track!=null)track.close();device=null;peak=peakLeft=peakRight=reduction=0;for(Core.Track t:session.tracks)t.meter=t.meterL=t.meterR=t.reduction=0;}},"CityStudio-Audio");thread.start();}
+ public static final class Engine {
+  volatile boolean playing,loop,click,recording;
+  /** Low-latency mode uses the device burst size for blocks and a two-burst output buffer. */
+  public volatile boolean lowLatency;
+  public volatile int burstFrames=192,latencyFrames;
+  /** Input monitoring: microphone frames pushed by Capture, optionally through a track's channel FX. */
+  public volatile Pro.Ring monitor;
+  public volatile double monitorGain=1;
+  public volatile Core.Track monitorTrack;
+  /** The renderer currently playing, for live loudness metering. */
+  public volatile Core.Renderer live;
+  volatile long position;
+  public volatile long transportFrames;
+  public volatile float clickVolume=1f;
+  volatile SynthPoly midiMonitor;
+  volatile float peak,peakLeft,peakRight,peakHold,reduction;
+  volatile boolean overloaded;
+  volatile String error;
+  /** Prefer the native AAudio stream (libaudiocity.so) when it is built into the APK. */
+  public volatile boolean useNative=true;
+  public volatile String outputPath="";
+  private Thread thread;
+  private volatile Output device;
+  public synchronized void play(Core.Session session){
+   if(playing)return;
+   if(thread!=null&&thread.isAlive()){error="Audio output is still stopping. Try Play again.";return;}
+   if(loop&&session.loopEnd>session.loopStart){
+    if(position<session.loopStart||position>=session.loopEnd)position=session.loopStart;
+   }else if(loop&&position>=Math.max(Core.beat(session.bpm)*4,session.end()))position=0;
+   playing=true;
+   long start=position;
+   transportFrames=start;
+   thread=new Thread(()->{
+    Core.Renderer renderer=new Core.Renderer(session);live=renderer;
+    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
+    Output track=null;
+    try{
+     track=Output.open(lowLatency,useNative,burstFrames);device=track;outputPath=track.describe();
+     int block=lowLatency?Math.max(32,Math.min(512,track.burst())):512;
+     latencyFrames=track.bufferFrames();track.start();
+     float[] data=new float[Math.max(1024,block*2)],midiData=new float[Math.max(1024,block*2)],mon=new float[Math.max(1024,block*2)];
+     Core.Processor monitorFx=null;Core.Fx monitorSource=null;
+     long cursor=start,heardBase=start;
+     while(playing){
+      long end=recording?Core.MAX_FRAMES:Math.min(Core.MAX_FRAMES,Math.max(Core.beat(session.bpm)*4,session.end()+tailFrames(session)));
+      boolean ranged=session.loopEnd>session.loopStart;
+      long loopStart=ranged?session.loopStart:0,loopEnd=ranged?session.loopEnd:Math.max(Core.beat(session.bpm)*4,session.end());
+      if(loop&&cursor>=loopEnd){cursor=loopStart;renderer=new Core.Renderer(session);live=renderer;}
+      if(!loop&&cursor>=end){playing=false;break;}
+      int n=(int)Math.min(block,(loop?loopEnd:end)-cursor);
+      renderer.clickLevel=.12f*Math.max(0f,Math.min(2f,clickVolume));
+      renderer.render(cursor,n,data,click);
+      float midiPeakL=0,midiPeakR=0;
+      SynthPoly midi=midiMonitor;
+      if(midi!=null){
+       midi.render(midiData,n,cursor);
+       for(int i=0;i<n*2;i++){
+        double combined=data[i]+midiData[i]*session.master;
+        renderer.overloaded|=Math.abs(combined)>1;
+        data[i]=(float)Math.max(-.89125,Math.min(.89125,combined));
+        if(i%2==0)midiPeakL=Math.max(midiPeakL,Math.abs(data[i]));
+        else midiPeakR=Math.max(midiPeakR,Math.abs(data[i]));
+       }
+      }
+      Pro.Ring ring=monitor;
+      if(ring!=null){
+       java.util.Arrays.fill(mon,0,n*2,0);ring.mixInto(mon,n,1,Math.max(block*4,1024));
+       Core.Track mt=monitorTrack;
+       if(mt!=null&&!mt.bypassFx){
+        if(monitorFx==null||monitorSource!=mt.fx){monitorFx=new Core.Processor();monitorSource=mt.fx;}
+        monitorFx.configure(mt.fx,session.bpm);monitorFx.apply(mon,n);
+       }
+       double g=monitorGain*session.master;
+       for(int i=0;i<n*2;i++){double combined=data[i]+mon[i]*g;data[i]=(float)Math.max(-.89125,Math.min(.89125,combined));}
+      }
+      int written=0;
+      while(playing&&written<n*2){
+       int v=track.write(data,written,n*2-written);
+       if(v<=0){if(!playing)break;throw new IOException("Audio output error "+v);}
+       written+=v;
+      }
+      cursor+=written/2;transportFrames+=written/2;
+      long heard=heardBase+track.heard();
+      position=loop?ProEdit.loopPosition(heard,loopStart,loopEnd):Math.min(heard,cursor);
+      peakLeft=midi==null?renderer.peakLeft:midiPeakL;peakRight=midi==null?renderer.peakRight:midiPeakR;
+      peak=Math.max(peakLeft,peakRight);peakHold=Math.max(peakHold,peak);
+      reduction=renderer.limiterDb;overloaded|=renderer.overloaded;
+     }
+     if(!loop&&position>session.end())position=session.end();
+    }catch(Exception e){error=e.getMessage();playing=false;}
+    finally{
+     if(track!=null)track.close();device=null;peak=peakLeft=peakRight=reduction=0;
+     for(Core.Track t:session.tracks)t.meter=t.meterL=t.meterR=t.reduction=0;
+    }
+   },"CityStudio-Audio");
+   thread.start();
+  }
  public synchronized void pause(){playing=false;Output t=device;if(t!=null)t.interrupt();Thread old=thread;if(old!=null&&old!=Thread.currentThread())try{old.join(1200);}catch(InterruptedException e){Thread.currentThread().interrupt();}if(old==null||!old.isAlive())thread=null;}
  public void stop(){pause();position=0;}
  public void seek(long frames){pause();position=Math.max(0,Math.min(Core.MAX_FRAMES,frames));}

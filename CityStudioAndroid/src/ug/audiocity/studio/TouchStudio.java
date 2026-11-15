@@ -56,13 +56,12 @@ final class TouchStudio {
  /** A full-height, fixed-pad performance surface. Advanced options live in a separate dialog. */
  void perform(){
   if(!a.canEdit())return;
-  if(a.selected==null){a.toast("Select an instrument destination track first.");return;}
   if(!a.requestAudioFocus())return;
   a.liveMidi.voices.setConfig(a.synthConfig);a.liveMidi.voices.setSamplePack(a.selectedSampleInstrument);a.liveMidi.start();
   final LinearLayout page=box();
   page.setPadding(a.dp(11),a.dp(9),a.dp(11),a.dp(8));
   page.addView(a.label("PLAY IT. KEEP THE TAKE.",19,MainActivity.TEXT,true));
-  caption(page,"Into "+a.selected.name+" · touch chords over your backing beat");
+  caption(page,"Your take gets its own instrument track in Arrange · play over your backing beat");
   final Spinner root=new Spinner(a),scale=new Spinner(a),mode=new Spinner(a),octave=new Spinner(a),progression=new Spinner(a),layout=new Spinner(a),countIn=new Spinner(a);
   final Spinner[] spinners={root,scale,mode,octave,progression,layout,countIn};
   final String[] patches=Synth.NAMES;
@@ -159,6 +158,7 @@ final class TouchStudio {
   stopTake.setOnClickListener(v->{if(a.midiTake==null)return;pads.releaseAll();a.finishMidiTake();updateClick.run();});
   record.setOnClickListener(v->{
    if(a.midiTake!=null||a.working)return;
+   if(a.session.tracks.size()>=Core.MAX_TRACKS){a.toast("No free track for this Play It take.");return;}
    pads.releaseAll();if(!a.engine.playing){if(!a.requestAudioFocus())return;if(!a.engine.loop&&a.session.end()>0&&a.engine.position>=a.session.end())a.engine.position=0;a.engine.play(a.session);if(!a.engine.playing){a.toast("Could not start backing playback. Retry Play.");return;}}
    long now=a.engine.transportFrames;long bar=Core.beat(a.session.bpm)*Math.max(1,a.session.timeSignature);
    int bars=Math.max(0,countIn.getSelectedItemPosition());long target=PerformanceChords.recordStart(now,bar,bars);

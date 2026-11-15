@@ -174,8 +174,13 @@ public class MainActivity extends Activity {
  void chooseMidiDevice(){android.media.midi.MidiDeviceInfo[] devices=midi.devices();ArrayList<android.media.midi.MidiDeviceInfo> infos=new ArrayList<>();ArrayList<Integer> ports=new ArrayList<>();ArrayList<String> names=new ArrayList<>();for(android.media.midi.MidiDeviceInfo info:devices)for(android.media.midi.MidiDeviceInfo.PortInfo port:info.getPorts())if(port.getType()==android.media.midi.MidiDeviceInfo.PortInfo.TYPE_OUTPUT){String label=info.getProperties().getString(android.media.midi.MidiDeviceInfo.PROPERTY_NAME,"MIDI controller")+" / "+(port.getName().isEmpty()?"port "+port.getPortNumber():port.getName());infos.add(info);ports.add(port.getPortNumber());names.add(label);}if(names.isEmpty()){toast("No MIDI note-output device found. Connect the controller with USB OTG, or open a paired Bluetooth MIDI device.");return;}new AlertDialog.Builder(this).setTitle("Controller input port").setItems(names.toArray(new String[0]),(d,i)->midi.open(infos.get(i),ports.get(i),names.get(i))).setNegativeButton("Cancel",null).show();}
  void pairedBluetoothMidi(){if(Build.VERSION.SDK_INT>=31&&checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT},51);return;}try{android.bluetooth.BluetoothManager manager=(android.bluetooth.BluetoothManager)getSystemService(BLUETOOTH_SERVICE);android.bluetooth.BluetoothAdapter adapter=manager==null?null:manager.getAdapter();if(adapter==null){toast("Bluetooth is unavailable.");return;}ArrayList<android.bluetooth.BluetoothDevice> devices=new ArrayList<>(adapter.getBondedDevices());String[] names=new String[devices.size()];for(int i=0;i<names.length;i++){String name=devices.get(i).getName();names[i]=name==null?"Paired Bluetooth device":name;}if(names.length==0){new AlertDialog.Builder(this).setTitle("Pair your MIDI controller first").setMessage("Pair the controller in Android Bluetooth settings, then return and choose it here. Only Bluetooth MIDI-compatible devices can send MIDI notes.").setPositiveButton("Bluetooth settings",(d,w)->startActivity(new Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS))).setNegativeButton("Cancel",null).show();return;}new AlertDialog.Builder(this).setTitle("Choose paired MIDI controller").setItems(names,(d,i)->midi.openBluetooth(devices.get(i))).setNegativeButton("Cancel",null).show();}catch(Exception e){error("Bluetooth MIDI",e.getMessage());}}
  void startMidiTake(){startMidiTake(false);}void startMidiTake(boolean touch){startMidiTakeAt(touch,-1,-1);}
+ Core.Track performanceTrack(MidiTake take,String name,Core.Track fallback){
+  if(!"Touch performance".equals(name))return fallback;
+  String instrument=take.samplePack==null?Synth.NAMES[Math.max(0,Math.min(Synth.NAMES.length-1,take.config.patch))]:take.samplePack.name;
+  return new Core.Track("Play It · "+instrument,COLORS[session.tracks.size()%COLORS.length]);
+ }
  void startMidiTakeAt(boolean touch,long scheduledFrame,long projectStart){
- if(!canEdit())return;if(selected==null){toast("Select a track before recording MIDI.");return;}if(!touch&&!midi.connected){toast("Connect a MIDI controller first.");return;}if(!requestAudioFocus())return;
+ if(!canEdit())return;if(touch&&session.tracks.size()>=Core.MAX_TRACKS){toast("No free track for this Play It take.");return;}if(!touch&&selected==null){toast("Select a track before recording MIDI.");return;}if(!touch&&!midi.connected){toast("Connect a MIDI controller first.");return;}if(!requestAudioFocus())return;
  checkpoint();midiTrack=selected;liveMidi.voices.setConfig(synthConfig);liveMidi.voices.silence();liveMidi.start();
  if(!engine.playing)engine.play(session); // Existing audio, loops and synth monitor share the transport.
  if(!engine.playing){toast("The audio output is still stopping. Try recording again.");return;}
@@ -186,7 +191,31 @@ public class MainActivity extends Activity {
  engine.recording=true;
  toast(scheduledFrame>=0?"Count-in armed. Keep playing along to your beat.":"Recording. The backing beat keeps playing.");updateTransport();}
 
- void finishMidiTake(){final MidiTake take=midiTake;if(take==null)return;take.finish();midiTake=null;engine.recording=false;liveMidi.voices.silence();final Core.Track target=midiTrack;final long start=midiStart;final Core.Session project=session;final String takeName=performanceName;if(pro.liveMidiTake(take,target,start,takeName))return;busy("Printing your performance and saving its MIDI source…",()->{File audio=new File(project.directory,UUID.randomUUID()+".pcm"),notes=new File(project.directory,UUID.randomUUID()+".mid");boolean success=false;try{try(AudioIO.Writer writer=new AudioIO.Writer(audio)){take.print((l,r)->writer.sample(l,r));}try(OutputStream out=new FileOutputStream(notes)){take.writeMidi(out);}Core.Clip printed=new Core.Clip(takeName,new AudioIO.Disk(audio),audio.getName(),start);printed.length=(int)Math.min(printed.length,Core.MAX_FRAMES-start);printed.midiFile=notes.getName();if(printed.length<=0)throw new IOException("Move the cursor before the project limit.");success=true;runOnUiThread(()->{target.clips.add(printed);selected=target;clip=printed;screen="ARRANGE";save(false);refresh();toast("Performance saved on its track. Undo is available; the original notes can be exported from the project menu.");});}finally{if(!success){audio.delete();notes.delete();}}});}
+ void finishMidiTake(){
+  final MidiTake recorded=midiTake;if(recorded==null)return;recorded.finish();midiTake=null;engine.recording=false;liveMidi.voices.silence();
+  final Core.Track target=midiTrack;final long start=midiStart;final Core.Session project=session;final String takeName=performanceName;
+  final boolean touchPerformance="Touch performance".equals(takeName);
+  if(pro.liveMidiTake(recorded,target,start,takeName))return;
+  final ProMidi.QuantizedTake quantized=touchPerformance?ProMidi.quantizePerformance(recorded,start):new ProMidi.QuantizedTake(recorded,start);
+  final MidiTake take=quantized.take;final long clipStart=quantized.start;final Core.Track destination=performanceTrack(take,takeName,target);
+  busy("Printing your performance and saving its MIDI source…",()->{
+   File audio=new File(project.directory,UUID.randomUUID()+".pcm"),notes=new File(project.directory,UUID.randomUUID()+".mid");boolean success=false;
+   try{
+    try(AudioIO.Writer writer=new AudioIO.Writer(audio)){take.print((l,r)->writer.sample(l,r));}
+    try(OutputStream out=new FileOutputStream(notes)){take.writeMidi(out);}
+    Core.Clip printed=new Core.Clip(takeName,new AudioIO.Disk(audio),audio.getName(),clipStart);
+    printed.length=(int)Math.min(printed.length,Core.MAX_FRAMES-clipStart);printed.midiFile=notes.getName();
+    if(printed.length<=0)throw new IOException("Move the cursor before the project limit.");
+    success=true;
+    runOnUiThread(()->{
+     if(session!=project){audio.delete();notes.delete();toast("Project changed; performance was not saved.");return;}
+     if(destination!=target)project.tracks.add(destination);
+     destination.clips.add(printed);selected=destination;clip=printed;screen="ARRANGE";save(false);refresh();
+     toast(touchPerformance?"Play It take saved to its own instrument track and quantized to 1/16 notes.":"Performance saved on its track. Undo is available; the original notes can be exported from the project menu.");
+    });
+   }finally{if(!success){audio.delete();notes.delete();}}
+  });
+ }
  void exportMidi(){if(!canEdit())return;Core.Clip source=clip;if(source==null||source.midiFile==null){source=null;for(Core.Track t:session.tracks)for(Core.Clip c:t.clips)if(c.midiFile!=null)source=c;}if(source==null){toast("Record a MIDI performance first. Imported audio has no MIDI source.");return;}pendingMidiFile=source.midiFile;Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("audio/midi");i.putExtra(Intent.EXTRA_TITLE,"AudioCity_MIDI_"+session.bpm+"BPM.mid");startActivityForResult(i,14);}
  @Override protected void onResume(){super.onResume();midiForeground=true;pro.foreground(true);}@Override public boolean onKeyDown(int keyCode,KeyEvent event){if(pro.key(keyCode,event))return true;return super.onKeyDown(keyCode,event);}
  void setupAudioFocus(){audioManager=(AudioManager)getSystemService(AUDIO_SERVICE);setVolumeControlStream(AudioManager.STREAM_MUSIC);audioFocus=new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN).setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()).setWillPauseWhenDucked(true).setOnAudioFocusChangeListener(change->{if(change<0)pauseForInterruption();},handler).build();IntentFilter filter=new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);if(Build.VERSION.SDK_INT>=33)registerReceiver(unplugged,filter,Context.RECEIVER_NOT_EXPORTED);else registerReceiver(unplugged,filter);}
