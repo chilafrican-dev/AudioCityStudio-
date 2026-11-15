@@ -1,0 +1,10 @@
+package ug.audiocity.studio;
+import android.content.Context;import org.json.*;import java.io.*;import java.util.*;
+public final class SampleBank {
+ public static final class Entry{public final String id,name,file,category,creator,source,quality,license;public final int bpm,bars,frames;Entry(JSONObject j)throws JSONException{id=j.getString("id");name=j.getString("name");file=j.getString("file");category=j.getString("category");creator=j.getString("creator");source=j.getString("source");quality=j.getString("quality");license=j.getString("license");bpm=j.optInt("bpm");bars=j.optInt("bars");frames=j.getInt("frames");}public boolean loop(){return bpm>0;}}
+ final Context context;public final ArrayList<Entry> entries=new ArrayList<>();final LinkedHashMap<String,float[]> cache=new LinkedHashMap<>(16,.75f,true);int bytes=0;
+ public SampleBank(Context ctx)throws Exception{context=ctx.getApplicationContext();JSONArray sounds=new JSONObject(readText("samples/manifest.json")).getJSONArray("sounds");for(int i=0;i<sounds.length();i++)entries.add(new Entry(sounds.getJSONObject(i)));}
+ public Entry byId(String id)throws IOException{for(Entry e:entries)if(e.id.equals(id))return e;throw new IOException("Sample is not installed: "+id);}
+ public synchronized float[] load(Entry e)throws IOException{float[] existing=cache.get(e.id);if(existing!=null)return existing;float[] result;try(InputStream in=context.getAssets().open("samples/"+e.file)){result=SampleAudio.readWav(in);}if(result.length/2!=e.frames)throw new IOException("Sample duration mismatch");while(bytes+result.length*4>16777216&&!cache.isEmpty()){String oldest=cache.keySet().iterator().next();bytes-=cache.remove(oldest).length*4;}cache.put(e.id,result);bytes+=result.length*4;return result;}
+ public String readText(String asset)throws IOException{try(InputStream in=context.getAssets().open(asset);ByteArrayOutputStream bytes=new ByteArrayOutputStream()){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)bytes.write(b,0,n);return new String(bytes.toByteArray(),"UTF-8");}}
+}

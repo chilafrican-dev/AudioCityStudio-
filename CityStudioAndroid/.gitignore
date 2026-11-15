@@ -1,0 +1,6 @@
+# Build output and signing material stay out of git.
+build/
+*.apk
+*.idsig
+*.keystore
+*.jks
