@@ -40,4 +40,5 @@ run UserDrumPacksTests
 run LoopBoundaryReviewTests
 run TempoDrumRegressionTests
 for t in BeatPilotDrumMachineTests BeatPilotDrumRollTests BeatPilotSoundzaTests BeatPilotMultiBarTests; do run "$t" assets; done
+run AiDrumTracksTests
 echo "All host suites passed. KeyTests, PhonePresetTests and RealVocalTests need private recordings and are not run here."

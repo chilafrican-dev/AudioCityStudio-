@@ -2,6 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 : "${ANDROID_SDK_ROOT:?Set ANDROID_SDK_ROOT to your Android SDK directory}"
+if [ "${CITYSTUDIO_REQUIRE_SIGNING_KEY:-0}" = "1" ] && [ ! -s build/development.keystore ]; then
+  echo "Existing signing key is required for an APK update. Configure KEYSTORE_BASE64; a replacement key will not be generated." >&2
+  exit 1
+fi
 tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
 platform="$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
 # Factory packs are ZIP assets, not disposable source archives. Fail before

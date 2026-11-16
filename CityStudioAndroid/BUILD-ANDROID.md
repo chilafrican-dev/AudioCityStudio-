@@ -227,3 +227,29 @@ The app offers a Freesound CC0 loop search. Per the existing README, Freesound's
 - Pattern audio preview is temporary and stops when the rack closes or the app loses audio focus. The pattern preview never appears as a mixed drum track in the project. The project writer refuses metadata beyond its readable limit before replacing a saved project.
 - PatternBankTests and PatternArrangementTests cover blank defaults, independent copies, save/reopen, templates, separate track placement, linked edits, mixer settings, lane trims, repeat placement, backups and optional generation. All host/core suites passed and APK signing was verified. Physical Android layout, touch and audio testing remains outstanding.
 - Same development signing key. GitHub has not been changed.
+
+## Update signing guard (0.14.1)
+
+Cloud builds must use the original `KEYSTORE_BASE64` private repository secret.
+`tools/restore-signing-key.sh` refuses a missing, invalid or different certificate before
+replacing the staging keystore. The original development certificate SHA-256 is
+`76f5e06f47c5eb4030c74fc0ab6034bf34f7bacea5b946f1e4e91b410e609fa1`.
+The workflow checks the signed APK certificate again before uploading it. A fresh
+substitute key is no longer an upgrade path.
+
+Set `KEYSTORE_BASE64` in this repository's Settings → Secrets and variables → Actions,
+using the base64 encoding of the **existing** development keystore (alias
+`androiddebugkey`, existing development store/key password `android`). Keep the value
+private; do not commit the keystore or its base64 representation. A repository owner
+must configure the secret if the connected development tools cannot access secrets.
+Until it is configured, cloud signing intentionally stops with a clear error.
+
+For a local update build with the existing key already at `build/development.keystore`:
+
+```sh
+CITYSTUDIO_REQUIRE_SIGNING_KEY=1 ANDROID_SDK_ROOT=/path/to/sdk bash build.sh
+```
+
+New installations and old installations signed with a different certificate are distinct
+signing histories. This guard is pinned to the certificate used for the earlier
+AudioCityStudio-Fixed APKs; do not delete project data to work around a certificate mismatch.

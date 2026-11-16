@@ -12,6 +12,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,6 +36,8 @@ final class AiGenerateUi {
     final List<Button> keyButtons = new ArrayList<>();
     Button majorButton, minorButton, melodyButton, chordsButton, bassButton, drumsButton; TextView barsValue, creativityValue;
     AlertDialog dialog;
+    Spinner drumKit;
+    final List<PatternLibrary.Entry> drumKits = new ArrayList<>();
 
     AiGenerateUi(MainActivity activity, ProUi proUi) { a = activity; ui = proUi; }
 
@@ -91,6 +97,16 @@ final class AiGenerateUi {
         melodyButton = chip("Melody", new Runnable() { public void run() { melody = !melody; } }); chordsButton = chip("Chords", new Runnable() { public void run() { chords = !chords; } }); bassButton = chip("Bass", new Runnable() { public void run() { bass = !bass; } }); drumsButton = chip("Drums", new Runnable() { public void run() { drums = !drums; } });
         for (Button b : new Button[]{melodyButton, chordsButton, bassButton, drumsButton}) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, a.dp(48), 1); p.rightMargin = a.dp(6); partRow.addView(b, p); }
         box.addView(partRow);
+        box.addView(heading("DRUM SOUNDS"));
+        drumKits.clear(); drumKits.addAll(a.session.patterns);
+        List<String> kitNames = new ArrayList<>(); kitNames.add("Factory drum kit");
+        for (PatternLibrary.Entry entry : drumKits) kitNames.add(entry.name + " · drum sounds");
+        drumKit = new Spinner(a);
+        drumKit.setAdapter(new ArrayAdapter<String>(a, android.R.layout.simple_spinner_dropdown_item, kitNames));
+        drumKit.setContentDescription("Drum sounds from a saved beat pattern");
+        if (!drumKits.isEmpty()) drumKit.setSelection(1);
+        box.addView(drumKit, new LinearLayout.LayoutParams(-1, a.dp(48)));
+        box.addView(a.label("Uses the selected pattern’s samples. Each drum gets its own track.", 12, MUTED, false));
 
         LinearLayout creativityHead = new LinearLayout(a); creativityHead.setPadding(0, a.dp(14), 0, a.dp(2));
         TextView cl = a.label("CREATIVITY", 11, MUTED, true); cl.setLetterSpacing(.08f); creativityHead.addView(cl, new LinearLayout.LayoutParams(0, -2, 1));
@@ -115,7 +131,7 @@ final class AiGenerateUi {
     void generate() {
         if (!melody && !chords && !bass && !drums) { a.toast("Choose at least one part to generate."); return; }
         final Core.Session project = a.session;
-        int newTracks = (melody ? 1 : 0) + (chords ? 1 : 0) + (bass ? 1 : 0) + (drums ? 1 : 0);
+        int newTracks = AiDrumTracks.requiredTracks(melody, chords, bass, drums);
         if (project.tracks.size() + newTracks > Core.MAX_TRACKS) { a.toast("Not enough free tracks: this build supports " + Core.MAX_TRACKS + "."); return; }
         final Pro.TempoMap m = ui.map(); final int bpb = m.beatsPerBar();
         final double startBeat = Math.floor(m.beatAt(a.engine.position) / bpb) * bpb;
@@ -125,8 +141,12 @@ final class AiGenerateUi {
         o.key = key; o.minor = minor; o.bars = bars; o.beatsPerBar = bpb; o.creativity = creativity / 100.0; o.seed = System.nanoTime();
         o.melody = melody; o.chords = chords; o.bass = bass; o.drums = drums;
         final String label = KEYS[key] + (minor ? " minor" : " major");
+        int kitIndex = drumKit == null ? 0 : drumKit.getSelectedItemPosition();
+        final BeatPilotDrumPattern chosenKit = kitIndex > 0 && kitIndex <= drumKits.size()
+            ? PatternLibrary.pattern(project, drumKits.get(kitIndex - 1)).copy() : new BeatPilotDrumPattern(project.bpm, 1);
         if (dialog != null) dialog.dismiss();
         a.busy("Composing " + label + "…", new MainActivity.Task() { public void run() throws Exception {
+            a.engine.pause();
             AiMidiGenerator.Result r = AiMidiGenerator.generate(o);
             final List<Core.Track> tracks = new ArrayList<>();
             SampledInstruments.Info melodyInfo = factory("freepats-fm-piano2"), chordInfo = factory("freepats-ydp-grand-compact"), bassInfo = factory("freepats-upright-kw-small");
@@ -134,13 +154,25 @@ final class AiGenerateUi {
             if (o.chords) { Core.Track t = track("AI · Chords", 0xff3ec6e0, .6, Synth.factory(1), chordInfo, AiMidiGenerator.toNotes(r.chords, m, startBeat, 0), at, len); t.fx.room = true; t.fx.roomMix = .09; tracks.add(t); }
             if (o.bass) tracks.add(track("AI · Bass", 0xff9d8cff, .76, Synth.factory(2), bassInfo, AiMidiGenerator.toNotes(r.bass, m, startBeat, 0), at, len));
             if (o.drums) {
-                float[][] kit = BeatPilotDrumScreen.loadKit(a);
-                Core.Track d = new Core.Track("AI · Drums", 0xffffa726); d.volume = .82;
-                d.clips.add(ProMidi.clip("AI · Drums", AiMidiGenerator.toNotes(AiMidiGenerator.toRackPitches(r.drums), m, startBeat, 9), Synth.factory(0), BeatPilotDrumScreen.pack(kit), null, at, len));
-                tracks.add(d);
+                float[][] kit = BeatPilotDrumScreen.loadKit(a, chosenKit, project);
+                String[] names = new String[AiDrumTracks.LANES], credits = new String[AiDrumTracks.LANES];
+                String factoryCredit;
+                try (InputStream input = a.getAssets().open("licenses/SOUNDZA-AFROBEATS.txt"); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                    byte[] block = new byte[1024]; int n;
+                    while ((n = input.read(block)) != -1) { if (out.size() + n > 16000) throw new IOException("Drum credits are too large"); out.write(block,0,n); }
+                    factoryCredit = new String(out.toByteArray(), StandardCharsets.UTF_8);
+                }
+                SampledInstruments.Pack afro = AfroDrumPack.used(chosenKit) ? AfroDrumPack.load(new File(project.directory), a.getFilesDir()) : null;
+                for (int lane = 0; lane < AiDrumTracks.LANES; lane++) {
+                    names[lane] = chosenKit.sampleName(lane);
+                    credits[lane] = chosenKit.imported(lane) ? InstrumentArchive.read(new File(project.directory), chosenKit.userFile(lane)).source
+                        : DrumSampleCatalog.isAfro(lane,chosenKit.sampleChoice(lane)) ? afro.source : factoryCredit;
+                }
+                tracks.addAll(AiDrumTracks.prepare(new File(project.directory), AiMidiGenerator.toNotes(AiMidiGenerator.toRackPitches(r.drums),m,startBeat,9),at,len,kit,names,credits));
             }
             a.runOnUiThread(new Runnable() { public void run() {
                 if (a.session != project) { a.toast("Project changed; nothing was added."); return; }
+                if (project.tracks.size() + tracks.size() > Core.MAX_TRACKS) { a.toast("Not enough free tracks; nothing was added."); return; }
                 ui.edit("AI generate");
                 for (Core.Track t : tracks) project.tracks.add(t);
                 a.selected = tracks.get(0); a.clip = tracks.get(0).clips.isEmpty() ? null : tracks.get(0).clips.get(0); a.screen = "ARRANGE"; a.save(false); a.refresh();

@@ -49,6 +49,10 @@ public class MainActivity extends Activity {
   if(midiClip==null)return selectedSampleInstrument;
   if(midiClip.samplePack!=null)return midiClip.samplePack;
   String id=midiClip.instrumentPackId;if(id==null||id.isEmpty())return midiClip.notes==null?selectedSampleInstrument:null;
+  if("embedded:ai-drum-pads".equals(id)) {
+   midiClip.samplePack=BeatPilotDrumScreen.pack(BeatPilotDrumScreen.loadKit(this));
+   return midiClip.samplePack;
+  }
   if(id.startsWith("bank:")){
    if(sampleBank==null)throw new IOException("The Audio City sample bank is unavailable.");
    SampleBank.Entry entry=sampleBank.byId(id.substring(5));if(entry==null)throw new IOException("The saved sample-bank instrument is unavailable: "+id);
@@ -63,6 +67,8 @@ public class MainActivity extends Activity {
  void prepareInstrumentPacks(Core.Session project){
   if(project==null)return;
   List<String> missing=ProjectInstruments.prepare(project,clip->instrumentPack(clip));
+  try { if(AiDrumTracks.embedLegacy(project)>0)AudioIO.save(project.copy()); }
+  catch(Exception issue){runOnUiThread(()->error("Recovered AI drum sounds", "The recovered kit could not be saved: "+issue.getMessage()));}
   if(!missing.isEmpty())runOnUiThread(()->error("Project instrument unavailable","The project is open, but MIDI clips using these instruments stay silent until the packs are installed again:\n\n"+android.text.TextUtils.join("\n",missing)));
  }
 
