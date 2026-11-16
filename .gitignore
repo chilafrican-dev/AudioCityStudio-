@@ -4,3 +4,6 @@
 *.zip
 CityStudioAndroid/build/
 *.apk
+
+# Factory instruments are required by the build
+!CityStudioAndroid/assets/instruments/*.zip
