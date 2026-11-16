@@ -33,6 +33,9 @@ jobs:
           ls -la assets/instruments/*.zip
           test "$(ls assets/instruments/*.zip | wc -l)" -ge 9
 
+      - name: Install ffmpeg (used by the export tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg zip
+
       - name: Host tests (no phone needed)
         run: bash run-core-tests.sh
 
