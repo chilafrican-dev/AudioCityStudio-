@@ -1349,10 +1349,11 @@ final class ProUi {
     }
     void chooseInstrument(Core.Clip c) {
         ArrayList<SampledInstruments.Info> packs = new ArrayList<>(a.instrumentLibrary.list());
-        String[] choices = new String[Synth.NAMES.length + packs.size()];
-        for (int i = 0; i < Synth.NAMES.length; i++) choices[i] = "SYNTH · " + Synth.NAMES[i];
-        for (int i = 0; i < packs.size(); i++) choices[Synth.NAMES.length + i] = "SAMPLED · " + packs.get(i).name;
-        new AlertDialog.Builder(a).setTitle("Instrument for " + c.name).setItems(choices, (d, i) -> {
+        final int n = Synth.NAMES.length;
+        String[] choices = new String[n + packs.size()], groups = new String[n + packs.size()];
+        for (int i = 0; i < n; i++) { choices[i] = Synth.NAMES[i]; groups[i] = "Synth · " + Synth.SECTIONS[Synth.sectionOf(i)]; }
+        for (int i = 0; i < packs.size(); i++) { choices[n + i] = packs.get(i).name; groups[n + i] = MainActivity.sampleGroup(packs.get(i).name); }
+        a.pickGrouped("Instrument for " + c.name, choices, groups, i -> {
             final Synth.Config config = i < Synth.NAMES.length ? Synth.factory(i) : c.instrument == null ? a.synthConfig.copy() : c.instrument.copy();
             a.busy("Loading instrument…", () -> {
                 SampledInstruments.Pack pack = i < Synth.NAMES.length ? null : a.instrumentLibrary.load(packs.get(i - Synth.NAMES.length));
@@ -1360,7 +1361,7 @@ final class ProUi {
                 Core.Clip probe = c.copy(); ProMidi.assignInstrument(probe,config,pack,packId); ProMidi.refresh(probe);
                 a.runOnUiThread(() -> { edit("Change instrument"); ProMidi.assignInstrument(c,config,pack,packId); c.source = probe.source; c.peaks = probe.peaks; c.length = probe.length; c.envelopeLength = probe.envelopeLength; a.save(false); a.refresh(); a.toast(c.name + " now plays " + (pack == null ? Synth.NAMES[config.patch] : pack.name) + "."); });
             });
-        }).show();
+        });
     }
     void convertToLive(Core.Track t, Core.Clip c) {
         final File dir = new File(a.session.directory); final Synth.Config cfg = a.synthConfig.copy();

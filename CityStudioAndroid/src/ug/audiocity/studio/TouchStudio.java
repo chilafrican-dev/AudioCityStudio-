@@ -121,7 +121,8 @@ final class TouchStudio {
    final List<SampledInstruments.Info> installed=a.instrumentLibrary.list();
    for(SampledInstruments.Info item:installed)menu.add((item.filename.startsWith("factory-")?"BUILT-IN · ":"SAMPLED · ")+item.name);
    menu.add("＋ Install a free instrument pack");
-   new AlertDialog.Builder(a).setTitle("Choose playable instrument").setItems(menu.toArray(new String[0]),(d,i)->{
+   final String[] groups=new String[menu.size()];for(int g=0;g<groups.length;g++){if(g<patches.length)groups[g]="Synth · "+Synth.SECTIONS[Synth.sectionOf(g)];else if(g<patches.length+drums.length)groups[g]="Sampled · percussion";else if(g==groups.length-1)groups[g]="More";else groups[g]=MainActivity.sampleGroup(installed.get(g-patches.length-drums.length).name);}
+   a.pickGrouped("Choose playable instrument",menu.toArray(new String[0]),groups,i->{
     if(a.midiTake!=null){a.toast("Finish recording before changing instruments.");return;}
     if(i==menu.size()-1){a.realInstrumentLibrary();return;}
     pads.releaseAll();
@@ -137,7 +138,7 @@ final class TouchStudio {
        SampledInstruments.Pack pack=a.instrumentLibrary.load(sampleInfo);
        a.runOnUiThread(()->{a.selectedSampleInstrument=pack;a.selectedSampleInstrumentId=sampleInfo.filename;a.liveMidi.voices.setSamplePack(pack);instrument.setText(pack.name+"  ▾");a.toast("Ready: "+pack.name+" ("+pack.regions.length+" sample regions)");});
       });}
-   }).setNegativeButton("Cancel",null).show();
+   });
   });
   options.setOnClickListener(v->{
    if(a.midiTake!=null){a.toast("Stop recording before changing performance settings.");return;}
