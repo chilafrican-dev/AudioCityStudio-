@@ -135,7 +135,7 @@ final class AiGenerateUi {
             if (o.drums) {
                 float[][] kit = BeatPilotDrumScreen.loadKit(a);
                 Core.Track d = new Core.Track("AI · Drums", 0xffffa726); d.volume = .82;
-                d.clips.add(ProMidi.clip("AI · Drums", AiMidiGenerator.toNotes(AiMidiGenerator.toRackPitches(r.drums), m, startBeat, 9), Synth.factory(0), BeatPilotDrumScreen.pack(kit), "embedded:ai-drum-pads", at, len));
+                d.clips.add(ProMidi.clip("AI · Drums", AiMidiGenerator.toNotes(AiMidiGenerator.toRackPitches(r.drums), m, startBeat, 9), Synth.factory(0), BeatPilotDrumScreen.pack(kit), null, at, len));
                 tracks.add(d);
             }
             a.runOnUiThread(new Runnable() { public void run() {
