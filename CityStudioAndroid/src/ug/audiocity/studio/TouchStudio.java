@@ -23,11 +23,13 @@ final class TouchStudio {
  void starter(){if(!a.canEdit())return;ScrollView scroll=new ScrollView(a);LinearLayout b=box();scroll.addView(b);b.addView(a.label("FROM IDEA TO A SONG",20,MainActivity.TEXT,true));caption(b,"Choose a feeling. Build a backing, then play your melody or record a vocal. Each instrument gets its own editable track.");Spinner style=spinner(b,PocketComposer.STYLES,0);caption(b,"KEY");Spinner root=spinner(b,PocketComposer.ROOTS,5);Spinner scale=spinner(b,new String[]{"Major · bright","Natural minor · moody"},0);Spinner progression=spinner(b,progressions(5,false),0);AdapterView.OnItemSelectedListener transpose=new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> v){}public void onItemSelected(AdapterView<?> v,View view,int pos,long id){int previous=Math.max(0,progression.getSelectedItemPosition());progression.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,progressions(root.getSelectedItemPosition(),scale.getSelectedItemPosition()==1)));progression.setSelection(previous);}};root.setOnItemSelectedListener(transpose);scale.setOnItemSelectedListener(transpose);EditText bpm=a.numberField(b,"TEMPO / BPM",String.valueOf(a.session.bpm));Spinner length=spinner(b,new String[]{"16 bars · compact idea","32 bars · longer arrangement"},0);caption(b,"Intro → verse → hook → outro. Drums change at section boundaries, bass follows the chords, and the hook adds a melody. This makes a new project; your current project stays saved. Everything works offline; use these patterns as a starting point for your own song.");new AlertDialog.Builder(a).setTitle("Song Starter").setView(scroll).setNegativeButton("Cancel",null).setPositiveButton("Build my song",(d,w)->{try{int tempo=Integer.parseInt(bpm.getText().toString());if(tempo<40||tempo>240)throw new NumberFormatException();final int r=root.getSelectedItemPosition(),p=progression.getSelectedItemPosition(),s=style.getSelectedItemPosition(),bars=length.getSelectedItemPosition()==0?16:32;final boolean minor=scale.getSelectedItemPosition()==1;a.engine.stop();AudioIO.save(a.session.copy());a.busy("Building your song on separate tracks…",()->{File dir=a.newDir();Core.Session song=PocketComposer.song(dir,r,minor,p,tempo,s,bars);a.runOnUiThread(()->{a.screen="ARRANGE";a.bind(song);a.selected=song.tracks.get(4);a.handler.post(()->a.fitTimeline());a.refresh();a.toast("Your backing is ready. Play it, record a vocal, or use Sounds → Play & record.");});});}catch(NumberFormatException e){a.toast("Choose a tempo between 40 and 240 BPM.");}catch(Exception e){a.error("Could not save current project",e.getMessage());}}).show();}
 
  /** BeatPilot one-touch groove creation: new tracks are sent directly into Arrange. */
- void beatPilot(){
+ void beatPilot(){if(!a.canEdit())return;new AlertDialog.Builder(a).setTitle("How do you want to build?").setItems(new String[]{"Start from scratch · Pattern rack","Auto-build a beat · optional"},(d,i)->{if(i==0)new BeatPilotDrumScreen(a).open();else autoBeat();}).setNegativeButton("Cancel",null).show();}
+ void autoBeat(){
   if(!a.canEdit()||a.session==null)return;
+  if(a.session.timeSignature!=4||!a.session.tempoChanges.isEmpty()){a.toast("Auto Build currently uses 4/4 and one project tempo.");return;}
   ScrollView scroll=new ScrollView(a);LinearLayout page=box();scroll.addView(page);
-  page.addView(a.label("BEATPILOT · MAKE YOUR FIRST BEAT",19,MainActivity.TEXT,true));
-  caption(page,"Choose the sound and feeling. BeatPilot creates separate DRUMS, BASS and CHORDS tracks. Then play your own instrument over the beat.");
+  page.addView(a.label("AUTO BUILD · OPTIONAL",19,MainActivity.TEXT,true));
+  caption(page,"Optional help: make an editable drum pattern plus separate bass and chords. Each drum sound has its own track. You can also build everything manually in the pattern rack.");
   caption(page,"1 · MUSIC STYLE");Spinner genre=spinner(page,BeatPilot.GENRES,0);
   caption(page,"2 · FEELING");Spinner feel=spinner(page,BeatPilot.FEELS,1);
   caption(page,"3 · SONG KEY");Spinner root=spinner(page,PocketComposer.ROOTS,a.session.tuneConfigured?a.session.tuneKey:5);
@@ -41,13 +43,15 @@ final class TouchStudio {
    final boolean minor=scale.getSelectedItemPosition()==1;
    long beat=Core.beat(project.bpm)*4L;final long at=PerformanceChords.nextBar(a.engine.position,beat);
    if(at+count*beat>Core.MAX_FRAMES){a.toast("Move the playhead earlier to make room for the beat.");return;}
-   a.checkpoint();a.busy("Creating your drums, bass and chords…",()->{
-    java.util.List<Core.Track> generated=BeatPilot.groove(project,g,f,r,minor,p,count,at,a.instrumentLibrary.folder());
+   if(project.patterns.size()>=PatternLibrary.MAX_PATTERNS||project.tracks.size()+PatternArrangement.requiredTracks(project)+2>Core.MAX_TRACKS){a.toast("Make room for a new pattern and its separate tracks first.");return;}
+   a.checkpoint();a.busy("Building optional pattern and separate drum channels…",()->{
+    float[][] kit=BeatPilotDrumScreen.loadKit(a);BeatPilotDrumPattern data=BeatPilot.pattern(g,f,project.bpm,count);PatternLibrary.Entry entry=PatternLibrary.add(project,"Auto pattern "+(project.patterns.size()+1),data);
+    java.util.List<Core.Track> music;
+    try{music=BeatPilot.harmony(project,g,r,minor,p,count,at);PatternArrangement.place(project,entry.id,kit,at,1);}catch(Exception error){project.patterns.remove(entry);throw error;}
     a.runOnUiThread(()->{
-     if(a.session!=project){a.toast("Project changed. BeatPilot tracks were not inserted.");return;}
-     project.tracks.addAll(generated);project.tuneConfigured=true;project.tuneKey=r;project.tuneScale=minor?2:1;
-     a.selected=generated.get(2);a.clip=generated.get(2).clips.get(0);a.screen="ARRANGE";a.save(false);a.refresh();
-     new AlertDialog.Builder(a).setTitle("Your beat is ready!").setMessage("Three separate tracks were added to Arrange: drums, smart bass and chords. Play the beat and perform your own chords or melody in PLAY IT. KEEP THE TAKE.").setNegativeButton("Arrange",null).setPositiveButton("Play It",(dd,ww)->a.handler.post(()->perform())).show();
+     if(a.session!=project)return;project.tracks.addAll(music);project.tuneConfigured=true;project.tuneKey=r;project.tuneScale=minor?2:1;
+     a.selected=music.get(1);a.clip=music.get(1).clips.get(0);a.screen="ARRANGE";a.save(false);a.refresh();
+     new AlertDialog.Builder(a).setTitle("Your optional beat is ready").setMessage("The pattern is saved in the rack. Kick, snare, clap, hats, shaker, conga and bongo each have their own track, with bass and chords separate too. Edit the pattern or add your own playing.").setNegativeButton("Arrange",null).setPositiveButton("Open patterns",(dd,ww)->a.handler.post(()->new BeatPilotDrumScreen(a).openPattern(entry.id))).show();
     });
    });
   }).show();
@@ -61,7 +65,7 @@ final class TouchStudio {
   final LinearLayout page=box();
   page.setPadding(a.dp(11),a.dp(9),a.dp(11),a.dp(8));
   page.addView(a.label("PLAY IT. KEEP THE TAKE.",19,MainActivity.TEXT,true));
-  caption(page,"Your take gets its own instrument track in Arrange · play over your backing beat");
+  caption(page,"Your take gets its own track · Loop on: recording stops at the loop end");
   final Spinner root=new Spinner(a),scale=new Spinner(a),mode=new Spinner(a),octave=new Spinner(a),progression=new Spinner(a),layout=new Spinner(a),countIn=new Spinner(a);
   final Spinner[] spinners={root,scale,mode,octave,progression,layout,countIn};
   final String[] patches=Synth.NAMES;
@@ -71,14 +75,14 @@ final class TouchStudio {
   octave.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"Low · octave 2","Mid · octave 3","High · octave 4","Air · octave 5"}));octave.setSelection(2);
   progression.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,PerformanceChords.titles(scale.getSelectedItemPosition()==1)));
   layout.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"4 chord pads","6 chord pads","8 chord pads"}));
-  countIn.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"Off","1 bar","2 bars"}));countIn.setSelection(1);
+  countIn.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"Off","4 clicks","8 clicks"}));countIn.setSelection(1);
   final boolean[] playbackClick={a.engine.click},recordClick={a.engine.click};
   final TextView status=a.label("Ready · play chords while your beat runs",12,MainActivity.ACCENT,true);
   final TextView chordTitle=a.label("",13,MainActivity.TEXT,true);
   final TextView beatTitle=a.label("1   ·   2   ·   3   ·   4",12,MainActivity.DIM,false);
   final PadGrid pads=new PadGrid(root,scale,mode,octave,progression,layout);
   final LinearLayout top=new LinearLayout(a);page.addView(top,new LinearLayout.LayoutParams(-1,a.dp(44)));
-  final Button instrument=a.button(a.selectedSampleInstrument==null?patches[a.synthConfig.patch]+"  ▾":a.selectedSampleInstrument.name+"  ▾",()->{}),options=a.button("⚙ Settings",()->{}),beatPilotButton=a.button("♫ Make Beat",()->{}),drumButton=a.button("♬ Drums",()->{});
+  final Button instrument=a.button(a.selectedSampleInstrument==null?patches[a.synthConfig.patch]+"  ▾":a.selectedSampleInstrument.name+"  ▾",()->{}),options=a.button("⚙ Settings",()->{}),beatPilotButton=a.button("♫ Beats",()->{}),drumButton=a.button("♬ Drums",()->{});
   top.addView(instrument,new LinearLayout.LayoutParams(0,-1,1.3f));top.addView(beatPilotButton,new LinearLayout.LayoutParams(0,-1,1.05f));top.addView(drumButton,new LinearLayout.LayoutParams(0,-1,.85f));top.addView(options,new LinearLayout.LayoutParams(0,-1,.95f));
   LinearLayout info=new LinearLayout(a);info.setGravity(Gravity.CENTER_VERTICAL);page.addView(info,new LinearLayout.LayoutParams(-1,a.dp(43)));
   info.addView(chordTitle,new LinearLayout.LayoutParams(0,-1,1));
@@ -159,15 +163,8 @@ final class TouchStudio {
   record.setOnClickListener(v->{
    if(a.midiTake!=null||a.working)return;
    if(a.session.tracks.size()>=Core.MAX_TRACKS){a.toast("No free track for this Play It take.");return;}
-   pads.releaseAll();if(!a.engine.playing){if(!a.requestAudioFocus())return;if(!a.engine.loop&&a.session.end()>0&&a.engine.position>=a.session.end())a.engine.position=0;a.engine.play(a.session);if(!a.engine.playing){a.toast("Could not start backing playback. Retry Play.");return;}}
-   long now=a.engine.transportFrames;long bar=Core.beat(a.session.bpm)*Math.max(1,a.session.timeSignature);
-   int bars=Math.max(0,countIn.getSelectedItemPosition());long target=PerformanceChords.recordStart(now,bar,bars);
-   long projectStart=target;
-   if(a.engine.loop){long begin=a.session.loopEnd>a.session.loopStart?a.session.loopStart:0;
-    long end=a.session.loopEnd>a.session.loopStart?a.session.loopEnd:Math.max(bar,a.session.end());
-    projectStart=ProEdit.loopPosition(target,begin,end);
-   }
-   a.startMidiTakeAt(true,target,projectStart);
+   pads.releaseAll();
+   a.startCountedMidiTake(true,new int[]{0,4,8}[Math.max(0,countIn.getSelectedItemPosition())]);
    updateClick.run();
   });
   drumButton.setOnClickListener(v->{if(a.midiTake!=null){a.toast("Stop recording before opening drum pads.");return;}dialog.dismiss();new BeatPilotDrumScreen(a).open();});
@@ -178,17 +175,16 @@ final class TouchStudio {
    MidiTake take=a.midiTake;boolean busy=a.working;
    long beat=Math.max(1,Core.beat(a.session.bpm));int sig=Math.max(1,a.session.timeSignature);
    if(take!=null&&take.pending()){
-    long logical=a.engine.transportFrames;
-    int beatNum=(int)Math.floorMod(logical/beat,sig)+1;
-    status.setText("COUNT-IN · recording starts on the next downbeat");
-    beatTitle.setText("COUNT  "+beatNum+" / "+sig);
+    int beatNum=CountIn.number(a.engine.countInTotal-a.engine.countInRemaining,a.session.bpm,a.engine.countInBeats);
+    status.setText("GET READY · song starts after the last click");
+    beatTitle.setText("COUNT  "+beatNum+" / "+a.engine.countInBeats);
    }else{
     int n=(int)Math.floorMod(a.engine.position/beat,sig)+1;
     beatTitle.setText("BEAT "+n+" / "+sig+"  ·  "+a.session.bpm+" BPM");
     status.setText(take!=null?"● RECORDING · "+String.format(Locale.US,"%.1f s",take.elapsedFrames()/(double)Core.RATE):busy?"Saving your take…":"Ready · hold, slide or play several fingers");
    }
    record.setEnabled(take==null&&!busy);stopTake.setEnabled(take!=null);
-   play.setEnabled(take==null);loop.setText(a.engine.loop?"LOOP ON":"LOOP OFF");
+   play.setEnabled(take==null);loop.setEnabled(take==null&&!busy);loop.setText(a.engine.loop?"LOOP ON":"LOOP OFF");
    play.setText(a.engine.playing?"Ⅱ Pause beat":"▶ Play beat");
    instrument.setEnabled(take==null&&!busy);options.setEnabled(take==null&&!busy);
    updateClick.run();a.handler.postDelayed(tick[0],45);
@@ -234,7 +230,7 @@ final class TouchStudio {
    }
   }
   public boolean onTouchEvent(MotionEvent e){
-   if(a.working||a.dead||!a.midiForeground){releaseAll();return true;}
+   if(a.working||a.dead||!a.midiForeground||(a.midiTake!=null&&a.midiTake.pending())){releaseAll();return true;}
    int action=e.getActionMasked(),index=e.getActionIndex();
    if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN){
     getParent().requestDisallowInterceptTouchEvent(true);

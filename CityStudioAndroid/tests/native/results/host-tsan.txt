@@ -1,0 +1,2 @@
+HOST_ONLY 32 resident-PCM tracks / 64 frames: 542154 ns/block mean, 40.6616% of 48k callback wall-time budget, 40.4977% process CPU per audio duration; not an Android xrun result
+320187 native playback checks passed; callback allocations/frees: 0/0

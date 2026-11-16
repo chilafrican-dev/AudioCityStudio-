@@ -10,7 +10,13 @@ public final class AudioIO {
  static double clamp(double n,double a,double b){return Double.isFinite(n)?Math.max(a,Math.min(b,n)):a;}
  public static void save(Core.Session s)throws Exception {ProjectIO.save(s);}
  public static Core.Session load(File dir)throws Exception {return ProjectIO.load(dir,Disk::new);}
- public static Core.Session retimeProject(Core.Session original,int bpm,boolean preservePitch)throws Exception {if(bpm<40||bpm>240)throw new IOException("Use a tempo between 40 and 240 BPM.");double speed=bpm/(double)original.bpm;if(preservePitch&&(speed<.5||speed>2))throw new IOException("For pitch-preserving stretching, change tempo by 0.5×–2× per step. Use an intermediate tempo or choose resampling.");Core.Session result=original.copy();java.util.LinkedHashMap<String,Core.Source> sources=new java.util.LinkedHashMap<>();for(Core.Track t:result.tracks)for(Core.Clip c:allClips(t)){if(c.notes!=null)continue;if((c.start+c.length)/speed>Core.MAX_FRAMES||c.source.frames()/speed>Core.MAX_FRAMES)throw new IOException("The new tempo would exceed the 60-minute timeline or source-file limit.");sources.put(c.file,c.source);if(c.tuneSourceFile!=null&&!sources.containsKey(c.tuneSourceFile)){Disk dry=drySource(c,new File(original.directory));if(dry.frames()/speed>Core.MAX_FRAMES)throw new IOException("The retimed original vocal would exceed 60 minutes.");sources.put(c.tuneSourceFile,dry);}}java.util.HashMap<String,String> names=new java.util.HashMap<>();java.util.HashMap<String,Disk> rendered=new java.util.HashMap<>();java.util.ArrayList<File> created=new java.util.ArrayList<>();boolean success=false;try{for(java.util.Map.Entry<String,Core.Source> source:sources.entrySet()){File file=new File(original.directory,java.util.UUID.randomUUID()+".pcm");created.add(file);try(Writer writer=new Writer(file)){TimeStretch.Sink sink=(l,r)->writer.sample(l,r);if(preservePitch)TimeStretch.preservePitch(source.getValue(),speed,sink);else TimeStretch.resample(source.getValue(),speed,sink);}names.put(source.getKey(),file.getName());rendered.put(source.getKey(),new Disk(file));}for(Core.Track t:result.tracks)for(Core.Clip c:allClips(t)){if(c.notes!=null){ProMidi.retime(c,speed);continue;}c.stretchFile=null;String oldFile=c.file,oldDryFile=c.tuneSourceFile;int oldOffset=c.offset,oldDryOffset=c.tuneSourceOffset;int offset=(int)Math.round(c.offset/speed),length=(int)Math.round((c.offset+(long)c.length)/speed)-offset;c.start=Math.round(c.start/speed);c.envelopeOffset=(int)Math.round(c.envelopeOffset/speed);c.envelopeLength=Math.max(1,(int)Math.round(c.envelopeLength/speed));c.envelopeOffset=Math.min(c.envelopeOffset,c.envelopeLength-1);c.fadeIn=(int)Math.round(c.fadeIn/speed);c.fadeOut=(int)Math.round(c.fadeOut/speed);c.source=rendered.get(oldFile);c.file=names.get(oldFile);c.offset=Math.min(offset,c.source.frames()-1);if(oldDryFile!=null){c.tuneSourceFile=names.get(oldDryFile);c.tuneSourceOffset=Math.max(0,(int)Math.round((oldDryOffset+(long)oldOffset)/speed)-c.offset);}c.length=Math.max(1,Math.min(length,Math.min(c.source.frames()-c.offset,c.envelopeLength-c.envelopeOffset)));if(oldDryFile!=null){int available=rendered.get(oldDryFile).frames()-c.tuneSourceOffset-c.offset;if(available<1)throw new IOException("Retimed original vocal boundaries do not match.");c.length=Math.min(c.length,available);}c.peaks=Core.peaks(c.source);}ProjectIO.retimeExtras(result,speed);result.bpm=bpm;if(!preservePitch&&bpm!=original.bpm){result.tuneKey=0;result.tuneScale=0;result.tuneConfigured=false;}success=true;return result;}finally{if(!success)for(File f:created)f.delete();}}
+ public static Core.Session retimeProject(Core.Session original,int bpm,boolean preservePitch)throws Exception {if(bpm<40||bpm>240)throw new IOException("Use a tempo between 40 and 240 BPM.");double speed=bpm/(double)original.bpm;if(original.loopEnd/speed>Core.MAX_FRAMES)throw new IOException("The new tempo would move the loop range beyond the 60-minute limit.");if(preservePitch&&(speed<.5||speed>2))throw new IOException("For pitch-preserving stretching, change tempo by 0.5×–2× per step. Use an intermediate tempo or choose resampling.");Core.Session result=original.copy();java.util.LinkedHashMap<String,Core.Source> sources=new java.util.LinkedHashMap<>();for(Core.Track t:result.tracks)for(Core.Clip c:allClips(t)){if((c.start+c.length)/speed>Core.MAX_FRAMES||c.source.frames()/speed>Core.MAX_FRAMES)throw new IOException("The new tempo would exceed the 60-minute timeline or source-file limit.");if(c.notes!=null&&c.drumPattern==null)continue;sources.put(c.file,c.source);if(c.tuneSourceFile!=null&&!sources.containsKey(c.tuneSourceFile)){Disk dry=drySource(c,new File(original.directory));if(dry.frames()/speed>Core.MAX_FRAMES)throw new IOException("The retimed original vocal would exceed 60 minutes.");sources.put(c.tuneSourceFile,dry);}}java.util.HashMap<String,String> names=new java.util.HashMap<>();java.util.HashMap<String,Disk> rendered=new java.util.HashMap<>();java.util.ArrayList<File> created=new java.util.ArrayList<>();boolean success=false;try{for(java.util.Map.Entry<String,Core.Source> source:sources.entrySet()){File file=new File(original.directory,java.util.UUID.randomUUID()+".pcm");created.add(file);try(Writer writer=new Writer(file)){TimeStretch.Sink sink=(l,r)->writer.sample(l,r);if(preservePitch)TimeStretch.preservePitch(source.getValue(),speed,sink);else TimeStretch.resample(source.getValue(),speed,sink);}names.put(source.getKey(),file.getName());rendered.put(source.getKey(),new Disk(file));}for(Core.Track t:result.tracks)for(Core.Clip c:allClips(t)){if(c.notes!=null&&c.drumPattern==null){ProMidi.retime(c,speed);rewriteMidi(c,result,bpm,created);continue;}c.stretchFile=null;String oldFile=c.file,oldDryFile=c.tuneSourceFile;int oldOffset=c.offset,oldDryOffset=c.tuneSourceOffset;int offset=(int)Math.round(c.offset/speed),length=(int)Math.round((c.offset+(long)c.length)/speed)-offset;c.start=Math.round(c.start/speed);c.envelopeOffset=(int)Math.round(c.envelopeOffset/speed);c.envelopeLength=Math.max(1,(int)Math.round(c.envelopeLength/speed));c.envelopeOffset=Math.min(c.envelopeOffset,c.envelopeLength-1);c.fadeIn=(int)Math.round(c.fadeIn/speed);c.fadeOut=(int)Math.round(c.fadeOut/speed);c.source=rendered.get(oldFile);c.file=names.get(oldFile);c.offset=Math.min(offset,c.source.frames()-1);if(oldDryFile!=null){c.tuneSourceFile=names.get(oldDryFile);c.tuneSourceOffset=Math.max(0,(int)Math.round((oldDryOffset+(long)oldOffset)/speed)-c.offset);}c.length=Math.max(1,Math.min(length,Math.min(c.source.frames()-c.offset,c.envelopeLength-c.envelopeOffset)));if(oldDryFile!=null){int available=rendered.get(oldDryFile).frames()-c.tuneSourceOffset-c.offset;if(available<1)throw new IOException("Retimed original vocal boundaries do not match.");c.length=Math.min(c.length,available);}c.peaks=Core.peaks(c.source);if(c.drumPattern!=null){c.drumPattern=BeatPilotDrumRollData.retempo(c.drumPattern,bpm);c.notes=BeatPilotDrumRollData.decode(c.drumPattern).notes();rewriteMidi(c,result,bpm,created);}}ProjectIO.retimeExtras(result,speed);result.bpm=bpm;if(!preservePitch&&bpm!=original.bpm){result.tuneKey=0;result.tuneScale=0;result.tuneConfigured=false;}success=true;return result;}finally{if(!success)for(File f:created)f.delete();}}
+ static void rewriteMidi(Core.Clip c,Core.Session project,int bpm,List<File> created)throws IOException{
+  if(c.midiFile==null||c.notes==null)return;
+  File file=new File(project.directory,UUID.randomUUID()+".mid");created.add(file);
+  MidiTake take=Pro.take(c.instrument==null?Synth.factory(0):c.instrument,bpm,c.notes,null);
+  try(OutputStream out=new FileOutputStream(file)){take.writeMidi(out);}c.midiFile=file.getName();
+ }
  static java.util.List<Core.Clip> allClips(Core.Track t){java.util.ArrayList<Core.Clip> all=new java.util.ArrayList<>(t.clips);all.addAll(t.takes);for(Core.Clip c:t.slots)if(c!=null)all.add(c);return all;}
  public static Disk drySource(Core.Clip clip,File directory)throws IOException{if(clip.tuneSourceFile==null)return null;File path=new File(directory,clip.tuneSourceFile);if(!path.getCanonicalFile().getParentFile().equals(directory.getCanonicalFile()))throw new IOException("Invalid original vocal path.");return new Disk(path);}
  public static void restoreUntunedClip(Core.Clip clip,File directory)throws IOException{Disk dry=drySource(clip,directory);if(dry==null)throw new IOException("This older clip has no preserved dry source. Re-import the original recording.");long offset=clip.tuneSourceOffset+(long)clip.offset;if(offset<0||offset+clip.length>dry.frames())throw new IOException("Original vocal boundaries no longer match.");clip.source=dry;clip.file=clip.tuneSourceFile;clip.offset=(int)offset;clip.tuneSourceFile=null;clip.tuneSourceOffset=0;clip.vocalNotes=null;clip.peaks=Core.peaks(dry);}
@@ -33,11 +39,14 @@ public final class AudioIO {
     }
 
  public static void backup(OutputStream destination,Core.Session session)throws Exception {
-  save(session);java.util.zip.ZipOutputStream zip=new java.util.zip.ZipOutputStream(destination);java.util.LinkedHashSet<String> names=new java.util.LinkedHashSet<>();names.add("session.json");names.addAll(ProjectIO.files(session));byte[] block=new byte[65536];for(String name:names){File file=new File(session.directory,name);zip.putNextEntry(new java.util.zip.ZipEntry(name));try(InputStream in=new FileInputStream(file)){int n;while((n=in.read(block))!=-1)zip.write(block,0,n);}zip.closeEntry();}zip.finish();zip.flush();
+  InstrumentArchive.embed(session);save(session);java.util.LinkedHashSet<String> names=new java.util.LinkedHashSet<>();names.add("session.json");names.addAll(ProjectIO.files(session));
+  if(names.size()>2000)throw new IOException("Project backup has too many files (maximum 2000).");long total=0;File directory=new File(session.directory).getCanonicalFile();
+  for(String name:names){File file=new File(directory,name).getCanonicalFile();if(!directory.equals(file.getParentFile())||!file.isFile())throw new IOException("Missing or invalid project source: "+name);total+=file.length();if(total>1073741824L)throw new IOException("Project backup exceeds the supported 1 GB unpacked limit. Split the project before backing it up.");if(name.equals("session.json")&&file.length()>1048576)throw new IOException("Project metadata exceeds the supported backup limit.");}
+  java.util.zip.ZipOutputStream zip=new java.util.zip.ZipOutputStream(destination);byte[] block=new byte[65536];for(String name:names){File file=new File(session.directory,name);zip.putNextEntry(new java.util.zip.ZipEntry(name));try(InputStream in=new FileInputStream(file)){int n;while((n=in.read(block))!=-1)zip.write(block,0,n);}zip.closeEntry();}zip.finish();zip.flush();
  }
  public static Core.Session restore(InputStream source,File directory)throws Exception {
   File[] existing=directory.listFiles();if(existing==null||existing.length!=0)throw new IOException("Restore requires a new empty project folder.");boolean restored=false;java.util.HashSet<String> names=new java.util.HashSet<>();try{
-  java.util.zip.ZipInputStream zip=new java.util.zip.ZipInputStream(source);java.util.zip.ZipEntry entry;byte[] buffer=new byte[65536];long total=0;int count=0;while((entry=zip.getNextEntry())!=null){String name=entry.getName();if(entry.isDirectory()||name.contains("/")||name.contains("\\")||(!name.equals("session.json")&&!name.endsWith(".pcm")&&!name.endsWith(".mid"))||!names.add(name)||++count>2000)throw new IOException("Invalid project archive.");File file=new File(directory,name);if(!file.getCanonicalFile().getParentFile().equals(directory.getCanonicalFile()))throw new IOException("Invalid archive path.");long fileBytes=0;try(OutputStream out=new BufferedOutputStream(new FileOutputStream(file))){int n;while((n=zip.read(buffer))!=-1){fileBytes+=n;total+=n;if(fileBytes>(name.equals("session.json")?1048576:Core.MAX_FRAMES*8)||total>1073741824L)throw new IOException("Project backup exceeds supported size.");out.write(buffer,0,n);}}zip.closeEntry();}if(!names.contains("session.json"))throw new IOException("This is not an Audio City Studio project backup.");Core.Session result=load(directory);restored=true;return result;}finally{if(!restored){for(String name:names)new File(directory,name).delete();directory.delete();}}
+  java.util.zip.ZipInputStream zip=new java.util.zip.ZipInputStream(source);java.util.zip.ZipEntry entry;byte[] buffer=new byte[65536];long total=0;int count=0;while((entry=zip.getNextEntry())!=null){String name=entry.getName();if(entry.isDirectory()||name.contains("/")||name.contains("\\")||(!name.equals("session.json")&&!name.endsWith(".pcm")&&!name.endsWith(".mid")&&!name.endsWith(".acpack"))||!names.add(name)||++count>2000)throw new IOException("Invalid project archive.");File file=new File(directory,name);if(!file.getCanonicalFile().getParentFile().equals(directory.getCanonicalFile()))throw new IOException("Invalid archive path.");long fileBytes=0;try(OutputStream out=new BufferedOutputStream(new FileOutputStream(file))){int n;while((n=zip.read(buffer))!=-1){fileBytes+=n;total+=n;if(fileBytes>(name.equals("session.json")?1048576:Core.MAX_FRAMES*8)||total>1073741824L)throw new IOException("Project backup exceeds supported size.");out.write(buffer,0,n);}}zip.closeEntry();}if(!names.contains("session.json"))throw new IOException("This is not an Audio City Studio project backup.");Core.Session result=load(directory);restored=true;return result;}finally{if(!restored){for(String name:names)new File(directory,name).delete();directory.delete();}}
  }
  public static long tailFrames(Core.Session s){return Export.tailFrames(s);}
  public static void wav(OutputStream target,Core.Session s)throws Exception {wav(target,s,16);}
@@ -78,6 +87,8 @@ public final class AudioIO {
   volatile long position;
   public volatile long transportFrames;
   public volatile float clickVolume=1f;
+  public volatile long countInRemaining,countInTotal;
+  public volatile int countInBeats;
   volatile SynthPoly midiMonitor;
   volatile float peak,peakLeft,peakRight,peakHold,reduction;
   volatile boolean overloaded;
@@ -87,15 +98,17 @@ public final class AudioIO {
   public volatile String outputPath="";
   private Thread thread;
   private volatile Output device;
-  public synchronized void play(Core.Session session){
+  public synchronized void play(Core.Session session){playCounted(session,0);}
+  public synchronized void playCounted(Core.Session session,int beats){
    if(playing)return;
    if(thread!=null&&thread.isAlive()){error="Audio output is still stopping. Try Play again.";return;}
    if(loop&&session.loopEnd>session.loopStart){
     if(position<session.loopStart||position>=session.loopEnd)position=session.loopStart;
-   }else if(loop&&position>=Math.max(Core.beat(session.bpm)*4,session.end()))position=0;
+   }else if(loop&&position>=TakeBounds.loopEnd(session))position=0;
    playing=true;
    long start=position;
-   transportFrames=start;
+   countInBeats=beats;countInTotal=CountIn.frames(session.bpm,beats);countInRemaining=countInTotal;
+   transportFrames=start-countInTotal;
    thread=new Thread(()->{
     Core.Renderer renderer=new Core.Renderer(session);live=renderer;
     android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
@@ -106,16 +119,19 @@ public final class AudioIO {
      latencyFrames=track.bufferFrames();track.start();
      float[] data=new float[Math.max(1024,block*2)],midiData=new float[Math.max(1024,block*2)],mon=new float[Math.max(1024,block*2)];
      Core.Processor monitorFx=null;Core.Fx monitorSource=null;
-     long cursor=start,heardBase=start;
+     long cursor=start,heardBase=start-countInTotal;
+     long preRoll=countInTotal;
      while(playing){
       long end=recording?Core.MAX_FRAMES:Math.min(Core.MAX_FRAMES,Math.max(Core.beat(session.bpm)*4,session.end()+tailFrames(session)));
       boolean ranged=session.loopEnd>session.loopStart;
-      long loopStart=ranged?session.loopStart:0,loopEnd=ranged?session.loopEnd:Math.max(Core.beat(session.bpm)*4,session.end());
+      long loopStart=ranged?session.loopStart:0,loopEnd=ranged?session.loopEnd:TakeBounds.loopEnd(session,renderer.tempoMap());
       if(loop&&cursor>=loopEnd){cursor=loopStart;renderer=new Core.Renderer(session);live=renderer;}
       if(!loop&&cursor>=end){playing=false;break;}
-      int n=(int)Math.min(block,(loop?loopEnd:end)-cursor);
+      boolean preparing=preRoll>0;
+      int n=(int)Math.min(block,preparing?preRoll:(loop?loopEnd:end)-cursor);
       renderer.clickLevel=.12f*Math.max(0f,Math.min(2f,clickVolume));
-      renderer.render(cursor,n,data,click);
+      if(preparing)CountIn.render(data,n,countInTotal-preRoll,session.bpm,clickVolume);
+      else renderer.render(cursor,n,data,click);
       float midiPeakL=0,midiPeakR=0;
       SynthPoly midi=midiMonitor;
       if(midi!=null){
@@ -145,9 +161,10 @@ public final class AudioIO {
        if(v<=0){if(!playing)break;throw new IOException("Audio output error "+v);}
        written+=v;
       }
-      cursor+=written/2;transportFrames+=written/2;
+      if(preparing){preRoll-=written/2;countInRemaining=preRoll;}else cursor+=written/2;
+      transportFrames+=written/2;
       long heard=heardBase+track.heard();
-      position=loop?ProEdit.loopPosition(heard,loopStart,loopEnd):Math.min(heard,cursor);
+      position=heard<start?start:loop?ProEdit.loopPosition(heard,loopStart,loopEnd):Math.min(heard,cursor);
       peakLeft=midi==null?renderer.peakLeft:midiPeakL;peakRight=midi==null?renderer.peakRight:midiPeakR;
       peak=Math.max(peakLeft,peakRight);peakHold=Math.max(peakHold,peak);
       reduction=renderer.limiterDb;overloaded|=renderer.overloaded;
@@ -155,7 +172,7 @@ public final class AudioIO {
      if(!loop&&position>session.end())position=session.end();
     }catch(Exception e){error=e.getMessage();playing=false;}
     finally{
-     if(track!=null)track.close();device=null;peak=peakLeft=peakRight=reduction=0;
+     if(track!=null)track.close();device=null;countInRemaining=0;peak=peakLeft=peakRight=reduction=0;
      for(Core.Track t:session.tracks)t.meter=t.meterL=t.meterR=t.reduction=0;
     }
    },"CityStudio-Audio");

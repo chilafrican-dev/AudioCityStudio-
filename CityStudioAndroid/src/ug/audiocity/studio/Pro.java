@@ -691,14 +691,24 @@ public final class Pro {
     /** Pairs note-on/off events into notes; controllers and other events are returned separately. */
     public static List<Note> notes(List<MidiTake.Event> events, List<MidiTake.Event> other) {
         ArrayList<Note> out = new ArrayList<>(); Map<Integer, ArrayDeque<Note>> open = new HashMap<>();
+        boolean[] sustain=new boolean[16];ArrayList<Note> deferred=new ArrayList<>();long last=0;
         for (MidiTake.Event e : events) {
+            last=Math.max(last,e.frame);
             int type = e.status & 0xF0, ch = e.status & 15, key = ch * 128 + e.a;
             if (type == 0x90 && e.b > 0) { Note n = new Note(e.a, e.b, e.frame, 0, ch); open.computeIfAbsent(key, k -> new ArrayDeque<>()).add(n); out.add(n); }
-            else if (type == 0x80 || (type == 0x90 && e.b == 0)) { ArrayDeque<Note> q = open.get(key); if (q != null && !q.isEmpty()) { Note n = q.poll(); n.length = Math.max(1, e.frame - n.start); } }
-            else if (other != null && !(type == 0xB0 && (e.a == 123 || e.a == 120))) other.add(e);
+            else if (type == 0x80 || (type == 0x90 && e.b == 0)) {
+                ArrayDeque<Note> q=open.get(key);if(q!=null&&!q.isEmpty()){Note n=q.poll();if(sustain[ch])deferred.add(n);else n.length=Math.max(1,e.frame-n.start);}
+            } else {
+                if(type==0xB0&&e.a==64){sustain[ch]=e.b>=64;if(!sustain[ch])for(Iterator<Note> it=deferred.iterator();it.hasNext();){Note n=it.next();if(n.channel==ch){n.length=Math.max(1,e.frame-n.start);it.remove();}}}
+                if(type==0xB0&&(e.a==120||e.a==123)){
+                    for(Map.Entry<Integer,ArrayDeque<Note>> entry:open.entrySet())if(entry.getKey()/128==ch){for(Note n:entry.getValue())n.length=Math.max(1,e.frame-n.start);entry.getValue().clear();}
+                    for(Iterator<Note> it=deferred.iterator();it.hasNext();){Note n=it.next();if(n.channel==ch){n.length=Math.max(1,e.frame-n.start);it.remove();}}
+                }
+                if(other!=null&&!(type==0xB0&&(e.a==123||e.a==120)))other.add(e);
+            }
         }
-        long last = 0; for (MidiTake.Event e : events) last = Math.max(last, e.frame);
-        for (ArrayDeque<Note> q : open.values()) for (Note n : q) n.length = Math.max(1, last - n.start);
+        for(ArrayDeque<Note> q:open.values())for(Note n:q)n.length=Math.max(1,last-n.start);
+        for(Note n:deferred)n.length=Math.max(1,last-n.start);
         out.sort(Comparator.comparingLong((Note n) -> n.start).thenComparingInt(n -> n.pitch));
         return out;
     }
@@ -872,7 +882,8 @@ public final class Pro {
 
     /** Renders a session offline, removing master-chain look-ahead delay so the export lines up with the timeline. */
     public static void renderOffline(Core.Session s, long frames, BlockSink sink) throws IOException {
-        Core.Renderer renderer = new Core.Renderer(s); float[] block = new float[1024];
+        Core.Session renderSession=s;for(Core.Track t:s.tracks)if(t.ephemeral){renderSession=s.copy();break;}
+        Core.Renderer renderer = new Core.Renderer(renderSession); float[] block = new float[1024];
         int skip = renderer.masterLatency(); long pos = 0, emitted = 0;
         if (skip == 0) { // same block sequence as the original exporter, so legacy exports stay sample-identical
             for (; pos < frames; pos += 512) { int n = (int) Math.min(512, frames - pos); renderer.render(pos, n, block, false); sink.block(block, n); }

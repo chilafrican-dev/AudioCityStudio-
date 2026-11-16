@@ -13,19 +13,19 @@ public final class SynthPoly {
  }
  static final class SampleVoice {
   final int channel,note;final SampledInstruments.Region region;final double velocity,step;
-  double at=0,releaseFrame=-1;boolean pending;float left,right;
-  SampleVoice(int ch,int note,int vel,SampledInstruments.Region r){channel=ch;this.note=note;region=r;velocity=Math.pow(vel/127.0,.8)*Math.max(.01,Math.min(2,r.gain));step=Math.pow(2,(note-r.root)/12.0);}
+  double at=0,releaseFrame=-1,pitchStep,lastBend;long ageFrames;boolean pending;float left,right;
+  SampleVoice(int ch,int note,int vel,SampledInstruments.Region r){channel=ch;this.note=note;region=r;velocity=Math.pow(vel/127.0,.8)*Math.max(.01,Math.min(2,r.gain));step=Math.pow(2,(note-r.root)/12.0);pitchStep=step;}
   void release(){if(releaseFrame<0)releaseFrame=0;}
-  boolean done(){return at>=region.pcm.length/2.0&&(!region.loop||releaseFrame>=0)||releaseFrame>=region.releaseFrames;}
-  void tick(){int n=region.pcm.length/2;double pos=at;
+  boolean done(){return !region.loop&&at>=region.pcm.length/2.0||releaseFrame>=region.releaseFrames;}
+  void tick(double bend){int n=region.pcm.length/2;double pos=at;
    if(region.loop&&region.loopEnd>region.loopStart&&pos>=region.loopEnd){pos=region.loopStart+(pos-region.loopStart)%(region.loopEnd-region.loopStart);at=pos;}
    if(n<1||pos>=n){left=right=0;at=n;return;}
    int i=(int)pos,j=Math.min(n-1,i+1);double frac=pos-i;
-   float envelope=(float)Math.min(1,at/(Core.RATE*.004));
+   float envelope=(float)Math.min(1,ageFrames/(Core.RATE*.004));
    if(releaseFrame>=0){envelope*=Math.max(0,1-releaseFrame/(double)region.releaseFrames);releaseFrame++;}
    left=(float)((region.pcm[i*2]+(region.pcm[j*2]-region.pcm[i*2])*frac)*velocity*envelope*.6);
    right=(float)((region.pcm[i*2+1]+(region.pcm[j*2+1]-region.pcm[i*2+1])*frac)*velocity*envelope*.6);
-   at+=step;
+   if(bend!=lastBend){pitchStep=step*Math.pow(2,bend/12.0);lastBend=bend;}at+=pitchStep;ageFrames++;
   }
  }
  private final SampledInstruments.Pack[] samplePacks=new SampledInstruments.Pack[16];
@@ -117,7 +117,7 @@ public final class SynthPoly {
  public synchronized void silence(){voices.clear();sampled.clear();scheduled.clear();Arrays.fill(sustain,false);Arrays.fill(bend,0);activeVoices=0;}
  private void renderVoices(float[] out,int frames){Arrays.fill(out,0,frames*2,0);
   for(Voice v:voices)for(int i=0;i<frames;i++){v.tick(bend[v.channel]);out[2*i]+=v.left;out[2*i+1]+=v.right;}
-  for(SampleVoice v:sampled)for(int i=0;i<frames;i++){v.tick();out[2*i]+=v.left;out[2*i+1]+=v.right;}
+  for(SampleVoice v:sampled)for(int i=0;i<frames;i++){v.tick(bend[v.channel]);out[2*i]+=v.left;out[2*i+1]+=v.right;}
   for(int i=0;i<frames*2;i++)out[i]=(float)(Math.tanh(out[i]*.8)*.7);
   voices.removeIf(Voice::done);sampled.removeIf(SampleVoice::done);activeVoices=voices.size()+sampled.size();
  }

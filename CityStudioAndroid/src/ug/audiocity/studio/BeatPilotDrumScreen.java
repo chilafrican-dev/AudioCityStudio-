@@ -1,173 +1,72 @@
 package ug.audiocity.studio;
-
-import android.app.*;
-import android.content.*;
-import android.view.*;
-import android.widget.*;
-import java.io.*;
-import java.util.*;
-
-/** BeatPilot drum pad + editable step pattern workspace. */
+import android.app.*;import android.view.*;import android.widget.*;import java.io.*;import java.util.*;import java.util.concurrent.*;
+/** Manual pattern rack. Patterns are reusable; each placed drum lane has its own track. */
 final class BeatPilotDrumScreen {
- final MainActivity a;
- private BeatPilotDrumPattern pattern;
- private Core.Clip initialClip;
- private int currentBar=0;
- private int inputVelocity=105;
- private final float[][] samples=new float[BeatPilotDrums.LANES][];
- private BeatPilotDrums.LivePattern livePattern;
- private Core.Track liveTrack;
- private final java.util.concurrent.atomic.AtomicInteger edits=new java.util.concurrent.atomic.AtomicInteger();
+ final MainActivity a;private Core.Session project;private BeatPilotDrumPattern pattern;private String activeId,name;private int currentBar=0,inputVelocity=105;private boolean dirty,patternMode=true,rebuilding,followPlayback=true,resumePreview;
+ private static final int[] CHANNEL_COLORS={0xffbd704f,0xff607fb2,0xffbb568c,0xff8073b5,0xffa6519c,0xff879e4c,0xffb48850,0xff59959e};
+ private final float[][] samples=new float[8][];private final ExecutorService previews=Executors.newSingleThreadExecutor();private final java.util.concurrent.atomic.AtomicInteger generation=new java.util.concurrent.atomic.AtomicInteger();
+ private BeatPilotDrums.LivePattern previewSource;private Core.Session previewSession;private AlertDialog dialog;private Spinner selector;private TextView status;private Button patternKey,songKey,play,barLabel,length;private final Button[][] cells=new Button[8][16];private final Button[] laneNames=new Button[8];private final TextView[] meters=new TextView[8];private final long[] flashes=new long[8];private HorizontalScrollView gridScroll;private LinearLayout matrix;private Button zoom;private int visibleSteps=16,lastStep=-1;private String lastClipId="";private int lastDrawnBar=-1;
  BeatPilotDrumScreen(MainActivity activity){a=activity;}
- void openClip(Core.Clip clip){if(clip==null||clip.drumPattern==null){a.toast("Not a BeatPilot MIDI drum clip");return;}if(clip.drumPattern.startsWith("v3|")){Core.Track t=null;for(Core.Track tr:a.session.tracks)if(tr.clips.contains(clip)){t=tr;break;}if(t!=null)new BeatPilotDrumPianoRoll(a,t,clip).show();return;}initialClip=clip;open();}
- private TextView label(String value){return a.label(value,13,MainActivity.TEXT,false);}
- private LinearLayout column(){LinearLayout b=a.column();b.setPadding(a.dp(12),a.dp(10),a.dp(12),a.dp(10));b.setBackgroundColor(MainActivity.BG);return b;}
- private void load()throws IOException{
-  for(int i=0;i<samples.length;i++)try(InputStream in=a.getAssets().open("samples/builtin/soundza/"+BeatPilotDrums.FILES[i])){samples[i]=SampleAudio.readWav(in);}
- }
- static SampledInstruments.Pack pack(float[][] samples){SampledInstruments.Region[] regions=new SampledInstruments.Region[samples.length];
-  for(int i=0;i<samples.length;i++)regions[i]=new SampledInstruments.Region(36+i,36+i,1,127,36+i,0,0,false,1f,samples[i],240);
-  return new SampledInstruments.Pack("Audio City Drum Pads","Soundza drum one-shots · see bundled license",regions);
- }
- void open(){if(!a.canEdit()||a.working)return;
-  a.busy("Preparing Audio City drum pads…",()->{
-   load();a.runOnUiThread(this::show);
-  });
- }
- private void refreshLive(){
-  final BeatPilotDrums.LivePattern target=livePattern;
-  if(liveTrack!=null)liveTrack.mute=false;
-  if(target==null||a.session==null)return;
-  final int generation=edits.incrementAndGet();
-  final BeatPilotDrumPattern snapshot=pattern.copy();
-  
-  new Thread(()->{
-   float[] phrase=snapshot.render(samples);
-   if(generation==edits.get()&&livePattern==target)target.replace(phrase);
-  },"BeatPilot-live-pattern-update").start();
- }
- private void closeLive(){
-  edits.incrementAndGet();
-  if(liveTrack!=null&&a.session!=null)a.session.tracks.remove(liveTrack);
-  liveTrack=null;livePattern=null;
- }
+ static float[][] loadKit(MainActivity a)throws IOException{float[][] samples=new float[8][];for(int i=0;i<8;i++)try(InputStream in=a.getAssets().open("samples/builtin/soundza/"+BeatPilotDrums.FILES[i])){samples[i]=SampleAudio.readWav(in);}return samples;}
+ static float[][] loadKit(MainActivity a,BeatPilotDrumPattern p)throws IOException{return loadKit(a,p,a.session);}
+ static float[][] loadKit(MainActivity a,BeatPilotDrumPattern p,Core.Session project)throws IOException{float[][] kit=new float[8][];SampledInstruments.Pack afro=null;if(AfroDrumPack.used(p)){File dir=project==null?null:new File(project.directory);AfroDrumPack.copyToProject(a.getFilesDir(),dir);afro=AfroDrumPack.load(dir,a.getFilesDir());}for(int l=0;l<8;l++)if(p.imported(l))kit[l]=UserDrumPacks.load(project==null?null:new File(project.directory),a.getFilesDir(),p.userFile(l));else if(DrumSampleCatalog.isAfro(l,p.sampleChoice(l)))kit[l]=afro.regions[p.sampleChoice(l)-DrumSampleCatalog.AFRO_BASE].pcm;else try(InputStream in=a.getAssets().open("samples/builtin/soundza/"+p.sampleFile(l))){kit[l]=SampleAudio.readWav(in);}return kit;}
+ static SampledInstruments.Pack pack(float[][] samples){SampledInstruments.Region[] regions=new SampledInstruments.Region[8];for(int i=0;i<8;i++)regions[i]=new SampledInstruments.Region(36+i,36+i,1,127,36+i,0,0,false,1f,samples[i],240);return new SampledInstruments.Pack("Audio City Drum Pads","Selected factory and personal drum one-shots",regions);}
+ void openPattern(String id){activeId=id;open();}
+ void openClip(Core.Clip clip){if(clip==null||clip.drumPattern==null)return;if(clip.patternId!=null&&PatternLibrary.find(a.session,clip.patternId)!=null){activeId=clip.patternId;open();return;}for(Core.Track track:a.session.tracks)if(track.clips.contains(clip)){new BeatPilotDrumPianoRoll(a,track,clip).show();return;}}
+ void open(){if(!a.canEdit())return;if(a.session.timeSignature!=4||!a.session.tempoChanges.isEmpty()){a.toast("The pattern rack currently uses 4/4 and one project tempo.");return;}project=a.session;a.busy("Opening pattern rack…",()->{float[][] kit=loadKit(a);for(int i=0;i<8;i++)samples[i]=kit[i];a.runOnUiThread(this::show);});}
+ private TextView label(String text){return a.label(text,12,MainActivity.TEXT,false);}
+ private LinearLayout column(){LinearLayout c=a.column();c.setPadding(a.dp(8),a.dp(6),a.dp(8),a.dp(6));c.setBackground(StudioFinish.rackPanel(a.getResources().getDisplayMetrics().density));return c;}
+ private LinearLayout row(LinearLayout parent,int height){LinearLayout row=new LinearLayout(a);parent.addView(row,new LinearLayout.LayoutParams(-1,a.dp(height)));return row;}
+ private Button key(LinearLayout parent,String text,Runnable action){Button button=a.button(text,action);button.setTextSize(10);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-1,1);lp.rightMargin=a.dp(3);parent.addView(button,lp);button.setBackground(StudioFinish.rackKey(a.getResources().getDisplayMetrics().density));button.setElevation(0);return button;}
  private void show(){
-  if(a.dead||a.session==null)return;
-  if(a.session.timeSignature!=4){a.toast("Drum machine currently supports 4/4 projects.");return;}
-  if(pattern==null){try{pattern=initialClip!=null?BeatPilotDrumPattern.decode(initialClip.drumPattern):BeatPilotDrumPattern.starter(a.session.bpm,1);}catch(RuntimeException ex){a.toast("Saved drum pattern is invalid");return;}}
-  final SampledInstruments.Pack originalDrumPack=a.liveMidi.voices.getSamplePack(9);
-  a.liveMidi.voices.setSamplePack(9,pack(samples));a.liveMidi.start();
-  final Core.Session project=a.session;
-  // Non-destructive monitoring track: loops sample data in lockstep with the project timeline.
-  // Do not save this temporary track as a user recording.
-  livePattern=new BeatPilotDrums.LivePattern(pattern.render(samples),Core.RATE*60*10);
-  liveTrack=new Core.Track("BeatPilot Live Preview (temporary)",0xff536c89);liveTrack.ephemeral=true;
-  Core.Clip monitoring=new Core.Clip("Live Drum Preview",livePattern,"",0);
-  monitoring.length=livePattern.frames();monitoring.envelopeLength=monitoring.length;
-  liveTrack.clips.add(monitoring);project.tracks.add(liveTrack);
-
-  LinearLayout page=column();page.addView(a.label("AUDIO CITY DRUMS",20,MainActivity.TEXT,true));
-  page.addView(label("Live pads + multi-bar MIDI grid · tap to toggle, hold to set velocity"));
-  final TextView status=a.label("Eight real drum sounds · 16-step pattern",12,MainActivity.ACCENT,false);page.addView(status);
-  LinearLayout pads=new LinearLayout(a);pads.setOrientation(LinearLayout.VERTICAL);page.addView(pads,new LinearLayout.LayoutParams(-1,a.dp(168)));
-  for(int row=0;row<2;row++){LinearLayout line=new LinearLayout(a);pads.addView(line,new LinearLayout.LayoutParams(-1,0,1));
-   for(int col=0;col<4;col++){final int lane=row*4+col;Button button=a.button(BeatPilotDrums.LABELS[lane],()->{
-     a.liveMidi.voices.message(0x99,36+lane,110); // non-looping sample ends naturally
-     status.setText("Played: "+BeatPilotDrums.LABELS[lane]);
-    });line.addView(button,new LinearLayout.LayoutParams(0,-1,1));}
+  if(a.dead||!a.midiForeground||a.session!=project){previews.shutdownNow();return;}if(project.patterns.isEmpty()){PatternLibrary.Entry first=PatternLibrary.blank(project);activeId=first.id;a.save(false);}PatternLibrary.Entry entry=PatternLibrary.find(project,activeId);if(entry==null)entry=project.patterns.get(0);activeId=entry.id;pattern=PatternLibrary.pattern(project,entry);name=entry.name;
+  a.audition.stop();a.audition.loop=false;patternMode=!a.engine.playing;
+  SampledInstruments.Pack oldPack=a.liveMidi.voices.getSamplePack(9);a.liveMidi.voices.setSamplePack(9,pack(samples));if(a.requestAudioFocus())a.liveMidi.start();
+  LinearLayout page=column();LinearLayout title=row(page,28);TextView brand=a.label("CHANNEL RACK  /  AUDIO CITY",12,0xffd4e0e5,true);brand.setSingleLine(true);brand.setEllipsize(android.text.TextUtils.TruncateAt.END);title.addView(brand,new LinearLayout.LayoutParams(0,-2,1));Button close=a.button("✕",()->saveCurrent(()->dialog.dismiss()));close.setBackground(StudioFinish.rackKey(a.getResources().getDisplayMetrics().density));close.setContentDescription("Save and close pattern rack");title.addView(close,new LinearLayout.LayoutParams(a.dp(36),-1));
+  LinearLayout bank=row(page,32);selector=new Spinner(a);bank.addView(selector,new LinearLayout.LayoutParams(0,-1,2));key(bank,"New",()->saveCurrent(()->{try{a.checkpoint();PatternLibrary.Entry e=PatternLibrary.blank(project);select(e.id);a.save(false);}catch(Exception error){a.error("Patterns",error.getMessage());}}));key(bank,"Copy",()->saveCurrent(()->{try{a.checkpoint();PatternLibrary.Entry e=PatternLibrary.duplicate(project,activeId);select(e.id);a.save(false);}catch(Exception error){a.error("Patterns",error.getMessage());}}));
+  selector.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View v,int pos,long id){if(rebuilding||pos<0||pos>=project.patterns.size())return;String next=project.patterns.get(pos).id;if(!next.equals(activeId))saveCurrent(()->select(next));}});
+  LinearLayout edit=row(page,30);key(edit,"Rename",()->a.input("Pattern name",name,false,value->{name=value.trim().isEmpty()?"Pattern":value.trim();dirty=true;saveCurrent(null);}));key(edit,"Save",()->saveCurrent(null));key(edit,"Tools",this::tools);zoom=key(edit,"Zoom +",()->{visibleSteps=visibleSteps==16?8:16;zoom.setText(visibleSteps==16?"Zoom +":"Fit 16");resizeGrid();});
+  status=a.label("Tap steps to build a pattern.",9,0xffb5c1c6,false);status.setSingleLine(true);status.setEllipsize(android.text.TextUtils.TruncateAt.END);page.addView(status,new LinearLayout.LayoutParams(-1,a.dp(20)));
+  LinearLayout modes=row(page,30);patternKey=key(modes,"PATTERN",()->setMode(true));songKey=key(modes,"SONG",()->setMode(false));play=key(modes,"▶ Play",this::togglePlay);
+  LinearLayout bars=row(page,30);key(bars,"◀",()->{followPlayback=false;currentBar=(currentBar+pattern.bars-1)%pattern.bars;redraw();});barLabel=key(bars,"Bar 1",()->{followPlayback=!followPlayback;redraw();});barLabel.setContentDescription("Toggle following the playback bar");key(bars,"▶",()->{followPlayback=false;currentBar=(currentBar+1)%pattern.bars;redraw();});length=key(bars,"1 bar",()->new AlertDialog.Builder(a).setTitle("Pattern length").setItems(new String[]{"1 bar","2 bars","4 bars","8 bars"},(d,which)->resizePattern(new int[]{1,2,4,8}[which])).show());
+  ScrollView vertical=new ScrollView(a);vertical.setFillViewport(false);page.addView(vertical,new LinearLayout.LayoutParams(-1,0,1));LinearLayout rack=new LinearLayout(a);vertical.addView(rack);LinearLayout names=a.column();rack.addView(names,new LinearLayout.LayoutParams(a.dp(104),-2));TextView channel=label("CHANNEL");channel.setTextSize(8);names.addView(channel,new LinearLayout.LayoutParams(-1,a.dp(22)));
+  gridScroll=new HorizontalScrollView(a);gridScroll.setHorizontalScrollBarEnabled(true);rack.addView(gridScroll,new LinearLayout.LayoutParams(0,-2,1));matrix=a.column();gridScroll.addView(matrix);LinearLayout numbers=row(matrix,22);for(int step=0;step<16;step++){TextView n=label(step%4==0?""+(step/4+1):"·");n.setTextSize(9);n.setGravity(Gravity.CENTER);LinearLayout.LayoutParams countLayout=new LinearLayout.LayoutParams(0,-1,1);if(step>0&&step%4==0)countLayout.leftMargin=a.dp(2);numbers.addView(n,countLayout);}
+  for(int lane=0;lane<8;lane++){final int channelIndex=lane;LinearLayout header=new LinearLayout(a);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0,a.dp(2),0,a.dp(2));names.addView(header,new LinearLayout.LayoutParams(-1,a.dp(32)));TextView led=a.label("▏",15,0xff263238,false);meters[lane]=led;header.addView(led,new LinearLayout.LayoutParams(a.dp(7),-2));Button sound=a.button(BeatPilotDrums.LABELS[lane],()->audition(channelIndex));sound.setTextSize(9);sound.setIncludeFontPadding(false);sound.setGravity(Gravity.CENTER_VERTICAL|Gravity.LEFT);sound.setPadding(a.dp(5),0,0,0);sound.setMaxLines(2);sound.setEllipsize(android.text.TextUtils.TruncateAt.END);sound.setBackground(StudioFinish.channel(a.getResources().getDisplayMetrics().density,CHANNEL_COLORS[lane]));laneNames[lane]=sound;header.addView(sound,new LinearLayout.LayoutParams(0,-1,1));Button arrow=a.button("▾",()->chooseSample(channelIndex));arrow.setTextSize(12);arrow.setBackground(StudioFinish.channel(a.getResources().getDisplayMetrics().density,CHANNEL_COLORS[lane]));arrow.setContentDescription("Choose "+BeatPilotDrums.LABELS[lane]+" sample");header.addView(arrow,new LinearLayout.LayoutParams(a.dp(22),-1));LinearLayout steps=new LinearLayout(a);matrix.addView(steps,new LinearLayout.LayoutParams(-1,a.dp(32)));
+   for(int step=0;step<16;step++){final int cell=step;final DrumStepPress press=new DrumStepPress();Button hit=a.button("",()->{if(a.working){press.cancel();return;}int editedBar=press.consume(currentBar);if(editedBar>=pattern.bars)return;int old=pattern.get(editedBar,channelIndex,cell);pattern.set(editedBar,channelIndex,cell,old==0?inputVelocity:0);if(old==0&&!a.audition.playing&&!a.engine.playing)audition(channelIndex);changed();});hit.setOnTouchListener((v,event)->{if(event.getActionMasked()==MotionEvent.ACTION_DOWN)press.down(currentBar);else if(event.getActionMasked()==MotionEvent.ACTION_CANCEL)press.cancel();else if(event.getActionMasked()==MotionEvent.ACTION_UP&&(event.getX()<0||event.getX()>=v.getWidth()||event.getY()<0||event.getY()>=v.getHeight()))press.cancel();return false;});hit.setPadding(0,0,0,0);hit.setBackground(new StudioFinish.Pad(a.getResources().getDisplayMetrics().density,(step/4)%2==0));hit.setOnLongClickListener(v->{final int editedBar=press.consume(currentBar);if(editedBar>=pattern.bars)return true;SeekBar velocity=new SeekBar(a);velocity.setMax(126);velocity.setProgress(Math.max(0,pattern.get(editedBar,channelIndex,cell)-1));new AlertDialog.Builder(a).setTitle("Velocity · "+BeatPilotDrums.LABELS[channelIndex]).setView(velocity).setPositiveButton("Apply",(d,w)->{inputVelocity=velocity.getProgress()+1;pattern.set(editedBar,channelIndex,cell,inputVelocity);changed();}).setNegativeButton("Cancel",null).show();return true;});LinearLayout.LayoutParams padLayout=new LinearLayout.LayoutParams(0,-1,1);if(step>0&&step%4==0)padLayout.leftMargin=a.dp(2);steps.addView(hit,padLayout);cells[lane][step]=hit;}
   }
-  LinearLayout toolbar=new LinearLayout(a);page.addView(toolbar,new LinearLayout.LayoutParams(-1,a.dp(43)));
-  final Button preset=a.button("Starter",()->{}),clear=a.button("Clear",()->{});
-  toolbar.addView(preset,new LinearLayout.LayoutParams(0,-1,1));toolbar.addView(clear,new LinearLayout.LayoutParams(0,-1,1));
-  final Core.Clip[] edited={initialClip};
-  final Runnable[] redrawUiHolder={null};
-  Button edit=a.button("Edit saved MIDI",()->{
-   ArrayList<Core.Clip> matches=new ArrayList<>();
-   for(Core.Track t:project.tracks)if(!t.ephemeral)for(Core.Clip c:t.clips)if(c.drumPattern!=null)matches.add(c);
-   if(matches.isEmpty()){a.toast("No saved BeatPilot drum patterns yet.");return;}
-   String[] options=new String[matches.size()];
-   for(int i=0;i<matches.size();i++)options[i]=matches.get(i).name+" · "+(i+1);
-   new AlertDialog.Builder(a).setTitle("Edit an Arrange drum pattern").setItems(options,(d,which)->{
-    Core.Clip chosen=matches.get(which);pattern=BeatPilotDrumPattern.decode(chosen.drumPattern);currentBar=0;
-    edited[0]=chosen;redrawUiHolder[0].run();refreshLive();
-    status.setText("Editing saved MIDI steps: "+chosen.name);
-   }).show();
-  });toolbar.addView(edit,new LinearLayout.LayoutParams(0,-1,1));
-  LinearLayout barLine=new LinearLayout(a);page.addView(barLine,new LinearLayout.LayoutParams(-1,a.dp(44)));
-  final Button barLabel=a.button("Bar 1/1",()->{});
-  final Button previous=a.button("◀",()->{}),next=a.button("▶",()->{}),length=a.button("Bars: 1",()->{});
-  barLine.addView(previous,new LinearLayout.LayoutParams(0,-1,.55f));barLine.addView(barLabel,new LinearLayout.LayoutParams(0,-1,1.2f));barLine.addView(next,new LinearLayout.LayoutParams(0,-1,.55f));barLine.addView(length,new LinearLayout.LayoutParams(0,-1,1.3f));
-  LinearLayout velocityLine=new LinearLayout(a);page.addView(velocityLine,new LinearLayout.LayoutParams(-1,a.dp(43)));
-  final Button velDown=a.button("Velocity −",()->{}),velLabel=a.button("105",()->{}),velUp=a.button("Velocity +",()->{});
-  velocityLine.addView(velDown,new LinearLayout.LayoutParams(0,-1,1));velocityLine.addView(velLabel,new LinearLayout.LayoutParams(0,-1,.7f));velocityLine.addView(velUp,new LinearLayout.LayoutParams(0,-1,1));
-  final ScrollView scroll=new ScrollView(a);page.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-  final LinearLayout steps=column();scroll.addView(steps);
-  final Button[][] cells=new Button[BeatPilotDrumPattern.LANES][BeatPilotDrumPattern.STEPS];
-  for(int row=0;row<BeatPilotDrums.LANES;row++){
-   final int lane=row;steps.addView(label(BeatPilotDrums.LABELS[row]));
-   for(int half=0;half<2;half++){
-    LinearLayout line=new LinearLayout(a);steps.addView(line,new LinearLayout.LayoutParams(-1,a.dp(42)));
-    for(int col=0;col<8;col++){
-     final int step=half*8+col;Button cell=a.button("",()->{int v=pattern.get(currentBar,lane,step);pattern.set(currentBar,lane,step,v==0?inputVelocity:0);paint(cells[lane][step],pattern.get(currentBar,lane,step));refreshLive();});
-     cell.setTextSize(11);cell.setOnLongClickListener(v->{pattern.set(currentBar,lane,step,inputVelocity);paint(cells[lane][step],inputVelocity);refreshLive();return true;});cells[lane][step]=cell;line.addView(cell,new LinearLayout.LayoutParams(0,-1,1));
-    }
-   }
-  }
-  Runnable redraw=()->{
-   for(int r=0;r<BeatPilotDrumPattern.LANES;r++)for(int i=0;i<BeatPilotDrumPattern.STEPS;i++)paint(cells[r][i],pattern.get(currentBar,r,i));
-   barLabel.setText("Bar "+(currentBar+1)+"/"+pattern.bars);length.setText("Bars: "+pattern.bars);
-   velLabel.setText(""+inputVelocity);
-  };redrawUiHolder[0]=redraw;
-  previous.setOnClickListener(v->{currentBar=(currentBar+pattern.bars-1)%pattern.bars;redraw.run();});
-  next.setOnClickListener(v->{currentBar=(currentBar+1)%pattern.bars;redraw.run();});
-  length.setOnClickListener(v->new AlertDialog.Builder(a).setTitle("Drum pattern length")
-   .setItems(new String[]{"1 bar","2 bars","4 bars","8 bars"},(d,which)->{
-    pattern=pattern.resized(new int[]{1,2,4,8}[which]);currentBar=Math.min(currentBar,pattern.bars-1);redraw.run();refreshLive();
-   }).show());
-  velDown.setOnClickListener(v->{inputVelocity=Math.max(1,inputVelocity-10);redraw.run();});
-  velUp.setOnClickListener(v->{inputVelocity=Math.min(127,inputVelocity+10);redraw.run();});
-  preset.setOnClickListener(v->{pattern=BeatPilotDrumPattern.starter(project.bpm,pattern.bars);redraw.run();refreshLive();});
-  clear.setOnClickListener(v->{for(int l=0;l<8;l++)for(int s=0;s<16;s++)pattern.set(currentBar,l,s,0);redraw.run();refreshLive();});
-  redraw.run();
-  LinearLayout controls=new LinearLayout(a);page.addView(controls,new LinearLayout.LayoutParams(-1,a.dp(53)));
-  Button loops=a.button("♫ Loops",()->openLoops());
-  page.addView(loops,new LinearLayout.LayoutParams(-1,a.dp(42)));
-  Button play=a.button("▶ Play beat",()->{if(a.engine.playing)a.engine.pause();else if(a.requestAudioFocus())a.engine.play(a.session);a.updateTransport();});
-  Button save=a.button("✓ Keep drum pattern",()->{});
-  controls.addView(play,new LinearLayout.LayoutParams(0,-1,1));controls.addView(save,new LinearLayout.LayoutParams(0,-1,1.5f));
-  Button close=a.button("Close drums",()->{});page.addView(close,new LinearLayout.LayoutParams(-1,a.dp(40)));
-  final AlertDialog dialog=new AlertDialog.Builder(a).setView(page).create();
-  final Runnable[] ticker={null};ticker[0]=()->{if(dialog.isShowing()&&!a.dead){play.setText(a.engine.playing?"Ⅱ Pause beat":"▶ Play beat");a.handler.postDelayed(ticker[0],175);}};
-  save.setOnClickListener(v->{if(a.working)return;BeatPilotDrumPattern snapshot=pattern.copy();
-   long bar=Core.beat(project.bpm)*Math.max(1,project.timeSignature);long pos=edited[0]==null?PerformanceChords.nextBar(a.engine.position,bar):edited[0].start;
-   if(pos+bar*snapshot.bars>Core.MAX_FRAMES){a.toast("Move the playhead earlier to save the drum pattern.");return;}
-   a.checkpoint();a.busy("Saving drum pattern to Arrange…",()->{
-    float[] audio=snapshot.render(samples);
-    File dir=new File(project.directory);Core.Clip clip=AudioIO.store(dir,audio,"Audio City Drums · "+snapshot.bars+" bars",pos);
-    clip.drumPattern=snapshot.encode();
-    clip.notes=snapshot.notes();
-    String midiName="beatpilot-"+java.util.UUID.randomUUID()+".mid";
-    try(FileOutputStream midiOut=new FileOutputStream(new File(dir,midiName))){
-     snapshot.writeMidi(midiOut);
-    }
-    clip.midiFile=midiName;
-    a.runOnUiThread(()->{if(a.session!=project){new File(dir,clip.file).delete();a.toast("Project changed; drum pattern not inserted.");return;}
-     Core.Track track=null;
-     if(edited[0]!=null){
-      for(Core.Track candidate:project.tracks)if(candidate.clips.contains(edited[0])){track=candidate;break;}
-     }
-     if(track==null){track=new Core.Track("Audio City MIDI Drums",0xff47bbae);project.tracks.add(track);}
-     else track.clips.remove(edited[0]);
-     track.clips.add(clip);edited[0]=clip;
-     a.selected=track;a.clip=clip;if(liveTrack!=null)liveTrack.mute=true;a.save(false);
-     a.toast("Drum MIDI pattern saved. Reopen Edit saved MIDI to change steps.");
-    });
-   });
-  });
-  close.setOnClickListener(v->dialog.dismiss());
-  dialog.setOnDismissListener(v->{closeLive();a.handler.removeCallbacks(ticker[0]);for(int i=0;i<8;i++)a.liveMidi.voices.message(0x89,36+i,0);a.liveMidi.voices.setSamplePack(9,originalDrumPack);});
-  dialog.show();if(dialog.getWindow()!=null)dialog.getWindow().setLayout(-1,-1);a.handler.post(ticker[0]);
+  LinearLayout arrange=row(page,34);key(arrange,"Place in Arrange",()->saveCurrent(this::place));key(arrange,"Open Arrange",()->saveCurrent(()->{dialog.dismiss();a.screen="ARRANGE";a.refresh();}));
+  dialog=new AlertDialog.Builder(a).create();dialog.setView(page,0,0,0,0);a.activePatternRack=this;dialog.setOnCancelListener(d->{if(dirty)saveCurrent(null);});dialog.setOnDismissListener(d->{if(a.activePatternRack==this)a.activePatternRack=null;a.handler.removeCallbacks(playback);generation.incrementAndGet();previews.shutdownNow();a.audition.stop();a.audition.loop=false;a.liveMidi.voices.setSamplePack(9,oldPack);a.updateTransport();});dialog.show();if(dialog.getWindow()!=null){dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);dialog.getWindow().setLayout(-1,-1);}gridScroll.post(this::resizeGrid);gridScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(r-l!=or-ol)resizeGrid();});rebuildSelector();redraw();reloadKit();a.handler.post(playback);
  }
+ private void resizePattern(int bars){if(bars==pattern.bars)return;Runnable apply=()->{pattern=pattern.resizedEmpty(bars);currentBar=Math.min(currentBar,bars-1);changed();};if(pattern.discardsNotes(bars))new AlertDialog.Builder(a).setTitle("Shorten pattern?").setMessage("Notes after bar "+bars+" will be removed.").setNegativeButton("Cancel",null).setPositiveButton("Shorten",(d,w)->apply.run()).show();else apply.run();}
+ private void resizeGrid(){if(gridScroll==null||gridScroll.getWidth()==0)return;android.view.ViewGroup.LayoutParams lp=matrix.getLayoutParams();lp.width=gridScroll.getWidth()*16/visibleSteps;matrix.setLayoutParams(lp);}
+ private void reloadKit(){a.handler.post(this::loadSelectedKit);}
+ private void loadSelectedKit(){if(dialog==null||!dialog.isShowing()||a.dead||a.session!=project)return;resumePreview=patternMode&&a.audition.playing;a.audition.pause();previewSession=null;previewSource=null;generation.incrementAndGet();BeatPilotDrumPattern snapshot=pattern.copy();a.busy("Loading drum sounds…",()->{float[][] kit=loadKit(a,snapshot,project);a.runOnUiThread(()->{if(a.session!=project||dialog==null||!dialog.isShowing())return;for(int l=0;l<8;l++)samples[l]=kit[l];a.liveMidi.voices.setSamplePack(9,pack(samples));refreshPreview();});});}
+ private void audition(int lane){if(a.working||a.dead||!a.midiForeground)return;if(a.requestAudioFocus()){a.liveMidi.start();a.liveMidi.voices.message(0x99,36+lane,inputVelocity);flashes[lane]=android.os.SystemClock.uptimeMillis()+100;}}
+ private void chooseSample(int lane){if(a.working)return;a.busy("Opening drum packs…",()->{List<UserDrumPacks.Info> personal=UserDrumPacks.list(a.getFilesDir());a.runOnUiThread(()->showPackChoices(lane,personal));});}
+ private void showPackChoices(int lane,List<UserDrumPacks.Info> personal){if(dialog==null||!dialog.isShowing()||a.dead)return;ArrayList<String> names=new ArrayList<>();names.add("Soundza · factory one-shots");names.add("Addictive Afrobeat · 14 personal one-shots");for(UserDrumPacks.Info pack:personal)names.add(pack.name+" · "+pack.sounds.size()+" WAVs");names.add("＋ Import your own pack (WAV / ZIP)");names.add("Import prepared Addictive pack (.acpack)");new AlertDialog.Builder(a).setTitle(BeatPilotDrums.LABELS[lane]+" / Choose pack").setItems(names.toArray(new String[0]),(d,which)->{if(which==0)showSampleChoices(lane,null);else if(which>=2&&which<2+personal.size())showUserSamples(lane,personal.get(which-2));else if(which==2+personal.size())a.importDrumPack();else if(which==3+personal.size())a.importAfroDrumPack();else if(!AfroDrumPack.available(new File(project.directory),a.getFilesDir()))new AlertDialog.Builder(a).setTitle("Import your Afro pack").setMessage("Choose its prepared .acpack file, or use the general WAV/ZIP importer for your own packs.").setNegativeButton("Cancel",null).setPositiveButton("Import prepared pack",(confirm,w)->a.importAfroDrumPack()).show();else a.busy("Loading Addictive Afrobeat drums…",()->{SampledInstruments.Pack pack=AfroDrumPack.load(new File(project.directory),a.getFilesDir());a.runOnUiThread(()->showSampleChoices(lane,pack));});}).show();}
+ private void showUserSamples(int lane,UserDrumPacks.Info library){if(dialog==null||!dialog.isShowing()||a.dead)return;LinearLayout body=column();EditText search=new EditText(a);search.setSingleLine(true);search.setTextSize(13);search.setHint("Search sample names or folders");body.addView(search);Spinner category=new Spinner(a);String[] groups={"All samples","Kick","Snare","Clap","Hat","Percussion","Other"};category.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,groups));body.addView(category);TextView selected=label("Choose a sound to audition");selected.setTextSize(10);body.addView(selected);ListView list=new ListView(a);list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);body.addView(list,new LinearLayout.LayoutParams(-1,a.dp(280)));ArrayList<UserDrumPacks.Sound> visible=new ArrayList<>();final UserDrumPacks.Sound[] chosen={null};for(UserDrumPacks.Sound sound:library.sounds)if(sound.file.equals(pattern.userFile(lane)))chosen[0]=sound;final int[] request={0};final AlertDialog[] picker={null};Runnable filter=()->{String query=search.getText().toString().toLowerCase(Locale.US);String group=groups[Math.max(0,category.getSelectedItemPosition())];visible.clear();ArrayList<String> titles=new ArrayList<>();int checked=-1;for(UserDrumPacks.Sound sound:library.sounds)if((group.equals("All samples")||group.equals(sound.category))&&sound.name.toLowerCase(Locale.US).contains(query)){if(chosen[0]!=null&&chosen[0].file.equals(sound.file))checked=visible.size();visible.add(sound);titles.add(sound.name);}list.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_list_item_single_choice,titles));if(checked>=0)list.setItemChecked(checked,true);selected.setText(chosen[0]==null?visible.size()+" matching sounds":("Selected: "+chosen[0].name));};
+  list.setOnItemClickListener((parent,v,pos,id)->{UserDrumPacks.Sound sound=visible.get(pos);chosen[0]=sound;selected.setText("Selected: "+sound.name);picker[0].getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);int token=++request[0];previews.execute(()->{try{float[] wave=UserDrumPacks.preview(a.getFilesDir(),library,sound);a.handler.post(()->{if(request[0]!=token||!picker[0].isShowing()||!dialog.isShowing())return;float[][] kit=samples.clone();kit[lane]=wave;a.liveMidi.voices.setSamplePack(9,pack(kit));audition(lane);});}catch(IOException e){a.handler.post(()->a.toast(e.getMessage()));}});});search.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int count,int after){}public void onTextChanged(CharSequence s,int st,int before,int count){filter.run();}public void afterTextChanged(android.text.Editable e){}});category.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long id){filter.run();}});
+  picker[0]=new AlertDialog.Builder(a).setTitle(BeatPilotDrums.LABELS[lane]+" / "+library.name).setView(body).setPositiveButton("Use sound",(d,w)->{UserDrumPacks.Sound sound=chosen[0];if(sound==null)return;request[0]++;a.busy("Assigning your drum sound…",()->{float[] wave=UserDrumPacks.choose(a.getFilesDir(),new File(project.directory),library,sound);a.runOnUiThread(()->{if(a.dead||!dialog.isShowing()||a.session!=project)return;pattern.setImported(lane,sound.file,sound.name);samples[lane]=wave;a.liveMidi.voices.setSamplePack(9,pack(samples));changed();if(!a.midiForeground)persistOnPause();});});}).setNeutralButton("Packs",(d,w)->a.handler.post(()->chooseSample(lane))).setNegativeButton("Cancel",null).create();picker[0].setOnDismissListener(d->{request[0]++;a.liveMidi.voices.setSamplePack(9,pack(samples));});filter.run();picker[0].show();picker[0].getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(chosen[0]!=null);
+ }
+ private void showSampleChoices(int lane,SampledInstruments.Pack imported){if(dialog==null||!dialog.isShowing()||a.dead)return;boolean afro=imported!=null;String[] titles=afro?AfroDrumPack.TITLES.clone():new String[DrumSampleCatalog.FILES[lane].length];if(!afro)for(int i=0;i<titles.length;i++)titles[i]=DrumSampleCatalog.title(lane,i);int current=pattern.sampleChoice(lane);final int[] choice={!pattern.imported(lane)&&DrumSampleCatalog.isAfro(lane,current)==afro?(afro?current-DrumSampleCatalog.AFRO_BASE:current):-1};final int[] request={0};AlertDialog chooser=new AlertDialog.Builder(a).setTitle(BeatPilotDrums.LABELS[lane]+" / "+(afro?"Addictive Afrobeat":"Soundza")).setSingleChoiceItems(titles,choice[0],(d,index)->{choice[0]=index;((AlertDialog)d).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);int token=++request[0];previews.execute(()->{try{float[] wave;if(afro)wave=imported.regions[index].pcm;else try(InputStream in=a.getAssets().open("samples/builtin/soundza/"+DrumSampleCatalog.FILES[lane][index])){wave=SampleAudio.readWav(in);}a.handler.post(()->{if(token!=request[0]||!((AlertDialog)d).isShowing()||!dialog.isShowing())return;float[][] kit=samples.clone();kit[lane]=wave;a.liveMidi.voices.setSamplePack(9,pack(kit));audition(lane);});}catch(IOException e){a.handler.post(()->a.toast("Could not audition this sample."));}});}).setPositiveButton("Use sound",(d,w)->{if(choice[0]<0)return;request[0]++;int index=choice[0],selected=afro?DrumSampleCatalog.afroChoice(lane,index):index;pattern.setSampleChoice(lane,selected);dirty=true;redraw();a.busy("Loading selected drum sound…",()->{float[] wave;if(afro){AfroDrumPack.copyToProject(a.getFilesDir(),new File(project.directory));wave=imported.regions[index].pcm;}else try(InputStream in=a.getAssets().open("samples/builtin/soundza/"+DrumSampleCatalog.FILES[lane][index])){wave=SampleAudio.readWav(in);}a.runOnUiThread(()->{if(!dialog.isShowing()||a.session!=project)return;samples[lane]=wave;a.liveMidi.voices.setSamplePack(9,pack(samples));changed();});});}).setNeutralButton("Packs",(d,w)->a.handler.post(()->chooseSample(lane))).setNegativeButton("Cancel",null).create();chooser.setOnDismissListener(d->{request[0]++;a.liveMidi.voices.setSamplePack(9,pack(samples));});chooser.show();chooser.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(choice[0]>=0);}
+ private final Runnable playback=new Runnable(){public void run(){if(dialog==null||!dialog.isShowing()||a.dead)return;boolean running=patternMode?a.audition.playing:a.engine.playing;int bar=-1,step=-1;BeatPilotDrumPattern sounding=pattern;String clipId="";long position=patternMode?a.audition.position:a.engine.position;
+  if(running){if(patternMode){long tick=(long)Math.floor(Math.max(0,position)*pattern.bpm*4.0/(Core.RATE*60));bar=(int)((tick/16)%pattern.bars);step=(int)(tick%16);}else if(a.engine.countInRemaining==0){for(Core.Track track:project.tracks){if(track.mute)continue;for(Core.Clip clip:track.clips)if(activeId.equals(clip.patternId)&&position>=clip.start&&position<clip.start+clip.length){long tick=(long)Math.floor((position-clip.start+clip.offset)*pattern.bpm*4.0/(Core.RATE*60));bar=(int)(tick/16);step=(int)(tick%16);clipId=clip.id;break;}if(step>=0)break;}}}
+  if(followPlayback&&bar>=0&&bar<pattern.bars&&bar!=currentBar){currentBar=bar;redraw();}if(step!=lastStep||currentBar!=lastDrawnBar||!clipId.equals(lastClipId)){for(int l=0;l<8;l++)for(int s=0;s<16;s++)cells[l][s].setActivated(s==step&&bar==currentBar);if(step>=0&&bar>=0&&bar<pattern.bars)for(int l=0;l<8;l++)if(patternMode&&sounding.get(bar,l,step)>0)flashes[l]=android.os.SystemClock.uptimeMillis()+95;if(followPlayback&&visibleSteps==8&&step>=0)gridScroll.smoothScrollTo(step<8?0:gridScroll.getWidth(),0);lastStep=step;lastClipId=clipId;lastDrawnBar=currentBar;}
+  long now=android.os.SystemClock.uptimeMillis();for(int l=0;l<8;l++){boolean audible=false;if(!patternMode&&running){Core.Track track=PatternArrangement.laneTrack(project,l);audible=track!=null&&track.meter>.015f;}meters[l].setTextColor(flashes[l]>now||audible?CHANNEL_COLORS[l]:0xff263238);}play.setText(running?"Ⅱ Pause":"▶ Play");play.setTextColor(running?0xffc7ed7c:0xffe0e8eb);a.handler.postDelayed(this,32);
+ }};
+ boolean persistOnPause(){if(!dirty||pattern==null||project==null)return false;final Core.Session target=project;final PatternDraft draft=new PatternDraft(activeId,name,pattern);a.jobs.execute(()->{try{float[][] kit=loadKit(a,draft.pattern(),target);Map<Core.Clip,Core.Clip> updated=draft.save(target,kit);a.runOnUiThread(()->{if(a.dead||a.session!=target)return;a.clip=updated.getOrDefault(a.clip,a.clip);if(draft.matches(activeId,name,pattern))dirty=false;redraw();});}catch(Exception error){a.runOnUiThread(()->{if(!a.dead)a.toast("Pattern draft could not save: "+error.getMessage());});}});return true;}
+
+ void dispose(){if(dialog!=null&&dialog.isShowing())dialog.dismiss();else previews.shutdownNow();}
+ private void tools(){new AlertDialog.Builder(a).setTitle("Pattern tools").setItems(new String[]{"Clear current bar","Replace draft with starter · optional","Browse loops","Repeat current bar across pattern","Import your drum pack (WAV / ZIP)","Import prepared Afro pack (.acpack)","Auto build · optional"},(d,which)->{if(which==0){for(int l=0;l<8;l++)for(int step=0;step<16;step++)pattern.set(currentBar,l,step,0);changed();}else if(which==1){BeatPilotDrumPattern starter=BeatPilotDrumPattern.starter(project.bpm,pattern.bars);pattern.copySamplesTo(starter);pattern=starter;changed();}else if(which==2)openLoops();else if(which==3){final int repeatBar=currentBar;new AlertDialog.Builder(a).setTitle("Repeat bar "+(repeatBar+1)+"?").setMessage("Replace every bar in this pattern with bar "+(repeatBar+1)+".").setNegativeButton("Cancel",null).setPositiveButton("Repeat bar",(confirm,w)->{pattern=pattern.repeatedBar(repeatBar);changed();}).show();}else if(which==4)saveCurrent(()->a.handler.post(a::importDrumPack));else if(which==5)saveCurrent(()->a.handler.post(a::importAfroDrumPack));else saveCurrent(()->{dialog.dismiss();a.handler.post(()->new TouchStudio(a).autoBeat());});}).show();}
+ private void rebuildSelector(){if(selector==null)return;rebuilding=true;String[] names=new String[project.patterns.size()];int chosen=0;for(int i=0;i<names.length;i++){PatternLibrary.Entry e=project.patterns.get(i);names[i]=e.name;if(e.id.equals(activeId))chosen=i;}selector.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,names));selector.setSelection(chosen);rebuilding=false;}
+ private void select(String id){PatternLibrary.Entry entry=PatternLibrary.find(project,id);if(entry==null)return;activeId=id;name=entry.name;pattern=PatternLibrary.pattern(project,entry);currentBar=0;dirty=false;lastStep=-1;rebuildSelector();redraw();reloadKit();}
+ private void changed(){dirty=true;redraw();refreshPreview();}
+ private void redraw(){if(dialog==null||!dialog.isShowing())return;for(int l=0;l<8;l++)for(int s=0;s<16;s++){Button cell=cells[l][s];int velocity=pattern.get(currentBar,l,s);cell.setSelected(velocity>0);cell.setContentDescription(BeatPilotDrums.LABELS[l]+", step "+(s+1)+", velocity "+velocity);}for(int l=0;l<8;l++){String sample=pattern.sampleName(l);laneNames[l].setText(BeatPilotDrums.LABELS[l]+"\n"+sample);laneNames[l].setContentDescription("Audition "+BeatPilotDrums.LABELS[l]+": "+sample);}barLabel.setText("Bar "+(currentBar+1)+"/"+pattern.bars+(followPlayback?" ↻":""));barLabel.setSelected(followPlayback);length.setText(pattern.bars+" bar"+(pattern.bars==1?"":"s"));patternKey.setSelected(patternMode);songKey.setSelected(!patternMode);patternKey.setTextColor(patternMode?0xffd2ef96:0xffc0cbd0);songKey.setTextColor(!patternMode?0xffd2ef96:0xffc0cbd0);status.setText(dirty?"● Unsaved edits":patternMode?"Tap pads · ▾ choose sample · hold for velocity":"SONG · arranged tracks · separate drum channels");}
+ private void refreshPreview(){if(dialog==null||!dialog.isShowing())return;int token=generation.incrementAndGet();BeatPilotDrumPattern snapshot=pattern.copy();float[][] kit=samples.clone();previews.execute(()->{if(token!=generation.get())return;float[] audio=snapshot.render(kit);a.handler.post(()->{if(token!=generation.get()||!dialog.isShowing()||a.dead)return;boolean restart=a.audition.playing||resumePreview;resumePreview=false;int frames=audio.length/2;if(previewSession==null||previewSession.end()!=frames){a.audition.pause();previewSession=new Core.Session();previewSession.bpm=project.bpm;previewSession.loopStart=0;previewSession.loopEnd=frames;Core.Track t=new Core.Track("Pattern preview",0);previewSource=new BeatPilotDrums.LivePattern(audio,frames);t.clips.add(new Core.Clip("Pattern",previewSource,"",0));previewSession.tracks.add(t);if(restart&&patternMode&&a.midiForeground){a.audition.position=0;a.audition.loop=true;a.audition.play(previewSession);}}else previewSource.replace(audio);});});}
+ private void setMode(boolean mode){if(patternMode==mode)return;boolean was=a.audition.playing||a.engine.playing;a.audition.pause();a.engine.pause();patternMode=mode;redraw();if(was)togglePlay();}
+ private void togglePlay(){if(!a.requestAudioFocus())return;if(patternMode){a.engine.pause();if(a.audition.playing){a.audition.pause();play.setText("▶ Play");}else if(previewSession!=null){a.audition.loop=true;a.audition.play(previewSession);play.setText("Ⅱ Pause");}}else{a.audition.pause();a.togglePlay();play.setText(a.engine.playing?"Ⅱ Pause":"▶ Play");}a.updateTransport();}
+ private void saveCurrent(Runnable after){if(a.working)return;if(!dirty){if(after!=null)after.run();return;}String id=activeId,title=name;BeatPilotDrumPattern snapshot=pattern.copy();a.checkpoint();a.busy("Saving pattern and separate drum tracks…",()->{Map<Core.Clip,Core.Clip> updated=PatternArrangement.save(project,id,title,snapshot,samples.clone());a.runOnUiThread(()->{if(a.session!=project)return;a.clip=updated.getOrDefault(a.clip,a.clip);dirty=false;name=PatternLibrary.find(project,id).name;a.save(false);rebuildSelector();redraw();if(after!=null)after.run();});});}
+ private void place(){if(PatternLibrary.empty(pattern)){a.toast("Tap some steps before placing this pattern.");return;}new AlertDialog.Builder(a).setTitle("Place "+name+" at the cursor").setItems(new String[]{"Once","Repeat ×2","Repeat ×4","Repeat ×8"},(d,which)->{int repeats=new int[]{1,2,4,8}[which];String id=activeId;long cursor=a.engine.position;a.checkpoint();a.busy("Placing eight separate drum lanes…",()->{List<Core.Clip> placed=PatternArrangement.place(project,id,samples,cursor,repeats);a.runOnUiThread(()->{if(a.session!=project)return;a.selected=project.tracks.stream().filter(t->t.clips.contains(placed.get(0))).findFirst().orElse(a.selected);a.clip=placed.get(0);a.save(false);a.toast("Pattern placed. Each drum sound has its own track and mixer channel.");});});}).show();}
  private static final String[] LOOP_FILES={
   "094-soundza-bright-african-perc-loop.wav","095-soundza-fast-african-perc-loop.wav",
   "096-soundza-deep-african-drum-loop.wav","097-soundza-driving-percussion-loop.wav",
@@ -199,7 +98,7 @@ final class BeatPilotDrumScreen {
     float[] synced=BeatPilotLoopStretch.stretch(source,target);
     File dir=new File(project.directory);Core.Clip clip=AudioIO.store(dir,synced,"Audio City · "+titles[index],pos);
     a.runOnUiThread(()->{if(a.session!=project){new File(dir,clip.file).delete();a.toast("Project changed; loop not added.");return;}
-     Core.Track track=new Core.Track("Audio City · Percussion Loop",0xffa785d0);track.clips.add(clip);project.tracks.add(track);a.selected=track;a.clip=clip;if(liveTrack!=null)liveTrack.mute=true;a.save(false);a.toast("Synced loop added to Arrange.");
+     Core.Track track=new Core.Track("Audio City · Percussion Loop",0xffa785d0);track.clips.add(clip);project.tracks.add(track);a.selected=track;a.clip=clip;a.save(false);a.toast("Synced loop added to Arrange.");
     });
    });
   }).show();

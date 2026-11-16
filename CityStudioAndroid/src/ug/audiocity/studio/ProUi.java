@@ -65,7 +65,7 @@ final class ProUi {
 
     void menu() {
         if (!a.canEdit()) return;
-        String[] items = {"Routing, sends & sidechain", "Insert slots (selected track)", "Buses (reverb, delay, groups)", "Master chain & loudness meter", "Automation", "Tempo, time signature & markers", "Recording & audio settings", "Undo history", "Project templates", "Channel presets", "Editing: crossfades & ripple", "Track folders", "Loop & edit range…", "Range edit (cut, copy, paste, insert time)…", "Project notes", "Duplicate this project", "Keyboard shortcuts", "Clip launcher (scenes)", "MIDI controller mapping", "Get loops online (free CC0)"};
+        String[] items = {"Routing, sends & sidechain", "Insert slots (selected track)", "Buses (reverb, delay, groups)", "Master chain & loudness meter", "Automation", "Tempo, time signature & markers", "Recording & audio settings", "Undo history", "Project templates", "Channel presets", "Editing: crossfades & ripple", "Track folders", "Loop & edit range…", "Range edit (cut, copy, paste, insert time)…", "Project notes", "Duplicate this project", "Keyboard shortcuts", "Clip launcher (scenes)", "MIDI controller mapping", "Get loops online (free CC0)", "AI MIDI generator…"};
         new AlertDialog.Builder(a).setTitle("Pro tools").setItems(items, (d, i) -> {
             switch (i) {
                 case 0: if (needTrack()) routing(a.selected); break;
@@ -87,10 +87,13 @@ final class ProUi {
                 case 16: shortcuts(); break;
                 case 17: launcher(); break;
                 case 18: midiMapping(); break;
-                default: onlineLoops(); break;
+                case 19: onlineLoops(); break;
+                default: aiGenerate(); break;
             }
         }).show();
     }
+    /** Opens the AI MIDI generator sheet (new tracks with live MIDI clips at the playhead). */
+    void aiGenerate() { new AiGenerateUi(a, this).show(); }
     boolean needTrack() { if (a.selected == null) { a.toast("Select a track first."); return false; } return true; }
 
     /** Extra items for the track menu. */
@@ -109,7 +112,7 @@ final class ProUi {
         if (c.drumPattern == null && c.midiFile != null && c.notes == null) items.add("Convert to live MIDI clip");
         if (c.midiFile == null && c.notes == null) items.add("Vocal editor (notes, pitch, timing)…");
         new AlertDialog.Builder(a).setTitle(c.name).setItems(items.toArray(new String[0]), (d, i) -> {
-            if (items.get(i).startsWith("Edit BeatPilot drum piano")) { try { new BeatPilotDrumPianoRoll(a,t,c).show(); } catch (RuntimeException ex) { a.error("Drum piano roll",ex.getMessage()); } return; }
+            if (items.get(i).startsWith("Edit BeatPilot drum piano")) { try { if(c.patternId!=null)new BeatPilotDrumScreen(a).openClip(c);else new BeatPilotDrumPianoRoll(a,t,c).show(); } catch (RuntimeException ex) { a.error("Drum piano roll",ex.getMessage()); } return; }
             if (items.get(i).startsWith("Edit BeatPilot 16-step")) { if(c.drumPattern.startsWith("v3|")){a.toast("Freehand MIDI roll notes cannot be represented in a 16-step grid. Use Drum piano roll.");return;} new BeatPilotDrumScreen(a).openClip(c); return; }
             if (items.get(i).startsWith("Edit notes") || items.get(i).startsWith("Edit MIDI notes")) { pianoRoll(t,c); return; }
             if (items.get(i).startsWith("Convert to live MIDI")) { convertToLive(t,c); return; }
@@ -789,12 +792,12 @@ final class ProUi {
         void apply(NotesAction action) { snapshot(); List<Pro.Note> target = selected.isEmpty() ? notes : new ArrayList<>(selected); action.run(target); if (target != notes) selected.retainAll(notes); invalidate(); }
         Pro.Note at(float px, float py) { int pitch = pitch(py); long f = frame(px); for (int i = notes.size() - 1; i >= 0; i--) { Pro.Note n = notes.get(i); if (n.pitch == pitch && f >= n.start && f <= n.end()) return n; } return null; }
         protected void onDraw(Canvas c) {
-            float w = getWidth(), h = getHeight(); c.drawColor(0xff252c31); p.setStyle(Paint.Style.FILL);
-            for (int pitch = topPitch; y(pitch) < h; pitch--) { if (pitch < 0) break; int pc = pitch % 12; boolean black = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10; p.setColor(black ? 0xff20262a : 0xff2b3237); c.drawRect(keys, y(pitch), w, y(pitch) + rowH, p); p.setColor(black ? 0xff15191c : 0xffd9dee1); c.drawRect(0, y(pitch), keys - dp(2), y(pitch) + rowH - 1, p); if (pc == 0) { p.setColor(0xff59646c); p.setTextSize(dp(8)); c.drawText("C" + (pitch / 12 - 1), dp(2), y(pitch) + rowH - dp(3), p); } }
+            float w = getWidth(), h = getHeight(); c.drawColor(0xff0e1014); p.setStyle(Paint.Style.FILL);
+            for (int pitch = topPitch; y(pitch) < h; pitch--) { if (pitch < 0) break; int pc = pitch % 12; boolean black = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10; p.setColor(black ? 0xff0b0d11 : 0xff12151a); c.drawRect(keys, y(pitch), w, y(pitch) + rowH, p); p.setColor(black ? 0xff15171c : 0xffeef0f4); c.drawRect(0, y(pitch), keys - dp(2), y(pitch) + rowH - 1, p); if (pc == 0) { p.setColor(0xff445066); p.setTextSize(dp(8)); c.drawText("C" + (pitch / 12 - 1), dp(2), y(pitch) + rowH - dp(3), p); } }
             int sig = a.session.timeSignature; long step = Math.max(1, Math.round(grid)); long first = frame(keys) / step * step;
-            for (long f = first; x(f) < w; f += step) { double b = f / beat(); boolean bar = Math.abs(b / sig - Math.round(b / sig)) < 1e-6, isBeat = Math.abs(b - Math.round(b)) < 1e-6; p.setColor(bar ? 0xff7d8a93 : isBeat ? 0xff4a555c : 0xff353e44); c.drawRect(x(f), 0, x(f) + (bar ? dp(1.5f) : dp(.7f)), h, p); }
-            for (Pro.Note n : notes) { float l = x(n.start), r = Math.max(l + dp(3), x(n.end())), t = y(n.pitch); if (r < keys || l > w) continue; boolean sel = selected.contains(n); p.setColor(sel ? 0xffffffff : android.graphics.Color.rgb(90 + n.velocity, 150 + n.velocity / 2, 110)); c.drawRoundRect(Math.max(keys, l), t + 1, r, t + rowH - 1, dp(2), dp(2), p); p.setColor(sel ? 0xff3f4b52 : 0xffe6f0e2); c.drawRect(Math.max(keys, r - dp(4)), t + 2, r, t + rowH - 2, p); }
-            p.setColor(0xffe2e9e9); float cursor = x(a.engine.position - (a.clip == null ? 0 : a.clip.start - a.clip.offset)); if (cursor >= keys && cursor < w) c.drawRect(cursor, 0, cursor + dp(1), h, p);
+            for (long f = first; x(f) < w; f += step) { double b = f / beat(); boolean bar = Math.abs(b / sig - Math.round(b / sig)) < 1e-6, isBeat = Math.abs(b - Math.round(b)) < 1e-6; p.setColor(bar ? 0xff323846 : isBeat ? 0xff262b36 : 0xff191d25); c.drawRect(x(f), 0, x(f) + (bar ? dp(1.5f) : dp(.7f)), h, p); }
+            for (Pro.Note n : notes) { float l = x(n.start), r = Math.max(l + dp(3), x(n.end())), t = y(n.pitch); if (r < keys || l > w) continue; boolean sel = selected.contains(n); p.setColor(sel ? 0xffffffff : android.graphics.Color.rgb(40 + n.velocity / 3, 150 + n.velocity / 3, 190 + n.velocity / 4)); c.drawRoundRect(Math.max(keys, l), t + 1, r, t + rowH - 1, dp(2), dp(2), p); p.setColor(sel ? 0xff3f4b52 : 0xffbff0f8); c.drawRect(Math.max(keys, r - dp(4)), t + 2, r, t + rowH - 2, p); }
+            p.setColor(0xffffffff); float cursor = x(a.engine.position - (a.clip == null ? 0 : a.clip.start - a.clip.offset)); if (cursor >= keys && cursor < w) c.drawRect(cursor, 0, cursor + dp(1), h, p);
         }
         public boolean onTouchEvent(MotionEvent e) {
             float ex = e.getX(), ey = e.getY();
@@ -1076,14 +1079,12 @@ final class ProUi {
         final Synth.Config instrument = config.copy(); final int bpm = a.session.bpm; final Core.Session project = a.session; final ArrayList<Pro.Note> copy = new ArrayList<>(); for (Pro.Note n : notes) copy.add(n.copy());
         a.busy("Printing edited notes…", () -> {
             MidiTake events = Pro.take(instrument, bpm, copy, other);
-            MidiTake take = new MidiTake(instrument, bpm, null, 0, samplePack); take.events.addAll(events.events); take.frames = events.frames; take.recording = false;
+            MidiTake take = new MidiTake(instrument, bpm, null, 0, samplePack); take.events.addAll(events.events); take.frames = Math.max(events.frames, Math.toIntExact(c.offset + (long)c.length)); take.recording = false;
             File audio = new File(project.directory, UUID.randomUUID() + ".pcm"), mid = new File(project.directory, UUID.randomUUID() + ".mid"); boolean ok = false;
             try {
                 try (AudioIO.Writer w = new AudioIO.Writer(audio)) { take.print((l, r) -> w.sample(l, r)); }
                 try (OutputStream o = new FileOutputStream(mid)) { take.writeMidi(o); }
-                long origin = c.start - c.offset; Core.Clip printed = new Core.Clip(c.name, new AudioIO.Disk(audio), audio.getName(), Math.max(0, origin));
-                if (origin < 0) { int cut = (int) Math.min(printed.length - 1, -origin); printed.offset = cut; printed.envelopeOffset = cut; printed.length -= cut; }
-                printed.length = (int) Math.max(1, Math.min(printed.length, Core.MAX_FRAMES - printed.start)); printed.midiFile = mid.getName(); printed.gain = c.gain;
+                Core.Clip printed = ProMidi.reprintedWindow(c, new AudioIO.Disk(audio), audio.getName(), mid.getName());
                 ok = true;
                 a.runOnUiThread(() -> { edit("Edit MIDI notes"); int index = t.clips.indexOf(c); if (index >= 0) t.clips.set(index, printed); else t.clips.add(printed); a.clip = printed; a.save(false); a.refresh(); a.toast("Notes printed to audio. Undo restores the previous version."); });
             } finally { if (!ok) { audio.delete(); mid.delete(); } }
@@ -1275,7 +1276,7 @@ final class ProUi {
     void duplicateProject() {
         a.engine.stop(); a.save(false); final Core.Session src = a.session;
         a.busy("Duplicating project…", () -> { File dir = a.newDir(); File from = new File(src.directory); File[] files = from.listFiles(); if (files != null) for (File f : files) if (f.isFile()) java.nio.file.Files.copy(f.toPath(), new File(dir, f.getName()).toPath());
-            Core.Session copy = AudioIO.load(dir); copy.title = (src.title + " copy").substring(0, Math.min(60, src.title.length() + 5)); AudioIO.save(copy); a.runOnUiThread(() -> { a.bind(copy); a.toast("Now working in “" + copy.title + "”. The original is unchanged (Open project)."); }); });
+            Core.Session copy = AudioIO.load(dir); a.prepareInstrumentPacks(copy); copy.title = (src.title + " copy").substring(0, Math.min(60, src.title.length() + 5)); AudioIO.save(copy); a.runOnUiThread(() -> { a.bind(copy); a.toast("Now working in “" + copy.title + "”. The original is unchanged (Open project)."); }); });
     }
     void shortcuts() {
         a.error("Keyboard shortcuts (USB or Bluetooth keyboard)", "Space  play / pause\nR  record\nHome  go to start · End  go to end\n← →  move playhead one beat (with a clip selected: nudge it by the grid; Shift = 10 ms)\nL  loop on/off · K  click on/off\nM  add marker · [ ]  previous / next marker\nS  split selected clip at playhead\nDelete  remove selected clip\nCtrl+C / Ctrl+X / Ctrl+V  copy / cut / paste clip\nCtrl+D  duplicate clip\nCtrl+Z  undo · Ctrl+Shift+Z or Ctrl+Y  redo\nCtrl+S  save · Ctrl+E  export · Ctrl+P  Pro tools\n?  this list");
@@ -1317,16 +1318,11 @@ final class ProUi {
         if (!prefs().getBoolean("liveMidi", true)) return false;
         boolean touchPerformance = "Touch performance".equals(name);
         long clipStart = start;
-        MidiTake outputTake = take;
-        if (touchPerformance) {
-            ProMidi.QuantizedTake quantized = ProMidi.quantizePerformance(take, start);
-            outputTake = quantized.take;
-            clipStart = quantized.start;
-        }
-        final MidiTake capturedTake = outputTake;
+        final MidiTake capturedTake = take; // Already fitted to bars and the captured loop end.
         List<Pro.Note> notes = ProMidi.fromTake(capturedTake);
         if (notes.isEmpty()) { a.toast("No MIDI notes were received."); return true; }
-        capturedTake.samplePackId = capturedTake.samplePack == null ? null : a.selectedSampleInstrumentId;
+        // Instrument identity was frozen when recording started; never read a later picker selection.
+        if(capturedTake.samplePack == null)capturedTake.samplePackId = null;
         final Synth.Config instrument = capturedTake.config.copy();
         final Core.Session project = a.session;
         final Core.Track destination = a.performanceTrack(capturedTake, name, target);
@@ -1361,8 +1357,8 @@ final class ProUi {
             a.busy("Loading instrument…", () -> {
                 SampledInstruments.Pack pack = i < Synth.NAMES.length ? null : a.instrumentLibrary.load(packs.get(i - Synth.NAMES.length));
                 String packId = i < Synth.NAMES.length ? null : packs.get(i - Synth.NAMES.length).filename;
-                Core.Clip probe = c.copy(); probe.instrument = config; probe.samplePack = pack; probe.instrumentPackId = packId; ProMidi.refresh(probe);
-                a.runOnUiThread(() -> { edit("Change instrument"); c.instrument = config; c.samplePack = pack; c.instrumentPackId = packId; c.source = probe.source; c.peaks = probe.peaks; c.length = probe.length; c.envelopeLength = probe.envelopeLength; a.save(false); a.refresh(); a.toast(c.name + " now plays " + (pack == null ? Synth.NAMES[config.patch] : pack.name) + "."); });
+                Core.Clip probe = c.copy(); ProMidi.assignInstrument(probe,config,pack,packId); ProMidi.refresh(probe);
+                a.runOnUiThread(() -> { edit("Change instrument"); ProMidi.assignInstrument(c,config,pack,packId); c.source = probe.source; c.peaks = probe.peaks; c.length = probe.length; c.envelopeLength = probe.envelopeLength; a.save(false); a.refresh(); a.toast(c.name + " now plays " + (pack == null ? Synth.NAMES[config.patch] : pack.name) + "."); });
             });
         }).show();
     }
@@ -1469,12 +1465,12 @@ final class ProUi {
     volatile String learnTarget; volatile String learnLabel;
     /** Called for every incoming MIDI message; returns true when it was used as a control (so it does not play a note). */
     boolean midiControl(int status, int x, int y) {
-        int type = status & 0xF0; boolean cc = type == 0xB0, noteOn = type == 0x90 && y > 0; if (!cc && !noteOn && type != 0x80) return false;
+        int type = status & 0xF0; boolean cc = type == 0xB0, noteOn = type == 0x90 && y > 0; if (!cc && type != 0x90 && type != 0x80) return false;
         Core.Session s = a.session; if (s == null) return false;
         String learn = learnTarget;
         if (learn != null && (cc || noteOn)) { learnTarget = null; final ProLive.Mapping m = new ProLive.Mapping(-1, x, noteOn, learn); final String what = learnLabel;
             a.handler.post(() -> { s.midiMap.removeIf(o -> o.number == m.number && o.note == m.note); s.midiMap.add(m); a.save(false); a.toast(m.label() + " now controls " + what + "."); }); return true; }
-        for (ProLive.Mapping m : s.midiMap) if (m.matches(status, x) || (m.note && type == 0x80 && x == m.number) || (m.note && type == 0x90 && y == 0 && x == m.number)) {
+        for (ProLive.Mapping m : s.midiMap) if (m.consumes(status, x)) {
             if (!noteOn && !cc) return true; final int value = y;
             a.handler.post(() -> { String action = ProLive.apply(s, m, value); if (action != null) transport(action); if (a.mixer != null) a.mixer.invalidate(); if (a.timeline != null) a.timeline.invalidate(); });
             return true;
@@ -1484,7 +1480,7 @@ final class ProUi {
     void transport(String action) {
         switch (action) {
             case ProLive.PLAY: a.togglePlay(); break; case ProLive.RECORD: a.record(); break;
-            case ProLive.LOOP: a.engine.loop = !a.engine.loop; a.refresh(); break;
+            case ProLive.LOOP: if(a.canEdit()){a.engine.loop = !a.engine.loop; a.refresh();} break;
             case ProLive.UNDO: a.undo(); break;
             case ProLive.MARKER: edit("Add marker"); a.session.markers.add(new Pro.Marker(a.engine.position, "Marker " + (a.session.markers.size() + 1))); a.save(false); a.refresh(); break;
         }

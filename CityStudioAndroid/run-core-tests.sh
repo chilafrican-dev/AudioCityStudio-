@@ -7,18 +7,18 @@ out=build/core-tests
 rm -rf "$out"
 mkdir -p "$out"
 sources=()
-for f in src/ug/audiocity/studio/*.java; do
-  case "$f" in */PocketComposer.java|*/KeyDetector.java|*/BeatPilot.java) continue ;; esac
+while IFS= read -r f; do
+  case "$f" in */PocketComposer.java|*/KeyDetector.java|*/BeatPilot.java|*/PatternArrangement.java|*/PatternDraft.java) continue ;; esac
   if grep -qE '^import (android|androidx)\.' "$f"; then continue; fi
   sources+=("$f")
-done
+done < <(find src -name "*.java" -print | sort)
 javac -Xlint:-options --release 8 -d "$out" tests/stubs/org/json/*.java tests/stubs/android/util/AtomicFile.java "${sources[@]}"
 javac -cp "$out" -d "$out" \
-  tests/SoundTests.java tests/EffectsTests.java tests/LoopTests.java \
+  tests/ArrangeModelTests.java tests/SoundTests.java tests/EffectsTests.java tests/LoopTests.java \
   tests/SnapTests.java tests/LiveTests.java tests/ModernDawTests.java \
   tests/VocalTests.java tests/VocalEditTests.java tests/ProFeatureTests.java \
-  tests/StudioToolsTests.java tests/TouchPerformanceTests.java tests/SampledInstrumentTests.java tests/PianoLibraryTests.java tests/GuitarLibraryTests.java
-for t in SoundTests EffectsTests LoopTests SnapTests LiveTests ModernDawTests VocalTests VocalEditTests ProFeatureTests StudioToolsTests TouchPerformanceTests SampledInstrumentTests PianoLibraryTests GuitarLibraryTests; do
+  tests/StudioToolsTests.java tests/TouchPerformanceTests.java tests/SampledInstrumentTests.java tests/PianoLibraryTests.java tests/GuitarLibraryTests.java tests/BeatWorkspaceTests.java tests/WorkflowRegressionTests.java tests/MidiImportRegressionTests.java tests/PortableInstrumentTests.java tests/SamplePlaybackRegressionTests.java tests/RecordedClipBoundsTests.java tests/PatternBankTests.java tests/AiMidiGeneratorTests.java
+for t in ArrangeModelTests SoundTests EffectsTests LoopTests SnapTests LiveTests ModernDawTests VocalTests VocalEditTests ProFeatureTests StudioToolsTests TouchPerformanceTests SampledInstrumentTests PianoLibraryTests GuitarLibraryTests BeatWorkspaceTests WorkflowRegressionTests MidiImportRegressionTests PortableInstrumentTests SamplePlaybackRegressionTests RecordedClipBoundsTests PatternBankTests AiMidiGeneratorTests; do
   echo "== $t =="
   java -Xmx1024m -cp "$out" "ug.audiocity.studio.$t" assets | tail -n 1
 done

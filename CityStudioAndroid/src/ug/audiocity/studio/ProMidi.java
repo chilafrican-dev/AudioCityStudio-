@@ -32,13 +32,13 @@ final class ProMidi {
         LiveSource(List<Pro.Note> notes, Synth.Config instrument, SampledInstruments.Pack samplePack, int minFrames) {
             this.notes = new ArrayList<>();
             long end = Math.max(1, minFrames);
+            Synth.Config config = instrument == null ? Synth.factory(0) : instrument;
             for (Pro.Note note : notes) {
                 this.notes.add(note.copy());
-                end = Math.max(end, note.end());
+                end = Math.max(end, note.end() + MidiTake.releaseTailFrames(config, samplePack));
             }
             this.instrument = (instrument == null ? Synth.factory(0) : instrument).copy();
             this.samplePack = samplePack;
-            end += this.notes.isEmpty() ? 0 : MidiTake.releaseTailFrames(this.instrument, samplePack);
             frames = (int)Math.max(1, Math.min(Core.MAX_FRAMES, end));
         }
 
@@ -54,16 +54,22 @@ final class ProMidi {
         private void seek(int frame) {
             synth = new SynthPoly(instrument);
             synth.setSamplePack(samplePack);
+            // Reconstruct note age, sample position and release tails on a seek. Restarting
+            // every held note at its attack changed its timbre after rewind, trim or loop.
+            long tail=MidiTake.releaseTailFrames(instrument,samplePack),begin=frame;
+            for(Pro.Note note:notes)if(note.start<frame&&note.end()+tail>frame)begin=Math.min(begin,note.start);
             ArrayList<MidiTake.Event> events = new ArrayList<>();
             for (Pro.Note note : notes) {
-                if (note.end() <= frame) continue;
-                int on = (int)Math.max(0, note.start - frame);
-                int off = (int)Math.max(0, note.end() - frame);
+                if (note.end()+tail <= frame) continue;
+                int on = (int)Math.max(0, note.start - begin);
+                int off = (int)Math.max(0, note.end() - begin);
                 events.add(new MidiTake.Event(on, 0x90 | note.channel, note.pitch, note.velocity));
                 events.add(new MidiTake.Event(off, 0x80 | note.channel, note.pitch, 0));
             }
             events.sort((a, b) -> a.frame == b.frame ? Integer.compare(Pro.order(a), Pro.order(b)) : Integer.compare(a.frame, b.frame));
             for (MidiTake.Event event : events) synth.scheduleMessage(event.frame, event.status, event.a, event.b);
+            long warmup=frame-begin;
+            while(warmup>0){int n=(int)Math.min(BLOCK,warmup);synth.render(cache,n);warmup-=n;}
             cacheStart = renderedUntil = frame;
             cacheFrames = 0;
         }
@@ -112,6 +118,21 @@ final class ProMidi {
         c.peaks = peakProfile(own, live.frames());
         return c;
     }
+
+    /** Reprinting notes changes the source, not the user's Arrange window or fades. */
+    static Core.Clip reprintedWindow(Core.Clip original, Core.Source source, String audioFile, String midiFile) {
+        if(original.offset<0||original.length<1||original.offset+(long)original.length>source.frames())throw new IllegalArgumentException("Printed notes do not cover the original clip window.");
+        Core.Clip result=new Core.Clip(original.name,source,audioFile,original.start);result.offset=original.offset;result.length=original.length;result.midiFile=midiFile;result.gain=original.gain;result.fadeIn=original.fadeIn;result.fadeOut=original.fadeOut;result.envelopeOffset=original.envelopeOffset;result.envelopeLength=Math.max(original.envelopeLength,original.envelopeOffset+original.length);return result;
+    }
+    /** Explicit repair of empty ends on captured live performances; custom MIDI regions are untouched. */
+    static boolean trimRecordedEmptyEnd(Core.Session session,Core.Clip clip) {
+        if(clip.notes==null||clip.drumPattern!=null||!(clip.name.equals("Touch performance")||clip.name.equals("MIDI performance")||clip.name.startsWith("Touch performance ·")||clip.name.startsWith("MIDI performance ·")))return false;
+        long sourceEnd=clip.offset+(long)clip.length,last=clip.offset;for(Pro.Note note:clip.notes)if(note.start<sourceEnd&&note.end()>clip.offset)last=Math.max(last,Math.min(sourceEnd,note.end()));if(last<=clip.offset)return false;
+        long end=Math.min(clip.start+(long)clip.length,TakeBounds.barEnd(session,clip.start+last-clip.offset));if(end<=clip.start||end>=clip.start+(long)clip.length)return false;clip.length=(int)(end-clip.start);return true;
+    }
+
+    /** Explicit instrument changes replace any pack embedded by a previous backup. */
+    static void assignInstrument(Core.Clip clip,Synth.Config instrument,SampledInstruments.Pack pack,String id){clip.instrument=instrument.copy();clip.samplePack=pack;clip.instrumentPackId=id;clip.instrumentFile=null;}
 
     /** Rebuilds the live event source after edits, keeping position, trims and fades. */
     static void refresh(Core.Clip c) {

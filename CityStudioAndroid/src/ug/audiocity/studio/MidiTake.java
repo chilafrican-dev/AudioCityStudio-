@@ -3,14 +3,17 @@ import java.io.*;import java.util.*;import java.util.function.LongSupplier;
 public final class MidiTake {
  public static final class Event {public final int frame,status,a,b;Event(int f,int s,int a,int b){frame=f;status=s;this.a=a;this.b=b;}}
  public final Synth.Config config;public final SampledInstruments.Pack samplePack;public volatile String samplePackId;public final int bpm;public final long started=System.nanoTime();public final ArrayList<Event> events=new ArrayList<>();public volatile boolean recording=true;public int frames;
+ public volatile long projectStop=-1;private volatile int frameLimit=(int)Core.MAX_FRAMES;
+ public void limitTo(int frames){if(frames<1)throw new IllegalArgumentException("Invalid take length");frameLimit=Math.min((int)Core.MAX_FRAMES,frames);}
+ public boolean complete(){return !pending()&&elapsedFrames()>=frameLimit;}
  private final LongSupplier transport;private final long startFrame;
  public MidiTake(Synth.Config c,int bpm){this(c,bpm,null,0);}
  public MidiTake(Synth.Config c,int bpm,LongSupplier transport,long startFrame){this(c,bpm,transport,startFrame,null);}
  public MidiTake(Synth.Config c,int bpm,LongSupplier transport,long startFrame,SampledInstruments.Pack pack){this(c,bpm,transport,startFrame,pack,null);}
  public MidiTake(Synth.Config c,int bpm,LongSupplier transport,long startFrame,SampledInstruments.Pack pack,String packId){samplePack=pack;samplePackId=packId;config=c.copy();this.bpm=bpm;this.transport=transport;this.startFrame=startFrame;}
  public boolean pending(){return transport!=null&&transport.getAsLong()<startFrame;}
- public int elapsedFrames(){long count=transport==null?(System.nanoTime()-started)*Core.RATE/1000000000L:transport.getAsLong()-startFrame;return (int)Math.min(Core.MAX_FRAMES,Math.max(0,count));}
- public synchronized void add(int status,int a,int b){if(recording&&!pending()&&events.size()<100000){events.add(new Event(elapsedFrames(),status,a,b));}}
+ public int elapsedFrames(){long count=transport==null?(System.nanoTime()-started)*Core.RATE/1000000000L:transport.getAsLong()-startFrame;return (int)Math.min(frameLimit,Math.max(0,count));}
+ public synchronized void add(int status,int a,int b){if(recording&&!pending()&&!complete()&&events.size()<100000){events.add(new Event(elapsedFrames(),status,a,b));}}
  public synchronized void finish(){if(!recording)return;recording=false;frames=elapsedFrames();for(int ch=0;ch<16;ch++){events.add(new Event(frames,176|ch,64,0));events.add(new Event(frames,176|ch,123,0));}}
  static int releaseTailFrames(Synth.Config config,SampledInstruments.Pack pack){int tail=(int)((Math.max(config.release,1.8)+.05)*Core.RATE);if(pack!=null)for(SampledInstruments.Region region:pack.regions)tail=Math.max(tail,region.pcm.length/2);return tail;}
  public void print(TimeStretch.Sink sink)throws IOException{boolean notes=false;for(Event e:events)if((e.status&240)==144&&e.b>0)notes=true;if(!notes)throw new IOException("No MIDI notes were received.");SynthPoly synth=new SynthPoly(config);synth.setSamplePack(samplePack);int end=(int)Math.min(Core.MAX_FRAMES,(long)frames+releaseTailFrames(config,samplePack));float[] block=new float[1024];int pos=0,event=0;while(pos<end){while(event<events.size()&&events.get(event).frame<=pos){Event e=events.get(event++);synth.message(e.status,e.a,e.b);}int n=Math.min(512,end-pos);if(event<events.size())n=Math.min(n,Math.max(1,events.get(event).frame-pos));synth.render(block,n);for(int i=0;i<n;i++)sink.sample(block[2*i],block[2*i+1]);pos+=n;}}
