@@ -22,6 +22,7 @@ final class ProMidi {
     static final class LiveSource implements Core.Source {
         private static final int BLOCK = 512;
         private final List<Pro.Note> notes;
+        List<Pro.Note> notes() { return notes; }
         private final Synth.Config instrument;
         private final SampledInstruments.Pack samplePack;
         private final int frames;
