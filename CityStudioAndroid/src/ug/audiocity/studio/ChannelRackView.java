@@ -42,8 +42,8 @@ final class ChannelRackView extends LinearLayout {
             meters[lane]=text("▏",15);meters[lane].setTextColor(0xff263238);header.addView(meters[lane],new LinearLayout.LayoutParams(dp(7),-2));
             Button sound=button(BeatPilotDrums.LABELS[lane]);sound.setTextSize(9);sound.setMaxLines(2);sound.setGravity(Gravity.CENTER_VERTICAL|Gravity.LEFT);sound.setPadding(dp(5),0,0,0);sound.setEllipsize(android.text.TextUtils.TruncateAt.END);sound.setBackground(StudioFinish.channel(density,COLORS[lane]));sounds[lane]=sound;
             header.addView(sound,new LinearLayout.LayoutParams(0,-1,1));
-            Button arrow=button("▾");arrow.setTextSize(12);arrow.setBackground(StudioFinish.channel(density,COLORS[lane]));arrow.setContentDescription("Choose "+BeatPilotDrums.LABELS[lane]+" sample");arrows[lane]=arrow;
-            header.addView(arrow,new LinearLayout.LayoutParams(dp(22),-1));
+            Button arrow=button("♪▾");arrow.setTextSize(13);arrow.setBackground(StudioFinish.channel(density,COLORS[lane]));arrow.setContentDescription("Choose "+BeatPilotDrums.LABELS[lane]+" sample");arrows[lane]=arrow;
+            header.addView(arrow,new LinearLayout.LayoutParams(dp(34),-1));
             rows[lane]=new LinearLayout(context);matrix.addView(rows[lane],new LinearLayout.LayoutParams(-1,dp(36)));
             for(int step=0;step<STEPS;step++) {
                 Button pad=button("");pad.setPadding(0,0,0,0);pad.setBackground(new StudioFinish.Pad(density,(step/4)%2==0));

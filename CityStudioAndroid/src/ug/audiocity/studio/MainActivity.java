@@ -155,6 +155,7 @@ public class MainActivity extends Activity {
  void showInstruments(){ScrollView scroll=new ScrollView(this);LinearLayout page=column();page.setPadding(dp(10),dp(16),dp(10),dp(20));scroll.addView(page);content.addView(scroll);
  page.addView(label("BUILD YOUR BEAT",22,TEXT,true));page.addView(label("Start from scratch. Use patterns, then arrange each sound on its own track.",13,DIM,false));
  instrumentCard(page,"START FROM SCRATCH / PATTERN RACK","Empty Pattern 1 · eight drum channels · sixteen steps. Make, copy and name patterns, then place them in Arrange. Each sound has its own mixer track.",()->new BeatPilotDrumScreen(this).open());
+ instrumentCard(page,"AFRO STOCK SOUNDS","142 built-in Soundza samples: kicks, snares, claps, hats, shakers, djembe, congas, udu, toms, wood and loops. Tap to hear, then add any sound to Arrange.",()->new StockSoundsUi(this).open());
  instrumentCard(page,"IMPORT YOUR DRUM PACKS","Choose WAV samples or a ZIP of WAV files. Browse, audition and assign your own kicks, snares, hats or percussion to any drum lane.",()->importDrumPack());
  instrumentCard(page,"PLAY / YOUR OWN INSTRUMENT PART","Play pianos, guitars, synths or chord pads yourself. Record your melody and chords onto their own tracks.",()->new TouchStudio(this).perform());
  instrumentCard(page,"OPTIONAL / AUTO BUILD A BEAT","Only when you choose it: generate an editable drum pattern plus separate bass and chord tracks. Every drum sound stays separate.",()->new TouchStudio(this).autoBeat());
