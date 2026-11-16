@@ -129,9 +129,10 @@ final class AiGenerateUi {
         a.busy("Composing " + label + "…", new MainActivity.Task() { public void run() throws Exception {
             AiMidiGenerator.Result r = AiMidiGenerator.generate(o);
             final List<Core.Track> tracks = new ArrayList<>();
-            if (o.melody) tracks.add(track("AI · Melody", 0xffff7aa8, .78, Synth.factory(6), AiMidiGenerator.toNotes(r.melody, m, startBeat, 0), at, len));
-            if (o.chords) { Core.Track t = track("AI · Chords", 0xff3ec6e0, .6, Synth.factory(1), AiMidiGenerator.toNotes(r.chords, m, startBeat, 0), at, len); t.fx.room = true; t.fx.roomMix = .09; tracks.add(t); }
-            if (o.bass) tracks.add(track("AI · Bass", 0xff9d8cff, .76, Synth.factory(2), AiMidiGenerator.toNotes(r.bass, m, startBeat, 0), at, len));
+            SampledInstruments.Info melodyInfo = factory("freepats-fm-piano2"), chordInfo = factory("freepats-ydp-grand-compact"), bassInfo = factory("freepats-upright-kw-small");
+            if (o.melody) tracks.add(track("AI · Melody", 0xffff7aa8, .78, Synth.factory(6), melodyInfo, AiMidiGenerator.toNotes(r.melody, m, startBeat, 0), at, len));
+            if (o.chords) { Core.Track t = track("AI · Chords", 0xff3ec6e0, .6, Synth.factory(1), chordInfo, AiMidiGenerator.toNotes(r.chords, m, startBeat, 0), at, len); t.fx.room = true; t.fx.roomMix = .09; tracks.add(t); }
+            if (o.bass) tracks.add(track("AI · Bass", 0xff9d8cff, .76, Synth.factory(2), bassInfo, AiMidiGenerator.toNotes(r.bass, m, startBeat, 0), at, len));
             if (o.drums) {
                 float[][] kit = BeatPilotDrumScreen.loadKit(a);
                 Core.Track d = new Core.Track("AI · Drums", 0xffffa726); d.volume = .82;
@@ -148,9 +149,17 @@ final class AiGenerateUi {
         } });
     }
 
-    Core.Track track(String name, int color, double volume, Synth.Config instrument, List<Pro.Note> notes, long at, int len) {
+    /** A bundled FreePats instrument by id, or null (the clip then falls back to the synth patch). */
+    SampledInstruments.Info factory(String id) {
+        try { for (SampledInstruments.Info info : a.instrumentLibrary.list()) if (info.filename.startsWith("factory-" + id + "/")) return info; } catch (Exception ignored) {}
+        return null;
+    }
+
+    Core.Track track(String name, int color, double volume, Synth.Config instrument, SampledInstruments.Info sample, List<Pro.Note> notes, long at, int len) {
         Core.Track t = new Core.Track(name, color); t.volume = volume;
-        t.clips.add(ProMidi.clip(name, notes, instrument, at, len));
+        SampledInstruments.Pack pack = null;
+        try { if (sample != null) pack = a.instrumentLibrary.load(sample); } catch (Exception ignored) { pack = null; }
+        t.clips.add(ProMidi.clip(name, notes, instrument, pack, pack == null ? null : sample.filename, at, len));
         return t;
     }
 }
