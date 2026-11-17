@@ -156,15 +156,26 @@ final class AutoPartsUi {
         for (int k = 0; k < mb.size(); k++) style(mb.get(k), k == quickMood);
         q.addView(moods);
 
+        TextView own = a.label("OR MAKE YOUR OWN TUNE · NO SKILL NEEDED", 11, MUTED, true); own.setLetterSpacing(.08f); own.setPadding(0, a.dp(14), 0, a.dp(6)); q.addView(own);
+        String[][] ways = {{"👆  Tap it", "Tap the rhythm of your tune. I pick the notes."}, {"✍  Draw it", "Draw a line up and down. I turn it into a melody."}, {"🎤  Hum it", "Hum or sing la-la-la. I turn it into notes."}};
+        for (int i = 0; i < ways.length; i++) {
+            final int way = i; Button b = new Button(a); b.setAllCaps(false); b.setText(ways[i][0] + "\n" + ways[i][1]); b.setTextSize(13); b.setTextColor(TXT); b.setGravity(Gravity.CENTER_VERTICAL | Gravity.START); b.setPadding(a.dp(14), 0, a.dp(10), 0); b.setBackground(pill(CHIP, EDGE, 14));
+            b.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { if (way == 0) tapIt(); else if (way == 1) drawIt(); else humIt(); } });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, a.dp(60)); lp.bottomMargin = a.dp(6); q.addView(b, lp);
+        }
+
         LinearLayout card = a.column(); card.setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10)); card.setBackground(pill(CHIP, EDGE, 14)); card.setVisibility(View.GONE); playerCard = card;
         nowPlaying = a.label("", 15, TXT, true); card.addView(nowPlaying);
         LinearLayout buttons = new LinearLayout(a);
-        Button another = chip("🔄  Another", new Runnable() { public void run() { quickMake(currentPart); } }), keepB = chip("👍  Keep it", new Runnable() { public void run() { quickKeep(); } }), stop = chip("■ Stop", new Runnable() { public void run() { stopPreview(false); } });
+        Button another = chip("🔄  Another", new Runnable() { public void run() { if (again != null) again.run(); else quickMake(currentPart); } }), keepB = chip("👍  Keep it", new Runnable() { public void run() { quickKeep(); } }), stop = chip("■ Stop", new Runnable() { public void run() { stopPreview(false); } });
         style(another, false); style(keepB, true); style(stop, false);
         LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, a.dp(52), 1); b1.rightMargin = a.dp(6); buttons.addView(another, b1);
         LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, a.dp(52), 1); b2.rightMargin = a.dp(6); buttons.addView(keepB, b2);
         buttons.addView(stop, new LinearLayout.LayoutParams(a.dp(78), a.dp(52))); LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2); bp.topMargin = a.dp(8); card.addView(buttons, bp);
-        LinearLayout.LayoutParams cardP = new LinearLayout.LayoutParams(-1, -2); cardP.topMargin = a.dp(12); q.addView(card, cardP);
+        LinearLayout tweaks = new LinearLayout(a); String[] tw = {"⬆ Higher", "⬇ Lower", "Simpler", "Busier"};
+        for (int i = 0; i < tw.length; i++) { final int kind = i; Button b = chip(tw[i], new Runnable() { public void run() { tweak(kind); } }); style(b, false); b.setTextSize(12); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, a.dp(42), 1); lp.rightMargin = a.dp(i < 3 ? 5 : 0); tweaks.addView(b, lp); }
+        LinearLayout.LayoutParams twp = new LinearLayout.LayoutParams(-1, -2); twp.topMargin = a.dp(6); card.addView(tweaks, twp);
+        LinearLayout.LayoutParams cardP = new LinearLayout.LayoutParams(-1, -2); cardP.topMargin = a.dp(6); q.addView(card, 2, cardP);
 
         Button more = chip("More choices: style, sound, length…", new Runnable() { public void run() { stopPreview(false); sound = -1; if (dialog != null) dialog.dismiss(); show(); } }); style(more, false);
         LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-1, a.dp(46)); mp.topMargin = a.dp(12); q.addView(more, mp);
@@ -177,6 +188,7 @@ final class AutoPartsUi {
     void quickMake(final int partNo) {
         if (!a.canEdit()) return;
         stopPreview(false); currentPart = partNo; sound = sound < 0 ? 0 : sound + 1; // each press tries the next sound too
+        again = new Runnable() { public void run() { quickMake(partNo); } };
         readProject(); final AutoParts.Analysis an = analysis; final int md = quickMood, bpb = ui.map().beatsPerBar(); final int styles = AutoParts.STYLES[partNo].length;
         int st; do { st = random.nextInt(styles); } while (styles > 1 && st == lastStyle); lastStyle = st; final int chosen = st;
         a.busy("Writing your " + AutoParts.PART_NAMES[partNo].toLowerCase(java.util.Locale.US) + "…", new MainActivity.Task() { public void run() throws Exception {
@@ -217,6 +229,150 @@ final class AutoPartsUi {
         if (current == null || !previewing) return;
         final AutoParts.Option o = current; final int p = currentPart; final AutoParts.Analysis an = analysis; final int bpb = ui.map().beatsPerBar(); final int md = quickMood;
         stopPreview(true); keep(o, p, md, an, bpb); playerCard.setVisibility(View.GONE);
+    }
+
+    Runnable again;
+
+    /** Plays a ready melody with the song and shows Keep / Another / tweak buttons. */
+    void present(final int partNo, final String title, final List<AiMidiGenerator.Note> notes) {
+        if (notes == null || notes.isEmpty()) { a.toast("That didn't give any notes. Try again."); return; }
+        stopPreview(true); currentPart = partNo; final AutoParts.Analysis an = analysis; final int bpb = ui.map().beatsPerBar(), md = quickMood;
+        a.busy("Getting it ready…", new MainActivity.Task() { public void run() throws Exception {
+            instrumentFor(partNo, md, 0); current = new AutoParts.Option(title, 0, 0, notes);
+            a.runOnUiThread(new Runnable() { public void run() { startPreview(partNo, md, an, bpb); } });
+        } });
+    }
+
+    void tweak(int kind) {
+        if (current == null) return; boolean bass = currentPart == AutoParts.BASS; List<AiMidiGenerator.Note> n;
+        if (kind == 0) n = AutoParts.transpose(current.notes, 12, bass ? 24 : 45, bass ? 60 : 96); else if (kind == 1) n = AutoParts.transpose(current.notes, -12, bass ? 24 : 45, bass ? 60 : 96);
+        else if (kind == 2) n = AutoParts.simpler(current.notes, ui.map().beatsPerBar()); else n = AutoParts.busier(current.notes, analysis);
+        if (n == null) { a.toast(kind == 0 ? "That's as high as it goes." : "That's as low as it goes."); return; }
+        if (n.size() > 400) { a.toast("That's as busy as it gets."); return; }
+        present(currentPart, current.title, n);
+    }
+
+    // ---- Tap it
+
+    void tapIt() {
+        if (!a.canEdit()) return; stopPreview(false); readProject();
+        a.busy("Getting ready…", new MainActivity.Task() { public void run() throws Exception { instrumentFor(AutoParts.MELODY, quickMood, 0); a.runOnUiThread(new Runnable() { public void run() { tapDialog(); } }); } });
+    }
+
+    void tapDialog() {
+        final Core.Session s = a.session; final Pro.TempoMap map = ui.map(); final int bpb = map.beatsPerBar(); final double total = bars * (double) bpb; final AutoParts.Analysis an = analysis;
+        final List<Double> taps = new ArrayList<>(); final boolean oldLoop = a.engine.loop, oldClick = a.engine.click; final long oldStart = s.loopStart, oldEnd = s.loopEnd;
+        LinearLayout col = a.column(); col.setPadding(a.dp(16), a.dp(10), a.dp(16), a.dp(4)); col.setBackgroundColor(SHEET);
+        col.addView(a.label("Tap your tune", 18, VIOLET, true));
+        TextView help = a.label("Your song plays in a loop with a click. Tap the big pad every time your tune should have a note, like clapping along. I'll choose the notes.", 12, MUTED, false); help.setPadding(0, a.dp(2), 0, a.dp(10)); col.addView(help);
+        final TextView status = a.label("Listen for the count, then tap.", 14, TXT, true); status.setGravity(Gravity.CENTER);
+        final Button pad = new Button(a); pad.setAllCaps(false); pad.setText("TAP HERE"); pad.setTextSize(26); pad.setTextColor(INK); pad.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD)); pad.setBackground(pill(COLORS[0], COLORS[0], 22)); pad.setSoundEffectsEnabled(false);
+        pad.setOnTouchListener(new View.OnTouchListener() { public boolean onTouch(View v, android.view.MotionEvent e) {
+            if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) {
+                v.setAlpha(.6f);
+                if (!a.engine.playing || a.engine.countInRemaining > 0) return true;
+                long pos = Math.max(startFrame, a.engine.position - a.engine.latencyFrames); double beat = map.beatAt(pos) - startBeat; beat = ((beat % total) + total) % total;
+                if (!taps.isEmpty() && beat < taps.get(taps.size() - 1) - total / 2) taps.clear(); // the loop came round: start a fresh take
+                taps.add(beat); status.setText(taps.size() + (taps.size() == 1 ? " tap" : " taps") + " · press Done when you finish");
+                AutoParts.Chord c = an.chords[Math.min(an.chords.length - 1, (int) (beat / bpb))]; int pitch = 60 + ((c.root - 60) % 12 + 12) % 12;
+                ui.auditionMidiNote(new Pro.Note(pitch, 96, 0, Core.RATE / 5, 0), config, pack);
+            } else if (e.getActionMasked() == android.view.MotionEvent.ACTION_UP || e.getActionMasked() == android.view.MotionEvent.ACTION_CANCEL) v.setAlpha(1f);
+            return true;
+        } });
+        col.addView(pad, new LinearLayout.LayoutParams(-1, a.dp(210))); LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.topMargin = a.dp(10); col.addView(status, sp);
+        final AlertDialog d = new AlertDialog.Builder(a).setView(col).setNegativeButton("Cancel", null).setNeutralButton("Start over", null).setPositiveButton("Done", null).create();
+        d.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() { public void onDismiss(android.content.DialogInterface x) { a.engine.pause(); a.engine.click = oldClick; a.engine.loop = oldLoop; s.loopStart = oldStart; s.loopEnd = oldEnd; a.refresh(); } });
+        d.show();
+        d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { taps.clear(); status.setText("Cleared. Tap again."); } });
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            if (taps.size() < 2) { a.toast("Tap at least two notes first."); return; }
+            final double[] t = new double[taps.size()]; for (int i = 0; i < t.length; i++) t[i] = taps.get(i);
+            d.dismiss();
+            again = new Runnable() { public void run() { present(AutoParts.MELODY, "Melody · Tapped", AutoParts.fromTaps(t, an, bpb, quickMood, System.nanoTime())); } };
+            again.run();
+        } });
+        s.loopStart = startFrame; s.loopEnd = startFrame + lengthFrames; a.engine.loop = true; a.engine.click = true; a.engine.position = startFrame;
+        if (a.requestAudioFocus()) a.engine.playCounted(s, bpb);
+    }
+
+    // ---- Draw it
+
+    void drawIt() {
+        if (!a.canEdit()) return; stopPreview(false); readProject();
+        final int bpb = ui.map().beatsPerBar(); final AutoParts.Analysis an = analysis; final double[] heights = new double[bars * bpb * 2]; java.util.Arrays.fill(heights, Double.NaN);
+        LinearLayout col = a.column(); col.setPadding(a.dp(16), a.dp(10), a.dp(16), a.dp(4)); col.setBackgroundColor(SHEET);
+        col.addView(a.label("Draw your tune", 18, VIOLET, true));
+        TextView help = a.label("Slide your finger from left to right. Up = high notes, down = low notes. Leave a gap for silence. I'll fit it to your chords.", 12, MUTED, false); help.setPadding(0, a.dp(2), 0, a.dp(10)); col.addView(help);
+        final View padView = new View(a) {
+            final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG); int lastStep = -1; double lastH;
+            @Override protected void onDraw(android.graphics.Canvas c) {
+                float w = getWidth(), h = getHeight(), sw = w / heights.length; p.setStyle(android.graphics.Paint.Style.FILL); p.setColor(0xff141821); c.drawRoundRect(0, 0, w, h, a.dp(14), a.dp(14), p);
+                for (int bar = 0; bar <= bars; bar++) { p.setColor(bar % 4 == 0 ? 0x55ffffff : 0x22ffffff); float x = bar * bpb * 2 * sw; c.drawRect(x, 0, x + a.dp(1), h, p); }
+                p.setColor(0x33ffffff); p.setTextSize(a.dp(10)); c.drawText("HIGH", a.dp(8), a.dp(16), p); c.drawText("LOW", a.dp(8), h - a.dp(8), p);
+                p.setColor(COLORS[0]); for (int i = 0; i < heights.length; i++) if (!Double.isNaN(heights[i])) { float y = (float) ((1 - heights[i]) * (h - a.dp(16)) + a.dp(8)); c.drawRoundRect(i * sw + 1, y - a.dp(5), (i + 1) * sw - 1, y + a.dp(5), a.dp(4), a.dp(4), p); }
+            }
+            @Override public boolean onTouchEvent(android.view.MotionEvent e) {
+                getParent().requestDisallowInterceptTouchEvent(true);
+                int step = Math.max(0, Math.min(heights.length - 1, (int) (e.getX() / getWidth() * heights.length))); double hgt = Math.max(0, Math.min(1, 1 - (e.getY() - a.dp(8)) / (getHeight() - a.dp(16))));
+                if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { lastStep = step; lastH = hgt; heights[step] = hgt; }
+                else if (e.getActionMasked() == android.view.MotionEvent.ACTION_MOVE && lastStep >= 0) { int from = Math.min(lastStep, step), to = Math.max(lastStep, step); for (int i = from; i <= to; i++) { double f = to == from ? 1 : (i - lastStep) / (double) (step - lastStep); heights[i] = lastH + (hgt - lastH) * f; } lastStep = step; lastH = hgt; }
+                invalidate(); return true;
+            }
+        };
+        col.addView(padView, new LinearLayout.LayoutParams(-1, a.dp(230)));
+        final AlertDialog d = new AlertDialog.Builder(a).setView(col).setNegativeButton("Cancel", null).setNeutralButton("Clear", null).setPositiveButton("Make my melody", null).create(); d.show();
+        d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { java.util.Arrays.fill(heights, Double.NaN); padView.invalidate(); } });
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            boolean any = false; for (double hv : heights) if (!Double.isNaN(hv)) any = true; if (!any) { a.toast("Draw a line first."); return; }
+            d.dismiss();
+            again = new Runnable() { public void run() { present(AutoParts.MELODY, "Melody · Drawn", AutoParts.fromShape(heights, an, bpb, quickMood, System.nanoTime())); } };
+            again.run();
+        } });
+    }
+
+    // ---- Hum it
+
+    volatile boolean humming;
+
+    void humIt() {
+        if (!a.canEdit()) return; stopPreview(false);
+        if (a.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) { a.requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 77); a.toast("Allow the microphone, then tap Hum it again."); return; }
+        readProject(); final AutoParts.Analysis an = analysis; final int bpb = ui.map().beatsPerBar(), bpm = (int) Math.round(a.session.bpm);
+        LinearLayout col = a.column(); col.setPadding(a.dp(16), a.dp(10), a.dp(16), a.dp(4)); col.setBackgroundColor(SHEET);
+        col.addView(a.label("Hum your tune", 18, VIOLET, true));
+        TextView help = a.label("Hold the phone close and hum or sing \"la la la\", one note at a time, up to 15 seconds. The song stays silent while I listen. I'll fix the notes so they fit your key.", 12, MUTED, false); help.setPadding(0, a.dp(2), 0, a.dp(10)); col.addView(help);
+        final TextView status = a.label("Press Start, then hum.", 14, TXT, true); status.setGravity(Gravity.CENTER);
+        final Button go = new Button(a); go.setAllCaps(false); go.setText("🎤  Start"); go.setTextSize(20); go.setTextColor(INK); go.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD)); go.setBackground(pill(COLORS[0], COLORS[0], 22));
+        col.addView(go, new LinearLayout.LayoutParams(-1, a.dp(120))); LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.topMargin = a.dp(10); col.addView(status, sp);
+        final AlertDialog d = new AlertDialog.Builder(a).setView(col).setNegativeButton("Cancel", null).create();
+        d.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() { public void onDismiss(android.content.DialogInterface x) { humming = false; } });
+        go.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            if (humming) { humming = false; go.setEnabled(false); status.setText("Finding your notes…"); return; }
+            humming = true; go.setText("■  Done"); status.setText("Listening… hum now");
+            new Thread(new Runnable() { public void run() {
+                final float[] buf = new float[12000 * 15]; int n = 0; String problem = null; android.media.AudioRecord rec = null;
+                try {
+                    int min = android.media.AudioRecord.getMinBufferSize(Core.RATE, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT);
+                    rec = new android.media.AudioRecord(android.media.MediaRecorder.AudioSource.MIC, Core.RATE, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, Math.max(min, Core.RATE / 2));
+                    short[] in = new short[Core.RATE / 10]; int step = Core.RATE / 12000; rec.startRecording(); long shown = 0;
+                    while (humming && n < buf.length) {
+                        int r = rec.read(in, 0, in.length); if (r <= 0) break; float peak = 0;
+                        for (int i = 0; i + step <= r && n < buf.length; i += step) { float sum = 0; for (int k = 0; k < step; k++) sum += in[i + k]; float val = sum / (step * 32768f); buf[n++] = val; peak = Math.max(peak, Math.abs(val)); }
+                        final int secs = n / 12000; final boolean quiet = peak < .01f;
+                        if (System.currentTimeMillis() - shown > 400) { shown = System.currentTimeMillis(); a.runOnUiThread(new Runnable() { public void run() { if (humming) status.setText("Listening… " + secs + " s" + (quiet ? "  ·  I can't hear you, hum louder" : "")); } }); }
+                    }
+                } catch (Exception ex) { problem = "The microphone could not start."; }
+                finally { if (rec != null) try { rec.stop(); } catch (Exception ignored) {} if (rec != null) rec.release(); }
+                final boolean cancelled = !d.isShowing(); humming = false;
+                final List<AiMidiGenerator.Note> notes = problem == null && !cancelled ? AutoParts.fromHum(java.util.Arrays.copyOf(buf, n), bpm, an, bpb) : new ArrayList<AiMidiGenerator.Note>(); final String issue = problem;
+                a.runOnUiThread(new Runnable() { public void run() {
+                    if (cancelled || a.dead) return;
+                    if (issue != null || notes.size() < 2) { go.setEnabled(true); go.setText("🎤  Try again"); status.setText(issue != null ? issue : "I couldn't hear a clear tune. Hum louder, closer, one note at a time."); return; }
+                    d.dismiss(); again = new Runnable() { public void run() { humIt(); } }; present(AutoParts.MELODY, "Melody · Hummed", notes);
+                } });
+            } }, "hum").start();
+        } });
+        d.show();
     }
 
     void chooseKey() {
@@ -317,7 +473,7 @@ final class AutoPartsUi {
         if (project.tracks.size() + need > Core.MAX_TRACKS) { a.toast("Not enough free tracks."); return; }
         if (startFrame + lengthFrames > Core.MAX_FRAMES) { a.toast("Move the playhead earlier; this would run past the end of the project."); return; }
         instrumentFor(p, md, o.style);
-        String label = AutoParts.PART_NAMES[p] + " · " + AutoParts.STYLES[p][o.style];
+        int cut = o.title.lastIndexOf(" · "); String label = AutoParts.PART_NAMES[p] + " · " + (cut >= 0 ? o.title.substring(cut + 3) : o.title);
         Core.Track t = new Core.Track("Auto · " + AutoParts.PART_NAMES[p], COLORS[p]); t.volume = p == AutoParts.BASS ? .78 : p == AutoParts.MELODY ? .74 : .66;
         polish(t, p);
         t.clips.add(ProMidi.clip(label, proNotes(o.notes), config, pack, packId, startFrame, lengthFrames));

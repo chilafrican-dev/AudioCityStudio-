@@ -345,4 +345,123 @@ public final class AutoParts {
             }
         }
     }
+
+    // ------------------------------------------------------------------ easy ways to make your own melody
+
+    static void sortByStart(List<AiMidiGenerator.Note> l) { Collections.sort(l, new Comparator<AiMidiGenerator.Note>() { public int compare(AiMidiGenerator.Note x, AiMidiGenerator.Note y) { return Double.compare(x.startBeat, y.startBeat); } }); }
+
+    /** "Tap the rhythm": the user only taps when notes should happen; the app chooses notes that fit the chords. */
+    public static List<AiMidiGenerator.Note> fromTaps(double[] tapBeats, Analysis an, int bpb, int mood, long seed) {
+        List<AiMidiGenerator.Note> out = new ArrayList<>(); if (tapBeats == null || tapBeats.length == 0) return out;
+        Mood m = mood(mood); Random rng = new Random(seed); int bars = an.chords.length; double end = bars * (double) bpb;
+        double[] t = tapBeats.clone(); Arrays.sort(t); List<Double> gaps = new ArrayList<>(); for (int i = 1; i < t.length; i++) gaps.add(t[i] - t[i - 1]); Collections.sort(gaps);
+        double grid = !gaps.isEmpty() && gaps.get(gaps.size() / 2) < .4 ? .25 : .5; // fast tappers get sixteenths, everyone else eighths
+        TreeSet<Long> steps = new TreeSet<>(); for (double v : t) { long q = Math.round(v / grid); if (q * grid >= end) q = 0; if (q >= 0) steps.add(q); }
+        Ladder ladder = new Ladder(an.key, an.minor, false, m.low, m.high); int idx = ladder.pitches.length / 2; Long[] st = steps.toArray(new Long[0]);
+        int direction = 1;
+        for (int i = 0; i < st.length; i++) {
+            double start = st[i] * grid, next = i + 1 < st.length ? st[i + 1] * grid : end, len = Math.max(.2, Math.min(next - start, 2) * (next - start >= 1 ? 1 : m.gate));
+            int bar = Math.min(bars - 1, (int) (start / bpb)); Chord c = an.chords[bar]; double inBar = start - bar * (double) bpb; boolean strong = Math.abs(inBar % 2) < 1e-6, last = i == st.length - 1;
+            if (rng.nextDouble() < .25) direction = -direction; int move = rng.nextDouble() < .2 ? 0 : (rng.nextDouble() < .8 ? 1 : 2) * direction;
+            idx = ladder.clamp(idx + move);
+            if (i == 0 || strong || next - start >= 1) idx = ladder.nearestChordTone(idx, c, 3);
+            if (idx <= 1) { idx = ladder.nearestChordTone(3, c, 3); direction = 1; } else if (idx >= ladder.pitches.length - 2) { idx = ladder.nearestChordTone(ladder.pitches.length - 4, c, 3); direction = -1; }
+            if (last) idx = ladder.rootNear(idx, c);
+            out.add(note(ladder.pitches[idx], jitter(rng, m.vel + (strong ? 8 : -2), 4), start, last ? Math.max(len, Math.min(2, end - start)) : len));
+        }
+        return out;
+    }
+
+    /**
+     * "Draw the shape": heights holds one value per eighth note (0 = low, 1 = high, NaN = nothing drawn).
+     * The rhythm is written automatically; the notes follow the drawn line and are pulled onto the chords.
+     */
+    public static List<AiMidiGenerator.Note> fromShape(double[] heights, Analysis an, int bpb, int mood, long seed) {
+        List<AiMidiGenerator.Note> out = new ArrayList<>(); if (heights == null) return out;
+        Mood m = mood(mood); Random rng = new Random(seed); int bars = an.chords.length, perBar = bpb * 2;
+        int[][][] pool = LINE_RHYTHMS[mood == 3 ? 3 : mood == 1 ? 1 : 0]; int[][] rhythmA = pickRhythm(pool, m.density, rng, bpb), rhythmB = pickRhythm(pool, m.density, rng, bpb);
+        Ladder ladder = new Ladder(an.key, an.minor, false, m.low - 3, m.high + 2); int top = ladder.pitches.length - 1;
+        for (int bar = 0; bar < bars; bar++) {
+            int[][] rh = bar % 4 == 2 ? rhythmB : rhythmA; Chord c = an.chords[bar];
+            for (int[] r : rh) {
+                int from = bar * perBar + r[0] / 2, to = Math.min(heights.length - 1, bar * perBar + (r[0] + r[1] - 1) / 2); double h = Double.NaN;
+                for (int k = from; k <= to && k < heights.length; k++) if (!Double.isNaN(heights[k])) { h = heights[k]; break; }
+                if (Double.isNaN(h)) continue;
+                int idx = ladder.clamp((int) Math.round(Math.max(0, Math.min(1, h)) * top)); boolean strong = r[0] % 8 == 0;
+                if (strong || r[1] >= 4) idx = ladder.nearestChordTone(idx, c, 2);
+                out.add(note(ladder.pitches[idx], jitter(rng, m.vel + (strong ? 8 : -3), 4), bar * (double) bpb + r[0] / 4.0, Math.max(.2, r[1] / 4.0 * (r[1] >= 8 ? 1 : m.gate))));
+            }
+        }
+        if (!out.isEmpty()) { // settle the ending on a chord note and let it ring
+            AiMidiGenerator.Note l = out.remove(out.size() - 1); int bar = Math.min(bars - 1, (int) (l.startBeat / bpb)); int idx = 0, bestD = 999; for (int i = 0; i < ladder.pitches.length; i++) if (an.chords[bar].has(ladder.pitches[i]) && Math.abs(ladder.pitches[i] - l.pitch) < bestD) { bestD = Math.abs(ladder.pitches[i] - l.pitch); idx = i; }
+            out.add(note(ladder.pitches[idx], l.velocity, l.startBeat, Math.max(l.lengthBeat, Math.min(2, (bar + 1) * (double) bpb - l.startBeat))));
+        }
+        return out;
+    }
+
+    /** "Hum it": mono audio at 12 kHz. Finds the hummed notes, moves them into the key and onto the beat grid. */
+    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb) {
+        List<AiMidiGenerator.Note> out = new ArrayList<>(); if (mono12k == null) return out;
+        final int hop = 120; int frames = Math.max(0, (mono12k.length - 700) / hop); if (frames < 10) return out;
+        double[] midi = new double[frames];
+        for (int f = 0; f < frames; f++) { double hz = PitchCorrector.detect(mono12k, f * hop, 80, 900); midi[f] = hz > 0 ? 69 + 12 * Math.log(hz / 440) / Math.log(2) : Double.NaN; }
+        double[] sm = new double[frames]; double[] win = new double[5];
+        for (int f = 0; f < frames; f++) { int n = 0; for (int k = -2; k <= 2; k++) { int j = f + k; if (j >= 0 && j < frames && !Double.isNaN(midi[j])) win[n++] = midi[j]; } if (n < 2 || Double.isNaN(midi[f])) { sm[f] = n >= 4 ? med(win, n) : Double.NaN; } else sm[f] = med(win, n); }
+        List<double[]> raw = new ArrayList<>(); // {startFrame, endFrame, meanPitch}
+        int f = 0;
+        while (f < frames) {
+            if (Double.isNaN(sm[f])) { f++; continue; }
+            int start = f, lastVoiced = f, count = 1; double sum = sm[f]; f++;
+            while (f < frames) {
+                if (Double.isNaN(sm[f])) { if (f - lastVoiced > 4) break; f++; continue; }
+                if (Math.abs(sm[f] - sum / count) > .8) break;
+                sum += sm[f]; count++; lastVoiced = f; f++;
+            }
+            if (lastVoiced - start + 1 >= 8) raw.add(new double[]{start, lastVoiced + 1, sum / count});
+            if (f <= lastVoiced) f = lastVoiced + 1;
+        }
+        if (raw.isEmpty()) return out;
+        double[] ps = new double[raw.size()]; for (int i = 0; i < ps.length; i++) ps[i] = raw.get(i)[2]; double median = med(ps.clone(), ps.length);
+        int shift = 0; while (median + shift < 60) shift += 12; while (median + shift > 78) shift -= 12;
+        double bps = bpm / 60.0, t0 = raw.get(0)[0] * hop / 12000.0, end = an.chords.length * (double) bpb; double lastStart = -1;
+        for (double[] r : raw) {
+            double start = Math.round((r[0] * hop / 12000.0 - t0) * bps * 4) / 4.0, len = Math.max(.25, Math.round((r[1] - r[0]) * hop / 12000.0 * bps * 4) / 4.0);
+            if (start >= end) break; if (start <= lastStart) start = lastStart + .25; if (start >= end) break;
+            int pitch = PitchCorrector.nearest((int) Math.round(r[2]) + shift, an.key, an.minor ? 2 : 1);
+            if (!out.isEmpty()) { AiMidiGenerator.Note prev = out.get(out.size() - 1); if (prev.startBeat + prev.lengthBeat > start) out.set(out.size() - 1, note(prev.pitch, prev.velocity, prev.startBeat, Math.max(.2, start - prev.startBeat))); }
+            out.add(note(pitch, 92, start, Math.min(len, end - start))); lastStart = start;
+        }
+        return out;
+    }
+    static double med(double[] v, int n) { double[] c = Arrays.copyOf(v, n); Arrays.sort(c); return c[n / 2]; }
+
+    /** Octave up or down, refused when it would leave a comfortable range. */
+    public static List<AiMidiGenerator.Note> transpose(List<AiMidiGenerator.Note> notes, int semis, int low, int high) {
+        for (AiMidiGenerator.Note n : notes) if (n.pitch + semis < low || n.pitch + semis > high) return null;
+        List<AiMidiGenerator.Note> out = new ArrayList<>(); for (AiMidiGenerator.Note n : notes) out.add(note(n.pitch + semis, n.velocity, n.startBeat, n.lengthBeat)); return out;
+    }
+
+    /** Fewer, longer notes: keeps the notes on the beats and lets them ring. */
+    public static List<AiMidiGenerator.Note> simpler(List<AiMidiGenerator.Note> notes, int bpb) {
+        List<AiMidiGenerator.Note> sorted = new ArrayList<>(notes); sortByStart(sorted); List<AiMidiGenerator.Note> kept = new ArrayList<>();
+        for (AiMidiGenerator.Note n : sorted) { if (n.velocity < 50) continue; boolean onBeat = Math.abs(n.startBeat - Math.rint(n.startBeat)) < 1e-6; if (onBeat || n.lengthBeat >= 1) kept.add(n); }
+        if (kept.size() >= sorted.size() || kept.isEmpty()) { kept.clear(); for (int i = 0; i < sorted.size(); i++) if (i % 2 == 0 || i == sorted.size() - 1) kept.add(sorted.get(i)); }
+        List<AiMidiGenerator.Note> out = new ArrayList<>();
+        for (int i = 0; i < kept.size(); i++) { AiMidiGenerator.Note n = kept.get(i); double next = i + 1 < kept.size() ? kept.get(i + 1).startBeat : n.startBeat + Math.max(n.lengthBeat, 2); out.add(note(n.pitch, n.velocity, n.startBeat, Math.max(n.lengthBeat, Math.min(next - n.startBeat, bpb) * .95))); }
+        return out;
+    }
+
+    /** More movement: long notes are split and step toward the next note, staying in the key. */
+    public static List<AiMidiGenerator.Note> busier(List<AiMidiGenerator.Note> notes, Analysis an) {
+        List<AiMidiGenerator.Note> sorted = new ArrayList<>(notes); sortByStart(sorted); Ladder ladder = new Ladder(an.key, an.minor, false, 24, 108); List<AiMidiGenerator.Note> out = new ArrayList<>();
+        double threshold = 1; boolean any = false; for (AiMidiGenerator.Note n : sorted) if (n.lengthBeat >= .95) any = true; if (!any) threshold = .5;
+        for (int i = 0; i < sorted.size(); i++) {
+            AiMidiGenerator.Note n = sorted.get(i);
+            if (n.lengthBeat < threshold * .95 || n.velocity < 50) { out.add(n); continue; }
+            int idx = 0, bestD = 999; for (int k = 0; k < ladder.pitches.length; k++) if (Math.abs(ladder.pitches[k] - n.pitch) < bestD) { bestD = Math.abs(ladder.pitches[k] - n.pitch); idx = k; }
+            int target = i + 1 < sorted.size() ? sorted.get(i + 1).pitch : n.pitch + 2; int nb = ladder.clamp(idx + (target >= n.pitch ? 1 : -1)); double half = n.lengthBeat / 2;
+            out.add(note(n.pitch, n.velocity, n.startBeat, half * .95)); out.add(note(ladder.pitches[nb], Math.max(1, n.velocity - 10), n.startBeat + half, half * .95));
+        }
+        return out;
+    }
 }

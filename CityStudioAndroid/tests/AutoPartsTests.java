@@ -64,8 +64,48 @@ public final class AutoPartsTests {
         // Kick lock follows the kicks it is given
         List<AiMidiGenerator.Note> locked = AutoParts.generate(AutoParts.BASS, 8, 1, an, bpb, new double[]{0, 1.5, 2.75}, 3);
         boolean has15 = false; for (AiMidiGenerator.Note n : locked) if (Math.abs(n.startBeat - 1.5) < 1e-6) has15 = true; check(has15, "bass hits where the kick hits");
+        easyWays(an, bpb);
         System.out.println("AutoPartsTests OK: " + total + " generated parts checked");
     }
 
     static String sig(List<AiMidiGenerator.Note> notes) { StringBuilder b = new StringBuilder(); for (AiMidiGenerator.Note n : notes) b.append(n.pitch).append('@').append(n.startBeat).append(','); return b.toString(); }
+
+    static boolean inKey(AutoParts.Analysis an, int pitch) { for (int st : an.minor ? AutoParts.MINOR : AutoParts.MAJOR) if ((an.key + st) % 12 == ((pitch % 12) + 12) % 12) return true; return false; }
+
+    static void easyWays(AutoParts.Analysis an, int bpb) {
+        // Tap the rhythm: one note per tap, snapped to the grid, in key, ends on a chord root.
+        double[] taps = {0.03, 0.97, 1.52, 2.05, 3.1, 4.0, 5.49, 6.02, 7.0, 8.1, 9.0, 10.5, 12.02, 14.0};
+        for (int mood = 0; mood < 4; mood++) for (long seed = 1; seed < 20; seed++) {
+            List<AiMidiGenerator.Note> t = AutoParts.fromTaps(taps, an, bpb, mood, seed);
+            check(t.size() == taps.length, "one note per tap: " + t.size());
+            for (AiMidiGenerator.Note n : t) { check(inKey(an, n.pitch), "tap note in key"); check(Math.abs(n.startBeat * 2 - Math.rint(n.startBeat * 2)) < 1e-9, "tap on the grid " + n.startBeat); check(n.startBeat + n.lengthBeat <= 16 + 1e-6, "tap inside clip"); }
+            AiMidiGenerator.Note last = t.get(t.size() - 1); check(((last.pitch % 12) + 12) % 12 == an.chords[3].root, "tap melody ends on the chord root");
+            check(an.chords[0].has(t.get(0).pitch), "tap melody starts on a chord note");
+        }
+        check(AutoParts.fromTaps(new double[0], an, bpb, 1, 1).isEmpty(), "no taps, no notes");
+        // Draw the shape: a rising line gives a rising melody; undrawn parts stay silent.
+        double[] up = new double[32]; for (int i = 0; i < 32; i++) up[i] = i / 31.0;
+        List<AiMidiGenerator.Note> rise = AutoParts.fromShape(up, an, bpb, 1, 5); check(rise.size() >= 6, "shape notes");
+        check(rise.get(rise.size() - 1).pitch - rise.get(0).pitch >= 12, "rising line rises: " + rise.get(0).pitch + " -> " + rise.get(rise.size() - 1).pitch);
+        for (AiMidiGenerator.Note n : rise) check(inKey(an, n.pitch), "shape note in key");
+        double[] half = new double[32]; java.util.Arrays.fill(half, Double.NaN); for (int i = 0; i < 16; i++) half[i] = .5;
+        for (AiMidiGenerator.Note n : AutoParts.fromShape(half, an, bpb, 0, 2)) check(n.startBeat < 8, "nothing where nothing was drawn");
+        double[] down = new double[32]; for (int i = 0; i < 32; i++) down[i] = 1 - i / 31.0; List<AiMidiGenerator.Note> fall = AutoParts.fromShape(down, an, bpb, 3, 5);
+        check(fall.get(0).pitch > fall.get(fall.size() - 1).pitch, "falling line falls");
+        // Hum it: three hummed notes (slightly flat, with vibrato) become A, C, E in the key, an octave up, on the grid.
+        int rate = 12000; float[] hum = new float[rate * 3]; double[][] sung = {{.2, .7, 218.5}, {.8, 1.3, 260.0}, {1.45, 2.3, 331.5}}; double phase = 0;
+        for (int i = 0; i < hum.length; i++) { double t = i / (double) rate, hz = 0; for (double[] g : sung) if (t >= g[0] && t < g[1]) hz = g[2] * (1 + .006 * Math.sin(2 * Math.PI * 5.5 * t)); if (hz > 0) { phase += 2 * Math.PI * hz / rate; hum[i] = (float) (.3 * Math.sin(phase) + .1 * Math.sin(2 * phase) + .05 * Math.sin(3 * phase)); } }
+        List<AiMidiGenerator.Note> h = AutoParts.fromHum(hum, 120, an, bpb);
+        check(h.size() == 3, "three hummed notes found: " + h.size());
+        check(h.get(0).pitch % 12 == 9 && h.get(1).pitch % 12 == 0 && h.get(2).pitch % 12 == 4, "hummed A C E: " + h.get(0).pitch + " " + h.get(1).pitch + " " + h.get(2).pitch);
+        check(h.get(0).startBeat == 0 && Math.abs(h.get(1).startBeat - 1.25) < .26 && Math.abs(h.get(2).startBeat - 2.5) < .26, "hum timing " + h.get(1).startBeat + " " + h.get(2).startBeat);
+        check(h.get(0).pitch >= 57 && h.get(0).pitch <= 81, "hum moved to a melody register");
+        check(AutoParts.fromHum(new float[rate * 2], 120, an, bpb).isEmpty(), "silence gives nothing");
+        // Tweaks
+        List<AiMidiGenerator.Note> base = AutoParts.generate(AutoParts.MELODY, 1, 3, an, bpb, null, 7);
+        List<AiMidiGenerator.Note> s = AutoParts.simpler(base, bpb), b = AutoParts.busier(base, an);
+        check(s.size() < base.size() && !s.isEmpty(), "simpler has fewer notes " + s.size() + " < " + base.size()); check(b.size() > base.size(), "busier has more notes");
+        for (AiMidiGenerator.Note n : b) check(inKey(an, n.pitch), "busier stays in key");
+        check(AutoParts.transpose(base, 12, 36, 96) != null && AutoParts.transpose(base, 60, 36, 96) == null, "octave limits");
+    }
 }
