@@ -714,7 +714,9 @@ final class ProUi {
         pw.println("Audio City Studio " + version + " · Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT + ") · " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL);
         pw.println("Time: " + new java.util.Date() + " · thread: " + thread.getName());
         pw.println("Screen: " + a.getClass().getSimpleName() + " · tracks: " + (a.session == null ? "-" : String.valueOf(a.session.tracks.size())) + " · playing: " + a.engine.playing);
-        pw.println(); error.printStackTrace(pw); pw.flush();
+        pw.println(); error.printStackTrace(pw);
+        try { java.io.File note = new java.io.File(a.getFilesDir(), "layout-note.txt"); if (note.isFile()) { pw.println(); pw.println("---- earlier warning ----"); pw.println(new String(java.nio.file.Files.readAllBytes(note.toPath()), "UTF-8")); note.delete(); } } catch (Throwable ignored) {}
+        pw.flush();
         try (java.io.FileOutputStream out = new java.io.FileOutputStream(crashFile())) { out.write(sw.toString().getBytes("UTF-8")); }
     }
     void showLastCrash() {

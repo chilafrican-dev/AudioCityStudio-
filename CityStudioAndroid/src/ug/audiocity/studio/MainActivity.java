@@ -85,8 +85,14 @@ int trackHeightDp=88;final java.util.Set<Core.Clip> multi=java.util.Collections.
  }
 
  /** Holds the page. Never lets a page swap happen in the middle of measuring it, which crashes Android's FrameLayout. */
- final class SafeFrame extends FrameLayout{boolean measuring;SafeFrame(){super(MainActivity.this);}
-  @Override protected void onMeasure(int w,int h){measuring=true;try{super.onMeasure(w,h);}catch(NullPointerException e){note("page measure",e);setMeasuredDimension(MeasureSpec.getSize(w),MeasureSpec.getSize(h));post(this::requestLayout);}finally{measuring=false;}}}
+ final class SafeFrame extends FrameLayout{boolean measuring,broken;SafeFrame(){super(MainActivity.this);}
+  void broke(String what,Throwable e){note(what,e);if(broken)return;broken=true;handler.post(MainActivity.this::rebuildContent);}
+  @Override protected void onMeasure(int w,int h){measuring=true;try{super.onMeasure(w,h);}catch(NullPointerException e){setMeasuredDimension(MeasureSpec.getSize(w),MeasureSpec.getSize(h));broke("page measure",e);}finally{measuring=false;}}
+  @Override protected void onLayout(boolean changed,int l,int t,int r,int b){try{super.onLayout(changed,l,t,r,b);}catch(NullPointerException e){broke("page layout",e);}}
+  @Override protected void dispatchDraw(android.graphics.Canvas c){try{super.dispatchDraw(c);}catch(NullPointerException e){broke("page draw",e);}}
+  @Override public boolean dispatchTouchEvent(MotionEvent e){try{return super.dispatchTouchEvent(e);}catch(NullPointerException x){broke("page touch",x);return true;}}}
+ /** Replaces a damaged page holder with a fresh one so the app keeps working. */
+ void rebuildContent(){if(dead||root==null)return;int at=root.indexOfChild(content);if(at<0)return;ViewGroup.LayoutParams lp=content.getLayoutParams();FrameLayout fresh=new SafeFrame();root.removeViewAt(at);content=fresh;root.addView(fresh,at,lp);timeline=null;mixer=null;refresh();}
  boolean noted;
  /** Records where an unsafe page swap came from, so the next crash report can show it, without closing the app. */
  void note(String what,Throwable where){if(noted)return;noted=true;try{java.io.StringWriter sw=new java.io.StringWriter();where.printStackTrace(new java.io.PrintWriter(sw));java.io.File f=new java.io.File(getFilesDir(),"layout-note.txt");try(java.io.FileOutputStream o=new java.io.FileOutputStream(f)){o.write(("Handled safely: "+what+"\n\n"+sw).getBytes("UTF-8"));}}catch(Throwable ignored){}}
