@@ -29,13 +29,17 @@ public final class PatternArrangement {
  }
  /** Repair already-saved overlapping full pattern copies without reprinting or deleting anything. */
  public static int repairOverlaps(Core.Session s){synchronized(s){validate(s);Map<Core.Clip,Long> starts=new IdentityHashMap<>();for(PatternLibrary.Entry entry:s.patterns){BeatPilotDrumPattern p=PatternLibrary.pattern(s,entry);long frames=Math.round(Core.RATE*60.0/s.bpm*4*p.bars);starts.putAll(startPlan(s,entry.id,frames,frames,true));}validatePlan(s,starts,Collections.emptyMap());int changed=0;for(Map.Entry<Core.Clip,Long> entry:starts.entrySet())if(entry.getKey().start!=entry.getValue()){entry.getKey().start=entry.getValue();changed++;}return changed;}}
+ /** Each drum lane becomes a live MIDI clip playing that lane's sample, so it can be opened in the piano roll and re-voiced. */
  private static Core.Clip[] render(Core.Session s,PatternLibrary.Entry entry,BeatPilotDrumPattern pattern,float[][] samples,List<File> made)throws IOException{
-  Core.Clip[] lanes=new Core.Clip[8];Core.Clip silence=null;
+  if(samples==null||samples.length!=8)throw new IllegalArgumentException("Drum kit needs eight sounds");
+  Core.Clip[] lanes=new Core.Clip[8];int length=(int)Math.min(Integer.MAX_VALUE,Math.round(Core.RATE*60.0/pattern.bpm*4*pattern.bars));File dir=new File(s.directory);
   for(int lane=0;lane<8;lane++){
-   BeatPilotDrumPattern part=PatternLibrary.lane(pattern,lane);Core.Clip clip;
-   if(PatternLibrary.empty(part)&&silence!=null)clip=silence.copy();
-   else{clip=AudioIO.store(new File(s.directory),part.render(samples),entry.name,0);made.add(new File(s.directory,clip.file));String midi=UUID.randomUUID()+".mid";try(OutputStream out=new FileOutputStream(new File(s.directory,midi))){part.writeMidi(out);}made.add(new File(s.directory,midi));clip.midiFile=midi;if(PatternLibrary.empty(part))silence=clip;}
-   clip.name=entry.name;clip.patternId=entry.id;clip.patternLane=lane;clip.drumPattern=part.encode();clip.notes=part.notes();lanes[lane]=clip;
+   BeatPilotDrumPattern part=PatternLibrary.lane(pattern,lane);List<Pro.Note> notes=new ArrayList<>();for(Pro.Note n:part.notes())notes.add(new Pro.Note(n.pitch,n.velocity,n.start,Math.max(1,Math.min(n.length,length-n.start)),9));Core.Clip clip;
+   if(PatternLibrary.empty(part))clip=ProMidi.clip(entry.name,notes,Synth.factory(0),0,length);
+   else{float[] wave=samples[lane];if(wave==null||wave.length<2||(wave.length&1)!=0)throw new IllegalArgumentException("Missing drum sound for "+BeatPilotDrums.LABELS[lane]);for(float v:wave)if(!Float.isFinite(v))throw new IllegalArgumentException("Invalid drum sample data");
+    int pitch=36+lane;SampledInstruments.Region region=new SampledInstruments.Region(pitch,pitch,1,127,pitch,0,0,false,1f,wave,240);SampledInstruments.Pack pack=new SampledInstruments.Pack(BeatPilotDrums.LABELS[lane],"Pattern drum kit",new SampledInstruments.Region[]{region});
+    String file=InstrumentArchive.write(pack,dir);made.add(new File(dir,file));clip=ProMidi.clip(entry.name,notes,Synth.factory(0),pack,"embedded:"+file,0,length);clip.instrumentFile=file;}
+   clip.name=entry.name;clip.patternId=entry.id;clip.patternLane=lane;clip.drumPattern=part.encode();lanes[lane]=clip;
   }return lanes;
  }
  public static List<Core.Clip> place(Core.Session s,String id,float[][] samples,long cursor,int repeats)throws IOException{

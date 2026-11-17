@@ -1347,6 +1347,34 @@ final class ProUi {
         a.busy("Rendering notes…", () -> { Core.Clip probe = c.copy(); probe.notes = copy; ProMidi.refresh(probe);
             a.runOnUiThread(() -> { edit("Edit notes"); c.notes = probe.notes; c.source = probe.source; c.peaks = probe.peaks; c.length = probe.length; c.envelopeLength = probe.envelopeLength; a.save(false); a.refresh(); }); });
     }
+    static boolean isMidi(Core.Clip c) { return c != null && c.notes != null && c.source instanceof ProMidi.LiveSource; }
+    static boolean hasMidi(Core.Track t) { if (t == null) return false; for (Core.Clip c : t.clips) if (isMidi(c)) return true; return false; }
+
+    /** Change the instrument of every MIDI clip on a track, from the Arrange track header. */
+    void chooseTrackInstrument(Core.Track t) {
+        final ArrayList<Core.Clip> targets = new ArrayList<>(); for (Core.Clip c : t.clips) if (isMidi(c)) targets.add(c);
+        if (targets.isEmpty()) { a.toast(t.name + " has no MIDI clips. Instruments apply to MIDI tracks."); return; }
+        ArrayList<SampledInstruments.Info> packs = new ArrayList<>(a.instrumentLibrary.list());
+        final int n = Synth.NAMES.length;
+        String[] choices = new String[n + packs.size()], groups = new String[n + packs.size()];
+        for (int i = 0; i < n; i++) { choices[i] = Synth.NAMES[i]; groups[i] = "Synth · " + Synth.SECTIONS[Synth.sectionOf(i)]; }
+        for (int i = 0; i < packs.size(); i++) { choices[n + i] = packs.get(i).name; groups[n + i] = MainActivity.sampleGroup(packs.get(i).name); }
+        a.pickGrouped("Instrument for " + t.name, choices, groups, i -> {
+            final Synth.Config config = i < n ? Synth.factory(i) : a.synthConfig.copy();
+            a.busy("Loading instrument…", () -> {
+                SampledInstruments.Pack pack = i < n ? null : a.instrumentLibrary.load(packs.get(i - n));
+                String packId = i < n ? null : packs.get(i - n).filename;
+                final ArrayList<Core.Clip> probes = new ArrayList<>();
+                for (Core.Clip c : targets) { Core.Clip probe = c.copy(); ProMidi.assignInstrument(probe, config, pack, packId); ProMidi.refresh(probe); probes.add(probe); }
+                a.runOnUiThread(() -> {
+                    edit("Change track instrument");
+                    for (int k = 0; k < targets.size(); k++) { Core.Clip c = targets.get(k), probe = probes.get(k); ProMidi.assignInstrument(c, config, pack, packId); c.source = probe.source; c.peaks = probe.peaks; c.length = probe.length; c.envelopeLength = probe.envelopeLength; }
+                    a.save(false); a.refresh(); a.toast(t.name + " now plays " + (pack == null ? Synth.NAMES[config.patch] : pack.name) + ".");
+                });
+            });
+        });
+    }
+
     void chooseInstrument(Core.Clip c) {
         ArrayList<SampledInstruments.Info> packs = new ArrayList<>(a.instrumentLibrary.list());
         final int n = Synth.NAMES.length;
