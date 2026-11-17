@@ -718,10 +718,12 @@ final class ProUi {
         try (java.io.FileOutputStream out = new java.io.FileOutputStream(crashFile())) { out.write(sw.toString().getBytes("UTF-8")); }
     }
     void showLastCrash() {
-        if (a.dead) return; java.io.File f = crashFile(); if (!f.isFile()) return;
+        if (a.dead) return; java.io.File f = crashFile(); java.io.File note = new java.io.File(a.getFilesDir(), "layout-note.txt");
+        if (!f.isFile() && note.isFile()) { note.renameTo(f); }
+        if (!f.isFile()) return;
         final String text; try { text = new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8"); } catch (Exception e) { f.delete(); return; }
         f.delete();
-        TextView body = new TextView(a); body.setText("The app closed because of an error. Please tap Copy and send this report so it can be fixed.\n\n" + text); body.setTextIsSelectable(true); body.setTextSize(11); body.setTypeface(android.graphics.Typeface.MONOSPACE); body.setPadding(a.dp(18), a.dp(10), a.dp(18), a.dp(10));
+        TextView body = new TextView(a); body.setText((text.startsWith("Handled safely") ? "A problem was caught and the app kept running. Please tap Copy and send this report so it can be fixed properly." : "The app closed because of an error. Please tap Copy and send this report so it can be fixed.") + "\n\n" + text); body.setTextIsSelectable(true); body.setTextSize(11); body.setTypeface(android.graphics.Typeface.MONOSPACE); body.setPadding(a.dp(18), a.dp(10), a.dp(18), a.dp(10));
         ScrollView sv = new ScrollView(a); sv.addView(body);
         new AlertDialog.Builder(a).setTitle("Crash report").setView(sv)
             .setPositiveButton("Copy", (d, i) -> { android.content.ClipboardManager cm = (android.content.ClipboardManager) a.getSystemService(android.content.Context.CLIPBOARD_SERVICE); cm.setPrimaryClip(android.content.ClipData.newPlainText("Audio City crash report", text)); a.toast("Crash report copied. Paste it in the chat."); })
