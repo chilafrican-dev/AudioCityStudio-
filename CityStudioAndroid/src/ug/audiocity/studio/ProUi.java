@@ -761,15 +761,17 @@ final class ProUi {
         LinearLayout p = a.column(); p.setPadding(dp(6), dp(4), dp(6), dp(4)); Roll roll = new Roll(notes); roll.previewInstrument = (c.instrument != null ? c.instrument : a.synthConfig).copy(); roll.previewSamples = clipSamples; p.addView(roll, new LinearLayout.LayoutParams(-1, dp(330)));
         row(p, button("▶ Hear MIDI pattern", () -> auditionMidiPhrase(notes, roll.previewInstrument, roll.previewSamples, c.length)),
             button("■ Stop preview", () -> a.liveMidi.voices.cancelScheduled(15)));
-        p.addView(label("Tap a note or the piano-key strip to hear its pitch. Preview uses this clip's assigned instrument and stays on the project audio engine.", 10, MainActivity.DIM, false));
+        p.addView(label("Tap a note or the piano-key strip to hear its pitch. Drag empty space to scroll. Preview uses this clip's assigned instrument and stays on the project audio engine.", 10, MainActivity.DIM, false));
         String[] grids = {"Grid 1/4", "Grid 1/8", "Grid 1/16", "Grid 1/32"}; double beat = Core.beat(a.session.bpm);
         p.addView(spinner(grids, 2, i -> { roll.grid = beat / (1 << i); roll.invalidate(); }));
         row(p, button("Quantize", () -> roll.apply(sel -> Pro.quantize(sel, roll.grid, 1, 0, false))), button("Q 50%", () -> roll.apply(sel -> Pro.quantize(sel, roll.grid, .5, 0, false))), button("Swing", () -> roll.apply(sel -> Pro.quantize(sel, roll.grid, 1, .5, false))));
         row(p, button("Vel −", () -> roll.apply(sel -> Pro.velocity(sel, 1, -10))), button("Vel +", () -> roll.apply(sel -> Pro.velocity(sel, 1, 10))), button("−1", () -> roll.apply(sel -> Pro.transpose(sel, -1))), button("+1", () -> roll.apply(sel -> Pro.transpose(sel, 1))));
         row(p, button("−oct", () -> roll.apply(sel -> Pro.transpose(sel, -12))), button("+oct", () -> roll.apply(sel -> Pro.transpose(sel, 12))), button("Zoom −", () -> { roll.zoom = Math.max(dp(8), roll.zoom / 1.5f); roll.invalidate(); }), button("Zoom +", () -> { roll.zoom = Math.min(dp(400), roll.zoom * 1.5f); roll.invalidate(); }));
+        final Button pencilBtn = button("✏ Pencil: OFF", () -> {}); pencilBtn.setOnClickListener(v -> { roll.pencil = !roll.pencil; pencilBtn.setText(roll.pencil ? "✏ Pencil: ON" : "✏ Pencil: OFF"); a.toast(roll.pencil ? "Pencil on: tap or drag in empty space to draw notes. Two fingers scroll." : "Pencil off: fingers only select and move. A stylus always draws."); });
+        row(p, pencilBtn, button("Select all", () -> { roll.selected.clear(); roll.selected.addAll(notes); roll.invalidate(); }));
         row(p, button("Select none", () -> { roll.selected.clear(); roll.invalidate(); }), button("Delete selected", () -> roll.apply(sel -> { if (sel != notes) notes.removeAll(sel); })), button("Undo", roll::undo));
         String instrument = clipSamples == null ? Synth.NAMES[Math.max(0, Math.min(Synth.NAMES.length - 1, (c.instrument != null ? c.instrument : a.synthConfig).patch))] : clipSamples.name;
-        p.addView(label("Tap empty space to add a note · drag its body to move it · drag its right edge to resize · tap to select · long-press to delete. Buttons act on selected notes, or all notes when none are selected. " + (c.notes != null ? "Live MIDI clip: changes apply instantly and stay editable. Instrument: " + instrument + "." : "Printing uses the current instrument: " + instrument + "."), 10, MainActivity.DIM, false));
+        p.addView(label("Turn on ✏ Pencil (or use a stylus) to add notes: tap for one note, drag sideways to set its length. Hold empty space to select all, then slide your finger to choose · drag a note to move it · drag its right edge to resize · tap to select · long-press to delete. Buttons act on selected notes, or all notes when none are selected. " + (c.notes != null ? "Live MIDI clip: changes apply instantly and stay editable. Instrument: " + instrument + "." : "Printing uses the current instrument: " + instrument + "."), 10, MainActivity.DIM, false));
         if (c.notes != null) { new AlertDialog.Builder(a).setTitle(c.name + " · notes").setView(scroll(p)).setNegativeButton("Discard", null).setNeutralButton("Instrument…", (d, w) -> { applyNotes(c, notes); chooseInstrument(c); }).setPositiveButton("Apply", (d, w) -> applyNotes(c, notes)).setOnDismissListener(d -> restoreMidiPreviewInstrument()).show(); return; }
         new AlertDialog.Builder(a).setTitle(c.name + " · notes").setView(scroll(p)).setNegativeButton("Discard", null).setPositiveButton("Print to audio", (d, w) -> printNotes(t, c, notes, other, roll.previewInstrument, roll.previewSamples)).setOnDismissListener(d -> restoreMidiPreviewInstrument()).show();
     }
@@ -797,27 +799,65 @@ final class ProUi {
             int sig = a.session.timeSignature; long step = Math.max(1, Math.round(grid)); long first = frame(keys) / step * step;
             for (long f = first; x(f) < w; f += step) { double b = f / beat(); boolean bar = Math.abs(b / sig - Math.round(b / sig)) < 1e-6, isBeat = Math.abs(b - Math.round(b)) < 1e-6; p.setColor(bar ? 0xff323846 : isBeat ? 0xff262b36 : 0xff191d25); c.drawRect(x(f), 0, x(f) + (bar ? dp(1.5f) : dp(.7f)), h, p); }
             for (Pro.Note n : notes) { float l = x(n.start), r = Math.max(l + dp(3), x(n.end())), t = y(n.pitch); if (r < keys || l > w) continue; boolean sel = selected.contains(n); p.setColor(sel ? 0xffffffff : android.graphics.Color.rgb(40 + n.velocity / 3, 150 + n.velocity / 3, 190 + n.velocity / 4)); c.drawRoundRect(Math.max(keys, l), t + 1, r, t + rowH - 1, dp(2), dp(2), p); p.setColor(sel ? 0xff3f4b52 : 0xffbff0f8); c.drawRect(Math.max(keys, r - dp(4)), t + 2, r, t + rowH - 2, p); }
+            if (marquee) { float l = Math.min(downX, mqX), r = Math.max(downX, mqX), t = Math.min(downY, mqY), b = Math.max(downY, mqY); p.setStyle(Paint.Style.FILL); p.setColor(0x33ffd24a); c.drawRect(l, t, r, b, p); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(1)); p.setColor(0xffffd24a); c.drawRect(l, t, r, b, p); p.setStyle(Paint.Style.FILL); }
             p.setColor(0xffffffff); float cursor = x(a.engine.position - (a.clip == null ? 0 : a.clip.start - a.clip.offset)); if (cursor >= keys && cursor < w) c.drawRect(cursor, 0, cursor + dp(1), h, p);
         }
         public boolean onTouchEvent(MotionEvent e) {
-            float ex = e.getX(), ey = e.getY();
-            switch (e.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN: getParent().requestDisallowInterceptTouchEvent(true); downX = ex; downY = ey; downAt = SystemClock.uptimeMillis(); moved = scrolling = false; touched = ex > keys ? at(ex, ey) : null; resizing = touched != null && Math.abs(ex - x(touched.end())) <= dp(12); if (ex <= keys) auditionMidiNote(new Pro.Note(pitch(ey), 100, 0, Math.round(grid), 0), previewInstrument, previewSamples); else if (touched != null) auditionMidiNote(touched, previewInstrument, previewSamples); lastDragPitch = touched == null ? -1 : touched.pitch; startScroll = scrollX; startTop = topPitch; if (touched != null) { origStart = touched.start; lastDragStart = origStart; origPitch = touched.pitch; } return true;
+            float ex = e.getX(), ey = e.getY(); int action = e.getActionMasked();
+            if (e.getPointerCount() > 1) {
+                float cx = (e.getX(0) + e.getX(1)) / 2, cy = (e.getY(0) + e.getY(1)) / 2;
+                if (action == MotionEvent.ACTION_POINTER_DOWN) { removeHold(); cancelDraw(); marquee = false; touched = null; panning = true; moved = true; panX = cx; panY = cy; startScroll = scrollX; startTop = topPitch; }
+                else if (action == MotionEvent.ACTION_MOVE && panning) { scrollX = Math.max(0, startScroll - (cx - panX)); topPitch = Math.max(12, Math.min(127, startTop + Math.round((cy - panY) / rowH))); invalidate(); }
+                return true;
+            }
+            if (panning && action != MotionEvent.ACTION_DOWN) { if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) panning = false; return true; }
+            switch (action) {
+                case MotionEvent.ACTION_DOWN:
+                    getParent().requestDisallowInterceptTouchEvent(true); panning = false; downX = ex; downY = ey; downAt = SystemClock.uptimeMillis(); moved = scrolling = false; marquee = false; holdFired = false; drawing = null; penDown = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS;
+                    touched = ex > keys ? at(ex, ey) : null; resizing = touched != null && Math.abs(ex - x(touched.end())) <= dp(12);
+                    if (ex <= keys) auditionMidiNote(new Pro.Note(pitch(ey), 100, 0, Math.round(grid), 0), previewInstrument, previewSamples); else if (touched != null) auditionMidiNote(touched, previewInstrument, previewSamples);
+                    lastDragPitch = touched == null ? -1 : touched.pitch; startScroll = scrollX; startTop = topPitch;
+                    if (touched != null) { origStart = touched.start; lastDragStart = origStart; origPitch = touched.pitch; }
+                    else if (ex > keys && !(pencil || penDown)) postDelayed(holdSelect, 450);
+                    return true;
                 case MotionEvent.ACTION_MOVE:
-                    if (!moved && Math.hypot(ex - downX, ey - downY) > dp(6)) { moved = true; if (touched != null) snapshot(); else scrolling = true; }
+                    if (!moved && Math.hypot(ex - downX, ey - downY) > dp(6)) {
+                        moved = true; removeHold();
+                        if (touched != null) snapshot();
+                        else if (holdFired) marquee = true;
+                        else if (ex > keys && (pencil || penDown)) { startDraw(); }
+                        else scrolling = true;
+                    }
+                    if (marquee) { mqX = ex; mqY = ey; selectRect(); invalidate(); return true; }
+                    if (drawing != null) { long g = Math.max(1, Math.round(grid)); long len = Math.max(g, (long) Math.ceil((frame(ex) - drawing.start) / (double) g) * g); if (len != drawing.length) { drawing.length = len; } invalidate(); return true; }
                     if (moved && touched != null) { if (resizing) { long length = Math.max(1, Math.round((frame(ex) - origStart) / grid) * Math.round(grid)); if (length != touched.length) { touched.length = length; auditionMidiNote(touched, previewInstrument, previewSamples); } } else { long delta = Math.round(((ex - downX) / zoom * beat()) / grid) * Math.round(grid); touched.start = Math.max(0, origStart + delta); touched.pitch = Math.max(0, Math.min(127, origPitch - Math.round((ey - downY) / rowH))); if (touched.pitch != lastDragPitch || touched.start != lastDragStart) { lastDragPitch = touched.pitch; lastDragStart = touched.start; auditionMidiNote(touched, previewInstrument, previewSamples); } } invalidate(); }
                     else if (scrolling) { scrollX = Math.max(0, startScroll - (ex - downX)); topPitch = Math.max(12, Math.min(127, startTop + Math.round((ey - downY) / rowH))); invalidate(); }
                     return true;
                 case MotionEvent.ACTION_UP:
-                    getParent().requestDisallowInterceptTouchEvent(false);
+                    getParent().requestDisallowInterceptTouchEvent(false); removeHold();
+                    if (marquee) { marquee = false; a.toast(selected.size() + " of " + notes.size() + " notes selected."); invalidate(); return true; }
+                    if (holdFired && !moved) { invalidate(); return true; }
+                    if (drawing != null) { auditionMidiNote(drawing, previewInstrument, previewSamples); drawing = null; invalidate(); return true; }
                     if (!moved) {
                         if (touched != null) { if (SystemClock.uptimeMillis() - downAt > 450) { snapshot(); notes.remove(touched); selected.remove(touched); } else if (!selected.remove(touched)) selected.add(touched); }
-                        else if (ex > keys) { snapshot(); long start = Math.round(frame(ex) / grid) * Math.round(grid); Pro.Note n = new Pro.Note(pitch(ey), 100, Math.max(0, start), Math.max(1, Math.round(grid)), 0); notes.add(n); auditionMidiNote(n, previewInstrument, previewSamples); }
+                        else if (ex > keys && (pencil || penDown)) { startDraw(); auditionMidiNote(drawing, previewInstrument, previewSamples); drawing = null; }
+                        else if (ex > keys) { selected.clear(); }
                         invalidate();
                     }
                     return true;
+                case MotionEvent.ACTION_CANCEL: removeHold(); cancelDraw(); marquee = false; panning = false; getParent().requestDisallowInterceptTouchEvent(false); return true;
                 default: return true;
             }
+        }
+        boolean pencil, penDown, holdFired, marquee, panning; Pro.Note drawing; float mqX, mqY, panX, panY;
+        final Runnable holdSelect = new Runnable() { public void run() { if (moved || touched != null || pencil || penDown) return; holdFired = true; selected.clear(); selected.addAll(Roll.this.notes); mqX = downX; mqY = downY; performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); a.toast("All notes selected · now slide your finger to choose only some"); invalidate();  } };
+        void removeHold() { removeCallbacks(holdSelect); }
+        void startDraw() { snapshot(); long g = Math.max(1, Math.round(grid)); long start = Math.max(0, Math.round(frame(downX) / (double) g) * g); drawing = new Pro.Note(pitch(downY), 100, start, g, 0); notes.add(drawing); }
+        void cancelDraw() { if (drawing != null) { notes.remove(drawing); if (!undo.isEmpty()) undo.pop(); drawing = null; } }
+        /** Marquee: select every note the dragged rectangle touches. */
+        void selectRect() {
+            float l = Math.min(downX, mqX), r = Math.max(downX, mqX), t = Math.min(downY, mqY), b = Math.max(downY, mqY); selected.clear();
+            for (Pro.Note n : notes) { float nl = x(n.start), nr = Math.max(nl + dp(3), x(n.end())), nt = y(n.pitch), nb = nt + rowH; if (nr >= l && nl <= r && nb >= t && nt <= b) selected.add(n); }
         }
     }
 

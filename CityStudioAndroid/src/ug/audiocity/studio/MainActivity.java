@@ -37,7 +37,7 @@ int trackHeightDp=88;final java.util.Set<Core.Clip> multi=java.util.Collections.
  play=new IconKey("▶",()->togglePlay());play.setContentDescription("Play or pause");((IconKey)play).glyph=0xff0b2616;play.setBackground(round(0xff5fd48a,14));transport.addView(play,squareKey());
  IconKey stop=new IconKey("■",()->{if(midiTake!=null)finishMidiTake();else if(capture!=null&&capture.running){capture.stop();engine.pause();}else if(canEdit()){engine.pause();updateTransport();}});stop.setBackground(round(0xff20242d,14));transport.addView(stop,squareKey());
  record=new IconKey("●",()->record());record.setContentDescription("Record microphone or finish take");((IconKey)record).glyph=0xffff5a5f;record.setBackground(round(0xff20242d,14));transport.addView(record,squareKey());
- loop=button("⟳",()->{if(canEdit()){engine.loop=!engine.loop;refresh();}});loop.setTextSize(20);loop.setContentDescription("Loop");transport.addView(loop,squareKey());
+ loop=button("⟳",()->{if(canEdit()){engine.loop=!engine.loop;refresh();}});loop.setOnLongClickListener(v->{if(canEdit()){checkpoint();session.loopStart=session.loopEnd=0;save(false);toast("Loop reset · plays from your first clip");refresh();}return true;});loop.setTextSize(20);loop.setContentDescription("Loop");transport.addView(loop,squareKey());
  LinearLayout display=new LinearLayout(this);display.setGravity(Gravity.CENTER_VERTICAL);display.setBackground(round(0xff07090c,10));LinearLayout.LayoutParams dlp=new LinearLayout.LayoutParams(0,-1,2.6f);dlp.leftMargin=dp(2);transport.addView(display,dlp);LinearLayout lcd=column();lcd.setGravity(Gravity.CENTER_VERTICAL);lcd.setPadding(dp(8),0,0,0);display.addView(lcd,new LinearLayout.LayoutParams(0,-1,1));TextView cap=label("BAR · BEAT · TICK",7,0xff7b8596,true);cap.setLetterSpacing(.06f);cap.setSingleLine(true);lcd.addView(cap);clock=label("001:1:000",16,0xffffa726,true);clock.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);clock.setSingleLine(true);lcd.addView(clock);timeDetail=label("00:00.000",8,0xff7b8596,false);timeDetail.setTypeface(Typeface.MONOSPACE);timeDetail.setSingleLine(true);lcd.addView(timeDetail);masterMeter=new MasterMeter();display.addView(masterMeter,new LinearLayout.LayoutParams(dp(26),-1));
  HorizontalScrollView toolScroll=new HorizontalScrollView(this);toolScroll.setHorizontalScrollBarEnabled(false);LinearLayout.LayoutParams tsp=new LinearLayout.LayoutParams(-1,dp(48));tsp.topMargin=dp(4);root.addView(toolScroll,tsp);tools=new LinearLayout(this);tools.setGravity(Gravity.CENTER_VERTICAL);toolScroll.addView(tools,new FrameLayout.LayoutParams(-2,-1));
  addTool("＋ Track",()->addTrack());addTool("Import",()->importAudio());selectTool=addTool("Select",()->setArrangeTool(0));moveTool=addTool("Move",()->setArrangeTool(1));trimTool=addTool("Trim",()->setArrangeTool(2));snapKey=addTool("Snap",()->snapDialog());click=addTool("Click",()->{engine.click=!engine.click;refresh();});addTool("All",()->selectAllClips());addTool("Copy",()->copyClips());addTool("Paste",()->pasteClips());addTool("Fit",()->fitTimeline());addTool("−",()->zoomTimeline(1/1.3f));addTool("＋",()->zoomTimeline(1.3f));addTool("↕−",()->trackHeight(-16));addTool("↕＋",()->trackHeight(16));setArrangeTool(0);selectTool.setContentDescription("Select clips and scroll safely");moveTool.setContentDescription("Move: hold a clip still, then drag");trimTool.setContentDescription("Trim: hold near an edge, then drag");
@@ -404,7 +404,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
  class ReductionMeter extends View{Paint p=new Paint(3);ReductionMeter(){super(MainActivity.this);setContentDescription("Live compressor gain reduction in decibels");}protected void onDraw(Canvas c){float reduction=selected==null?0:selected.reduction,w=getWidth();p.setTextSize(dp(10));p.setColor(DIM);c.drawText("GAIN REDUCTION",0,dp(13),p);p.setTextAlign(Paint.Align.RIGHT);p.setColor(TEXT);c.drawText(String.format(Locale.US,"%.1f dB",reduction),w,dp(13),p);p.setTextAlign(Paint.Align.LEFT);p.setColor(0xff252e35);c.drawRoundRect(0,dp(23),w,dp(29),dp(3),dp(3),p);p.setColor(0xffdac493);c.drawRoundRect(0,dp(23),Math.min(1,reduction/18)*w,dp(29),dp(3),dp(3),p);}}
  class Timeline extends View {
  Paint p=new Paint(3);float dx,dy,startScroll,startVertical;long touchTime,oldStart;Core.Clip touched;Core.Track target;
- boolean moving=false,scrolling=false,pinching=false;int mode=0,oldOffset,oldLength,oldEnv;final float head=dp(96),ruler=dp(31);float row=dp(trackHeightDp);java.util.IdentityHashMap<Core.Clip,Long> groupStarts;long groupMin,groupMax;
+ boolean moving=false,scrolling=false,pinching=false;int loopDrag=0;long loopAnchor;boolean loopMoved;int mode=0,oldOffset,oldLength,oldEnv;final float head=dp(96),ruler=dp(31);float row=dp(trackHeightDp);java.util.IdentityHashMap<Core.Clip,Long> groupStarts;long groupMin,groupMax;
  final ArrangeGesture gesture=new ArrangeGesture();final ScaleGestureDetector scaleDetector;
  Timeline(){super(MainActivity.this);setLayerType(View.LAYER_TYPE_SOFTWARE,null);
   setContentDescription("Arrangement: swipe to scroll, pinch to zoom, tap clips to select. Hold then drag to move. Choose Trim for edge edits.");
@@ -438,9 +438,22 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
     target=pro.rows().get(index);
     if(x>=head){long frame=(long)((x-head+timelineScroll)/bp*Core.beat(session.bpm));for(Core.Clip c:target.clips)if(frame>=c.start&&frame<c.start+c.length){touched=c;oldStart=c.start;oldOffset=c.offset;oldLength=c.length;oldEnv=c.envelopeOffset;}}
    }
+   loopDrag=0;loopMoved=false;
+   if(mode==1&&x>=head){long ls=TakeBounds.loopStart(session),le=TakeBounds.loopEnd(session);boolean show=engine.loop||session.loopEnd>session.loopStart;double beatF=Core.beat(session.bpm);float lx=head+(float)(ls/beatF*bp)-timelineScroll,rx=head+(float)(le/beatF*bp)-timelineScroll;float dl=Math.abs(x-lx),dr=Math.abs(x-rx);
+    if(show&&Math.min(dl,dr)<dp(22))loopDrag=dl<=dr?-1:1;else if(y>ruler*.5f){loopDrag=2;loopAnchor=Core.snap(Math.max(0,(long)((x-head+timelineScroll)/bp*beatF)),session.bpm,session.snapDivision);}}
    groupStarts=null;gesture.begin(touchTime,x,y,Math.max(dp(10),ViewConfiguration.get(MainActivity.this).getScaledTouchSlop()),touched!=null&&(arrangeTool!=0||multi.contains(touched)));
    return true;
   }
+  if(action==MotionEvent.ACTION_MOVE&&loopDrag!=0){
+   if(!loopMoved&&Math.abs(x-dx)<dp(6))return true;
+   if(!loopMoved){loopMoved=true;checkpoint();if(session.loopEnd<=session.loopStart){long a0=TakeBounds.loopStart(session),b0=TakeBounds.loopEnd(session);session.loopStart=a0;session.loopEnd=b0;}}
+   long beatL=Core.beat(session.bpm);long f=Core.snap(Math.max(0,(long)((x-head+timelineScroll)/bp*beatL)),session.bpm,session.snapDivision);
+   if(loopDrag==-1)session.loopStart=Math.max(0,Math.min(f,session.loopEnd-beatL));
+   else if(loopDrag==1)session.loopEnd=Math.min(Core.MAX_FRAMES,Math.max(f,session.loopStart+beatL));
+   else{long lo=Math.min(loopAnchor,f),hi=Math.max(loopAnchor,f);if(hi-lo>=beatL){session.loopStart=lo;session.loopEnd=hi;}}
+   engine.loop=true;invalidate();return true;
+  }
+  if(action==MotionEvent.ACTION_UP&&loopDrag!=0){int ld=loopDrag;loopDrag=0;if(loopMoved){loopMoved=false;save(false);refresh();toast("Loop: bar "+(session.loopStart/(double)Core.beat(session.bpm)/session.timeSignature+1)+" → "+(session.loopEnd/(double)Core.beat(session.bpm)/session.timeSignature+1)+"  ·  hold ⟳ to reset");return true;}if(ld!=2)return true;}
   if(action==MotionEvent.ACTION_MOVE){
    float mx=x-dx,my=y-dy;int state=gesture.move(SystemClock.uptimeMillis(),x,y);
    if(state==ArrangeGesture.EDIT&&touched!=null&&multi.contains(touched)&&arrangeTool!=2){
