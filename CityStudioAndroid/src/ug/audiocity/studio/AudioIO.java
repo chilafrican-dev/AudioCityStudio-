@@ -108,9 +108,10 @@ public final class AudioIO {
   public synchronized void playCounted(Core.Session session,int beats){
    if(playing)return;
    if(thread!=null&&thread.isAlive()){error="Audio output is still stopping. Try Play again.";return;}
-   if(loop&&session.loopEnd>session.loopStart){
-    if(position<session.loopStart||position>=session.loopEnd)position=session.loopStart;
-   }else if(loop&&position>=TakeBounds.loopEnd(session))position=0;
+   if(loop){
+    long ls=TakeBounds.loopStart(session),le=TakeBounds.loopEnd(session);
+    if(le>ls&&(position<ls||position>=le))position=ls;
+   }
    playing=true;
    long start=position;
    countInBeats=beats;countInTotal=CountIn.frames(session.bpm,beats);countInRemaining=countInTotal;
@@ -130,7 +131,7 @@ public final class AudioIO {
      while(playing){
       long end=recording?Core.MAX_FRAMES:Math.min(Core.MAX_FRAMES,Math.max(Core.beat(session.bpm)*4,session.end()+tailFrames(session)));
       boolean ranged=session.loopEnd>session.loopStart;
-      long loopStart=ranged?session.loopStart:0,loopEnd=ranged?session.loopEnd:TakeBounds.loopEnd(session,renderer.tempoMap());
+      long loopStart=ranged?session.loopStart:TakeBounds.loopStart(session,renderer.tempoMap()),loopEnd=ranged?session.loopEnd:TakeBounds.loopEnd(session,renderer.tempoMap());
       if(loop&&cursor>=loopEnd){cursor=loopStart;renderer=new Core.Renderer(session);live=renderer;}
       if(!loop&&cursor>=end){playing=false;break;}
       boolean preparing=preRoll>0;

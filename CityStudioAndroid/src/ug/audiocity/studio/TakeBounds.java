@@ -5,6 +5,14 @@ public final class TakeBounds {
  private TakeBounds(){}
  public static long barEnd(Core.Session session,long frame){return barEnd(new Pro.TempoMap(session),frame);}
  private static long barEnd(Pro.TempoMap map,long frame){long at=Math.max(0,frame);int beats=map.beatsPerBar();long bar=(long)Math.floor(map.beatAt(at)/beats);if(map.frameAt(bar*(double)beats)<at)bar++;return Math.min(Core.MAX_FRAMES,map.frameAt(Math.max(1,bar)*(double)beats));}
+ /** Loop start: the chosen range, otherwise the bar where the first clip begins (so a song starting at bar 2 loops from bar 2). */
+ public static long loopStart(Core.Session session){return loopStart(session,new Pro.TempoMap(session));}
+ public static long loopStart(Core.Session session,Pro.TempoMap map){
+  if(session.loopEnd>session.loopStart)return session.loopStart;
+  long first=Long.MAX_VALUE;for(Core.Track t:session.tracks)for(Core.Clip c:t.clips)first=Math.min(first,c.start);
+  if(first==Long.MAX_VALUE||first<=0)return 0;
+  int beats=map.beatsPerBar();long bar=(long)Math.floor(map.beatAt(first)/beats);return Math.max(0,Math.min(first,map.frameAt(bar*(double)beats)));
+ }
  public static long loopEnd(Core.Session session){return loopEnd(session,new Pro.TempoMap(session));}
  public static long loopEnd(Core.Session session,Pro.TempoMap map){return session.loopEnd>session.loopStart?session.loopEnd:barEnd(map,Math.max(1,session.end()));}
  public static MidiTake fit(MidiTake source,long start,Core.Session session,boolean quantize){

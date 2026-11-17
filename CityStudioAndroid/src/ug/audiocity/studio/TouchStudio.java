@@ -71,7 +71,7 @@ final class TouchStudio {
   final String[] patches=Synth.NAMES;
   root.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,PocketComposer.ROOTS));root.setSelection(a.session.tuneConfigured?a.session.tuneKey:7);
   scale.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"Major","Minor"}));scale.setSelection(a.session.tuneConfigured&&a.session.tuneScale==2?1:0);
-  mode.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"Chord pads","Melody pads"}));mode.setSelection(0);
+  mode.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"Chord pads","Melody pads (all notes)","Easy melody · tap a phrase","Safe notes · can't sound wrong"}));mode.setSelection(0);
   octave.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"Low · octave 2","Mid · octave 3","High · octave 4","Air · octave 5"}));octave.setSelection(2);
   progression.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,PerformanceChords.titles(scale.getSelectedItemPosition()==1)));
   layout.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"4 chord pads","6 chord pads","8 chord pads"}));
@@ -207,27 +207,47 @@ final class TouchStudio {
    super(a);root=r;scale=s;mode=m;octave=o;progression=p;layout=l;
    setMinimumHeight(a.dp(210));setContentDescription("Playable chord and melody pads. Multitouch enabled.");
   }
-  int count(){return mode.getSelectedItemPosition()==1?8:new int[]{4,6,8}[Math.min(2,layout.getSelectedItemPosition())];}
+  int count(){return mode.getSelectedItemPosition()>=1?8:new int[]{4,6,8}[Math.min(2,layout.getSelectedItemPosition())];}
   int cols(){int c=count();return c==4?2:c==6?3:4;}
   int cell(float x,float y){if(x<0||y<0||x>=getWidth()||y>=getHeight())return -1;return Math.min(1,(int)(y/(getHeight()/2f)))*cols()+Math.min(cols()-1,(int)(x/(getWidth()/(float)cols())));}
   int[] voice(int cell){int r=root.getSelectedItemPosition();boolean minor=scale.getSelectedItemPosition()==1;
-   if(mode.getSelectedItemPosition()==1)return new int[]{PocketComposer.scale(r,minor,cell,octave.getSelectedItemPosition()+2)};
+   int md=mode.getSelectedItemPosition();if(md==3)return new int[]{PocketComposer.scale(r,minor,PhraseBank.pent(minor)[cell],octave.getSelectedItemPosition()+2)};
+   if(md==2)return new int[]{PhraseBank.note(r,minor,0,octave.getSelectedItemPosition()+2)};
+   if(md==1)return new int[]{PocketComposer.scale(r,minor,cell,octave.getSelectedItemPosition()+2)};
    int degree=PerformanceChords.degree(minor,progression.getSelectedItemPosition(),cell);
    int[] c=PocketComposer.chord(r,minor,degree);int shift=(octave.getSelectedItemPosition()-1)*12;
    for(int i=0;i<c.length;i++)c[i]+=shift;return c;
   }
-  void change(int pointer,int cell){fingers.change(pointer,cell,cell<0?new int[0]:voice(cell));invalidate();}
-  void releaseAll(){fingers.clear();invalidate();}
+  final java.util.HashMap<Integer,Integer> phraseCells=new java.util.HashMap<>();final java.util.ArrayList<Runnable> pending=new java.util.ArrayList<>();final int[] sounding=new int[128];final long[] phraseUntil=new long[8];
+  void emit(int status,int note,int velocity){a.liveMidi.voices.message(status,note,velocity);MidiTake take=a.midiTake;if(take!=null)take.add(status,note,velocity);}
+  /** Easy melody: one tap plays a whole in-key phrase, started on the next eighth note when the beat is running. */
+  void playPhrase(int cell){
+   int r=root.getSelectedItemPosition(),oct=octave.getSelectedItemPosition()+2;boolean minor=scale.getSelectedItemPosition()==1;
+   long sixteenth=Math.max(40,Math.round(60000.0/Math.max(40,a.session.bpm)/4));long delay=0;
+   if(a.engine.playing){long eighth=Core.beat(a.session.bpm)/2;if(eighth>0){long into=a.engine.position%eighth;delay=Math.round((eighth-into)%eighth*1000.0/Core.RATE);}}
+   long last=0;
+   for(int[] n:PhraseBank.phrase(cell)){
+    final int midi=PhraseBank.note(r,minor,n[0],oct);final int vel=n[1]==0?100:84;long on=delay+n[1]*sixteenth,off=delay+(n[1]+n[2])*sixteenth-18;last=Math.max(last,off);
+    Runnable start=()->{sounding[midi]++;emit(144,midi,vel);},stop=()->{if(sounding[midi]>0){sounding[midi]--;emit(128,midi,0);}};
+    pending.add(start);pending.add(stop);a.handler.postDelayed(start,on);a.handler.postDelayed(stop,off);
+   }
+   phraseUntil[cell]=android.os.SystemClock.uptimeMillis()+last;
+  }
+  void stopPhrases(){for(Runnable r:pending)a.handler.removeCallbacks(r);pending.clear();for(int n=0;n<128;n++)while(sounding[n]>0){sounding[n]--;emit(128,n,0);}java.util.Arrays.fill(phraseUntil,0);}
+  void change(int pointer,int cell){
+   if(mode.getSelectedItemPosition()==2){Integer prev=phraseCells.get(pointer);if(cell<0)phraseCells.remove(pointer);else{phraseCells.put(pointer,cell);if(prev==null||prev!=cell)playPhrase(cell);}invalidate();return;}
+   fingers.change(pointer,cell,cell<0?new int[0]:voice(cell));invalidate();}
+  void releaseAll(){fingers.clear();phraseCells.clear();stopPhrases();invalidate();}
   protected void onDraw(Canvas canvas){super.onDraw(canvas);int count=count(),cols=cols();float w=getWidth()/(float)cols,h=getHeight()/2f;
    paint.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));paint.setTextAlign(Paint.Align.CENTER);
    for(int i=0;i<count;i++){
-    boolean held=fingers.active(i);float x=(i%cols)*w,y=(i/cols)*h;
+    boolean held=fingers.active(i)||phraseCells.containsValue(i)||phraseUntil[i]>android.os.SystemClock.uptimeMillis();if(mode.getSelectedItemPosition()==2&&phraseUntil[i]>0)postInvalidateOnAnimation();float x=(i%cols)*w,y=(i/cols)*h;
     paint.setColor(held?0xffa1c886:0xff444f58);canvas.drawRoundRect(x+4,y+4,x+w-4,y+h-4,a.dp(12),a.dp(12),paint);
-    paint.setColor(held?0xff17231c:MainActivity.TEXT);paint.setTextSize(a.dp(cols>=4?16:23));
-    int[] notes=voice(i);boolean melody=mode.getSelectedItemPosition()==1;
-    String label=melody?PocketComposer.noteName(notes[0]):PocketComposer.chordName(root.getSelectedItemPosition(),scale.getSelectedItemPosition()==1,PerformanceChords.degree(scale.getSelectedItemPosition()==1,progression.getSelectedItemPosition(),i));
+    paint.setColor(held?0xff17231c:MainActivity.TEXT);paint.setTextSize(a.dp(mode.getSelectedItemPosition()==2?14:cols>=4?16:23));
+    int[] notes=voice(i);int md=mode.getSelectedItemPosition();boolean melody=md>=1;
+    String label=md==2?PhraseBank.NAMES[i]:melody?PocketComposer.noteName(notes[0]):PocketComposer.chordName(root.getSelectedItemPosition(),scale.getSelectedItemPosition()==1,PerformanceChords.degree(scale.getSelectedItemPosition()==1,progression.getSelectedItemPosition(),i));
     canvas.drawText(label,x+w/2,y+h*.50f,paint);
-    paint.setTextSize(a.dp(11));canvas.drawText((melody?"NOTE ":"CHORD ")+(i+1),x+w/2,y+h*.71f,paint);
+    paint.setTextSize(a.dp(11));canvas.drawText(md==2?"PHRASE "+(i+1):md==3?"SAFE NOTE "+(i+1):(melody?"NOTE ":"CHORD ")+(i+1),x+w/2,y+h*.71f,paint);
    }
   }
   public boolean onTouchEvent(MotionEvent e){
