@@ -54,7 +54,7 @@ final class AutoPartsUi {
         for (int i = 0; i < moodButtons.size(); i++) style(moodButtons.get(i), i == mood);
         for (int i = 0; i < styleButtons.size(); i++) style(styleButtons.get(i), i - 1 == style);
         for (int i = 0; i < soundButtons.size(); i++) style(soundButtons.get(i), i - 1 == sound);
-        barsValue.setText(String.valueOf(bars));
+        if (barsValue != null) barsValue.setText(String.valueOf(bars));
     }
 
     void buildStyles() {
