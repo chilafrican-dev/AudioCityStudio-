@@ -60,7 +60,17 @@ public final class SampledInstruments {
   return out;
  }
  private static void visit(File root,File dir,List<File> out,int depth){if(depth>8)return;File[] entries=dir.listFiles();if(entries==null)return;Arrays.sort(entries,Comparator.comparing(File::getName));for(File f:entries){if(f.isDirectory())visit(root,f,out,depth+1);else out.add(f);}}
- public synchronized Pack load(Info info)throws IOException{
+ /** Decoded instruments are large (tens of MB each). Share one decoded copy per file instead of decoding it again for every clip and preview. */
+ private static final Map<String,java.lang.ref.WeakReference<Pack>> CACHE=new HashMap<>();
+ private static Pack recent;
+ public Pack load(Info info)throws IOException{
+  File file=new File(home,info.filename);String key=file.getCanonicalPath()+"|"+file.length()+"|"+file.lastModified();
+  synchronized(CACHE){java.lang.ref.WeakReference<Pack> ref=CACHE.get(key);Pack hit=ref==null?null:ref.get();if(hit!=null){recent=hit;return hit;}}
+  Pack pack=decode(info);
+  synchronized(CACHE){java.lang.ref.WeakReference<Pack> ref=CACHE.get(key);Pack hit=ref==null?null:ref.get();if(hit!=null){recent=hit;return hit;}CACHE.values().removeIf(r->r.get()==null);CACHE.put(key,new java.lang.ref.WeakReference<>(pack));recent=pack;}
+  return pack;
+ }
+ private synchronized Pack decode(Info info)throws IOException{
   File file=new File(home,info.filename);String homePath=home.getCanonicalPath()+File.separator;
   if(!file.getCanonicalPath().startsWith(homePath)||!file.isFile())throw new IOException("Instrument sample is missing");
   if(info.filename.toLowerCase(Locale.US).endsWith(".wav"))return monoPack(info.name,readWav(file),60,"Imported WAV");

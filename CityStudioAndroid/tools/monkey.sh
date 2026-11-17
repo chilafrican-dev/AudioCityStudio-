@@ -25,6 +25,13 @@ adb logcat -d -v time > "$out/logcat.txt" 2>&1
   echo "===== Distinct crashes ====="
   awk '/FATAL EXCEPTION/{p=1;n=0} p{print; n++; if(n>40){p=0; print "-----"}}' "$out/logcat.txt" | grep -v "^--------- beginning" | head -800
   echo
+  echo "===== What happened before each crash of the app ====="
+  grep -n "CRASH: $pkg" "$out/monkey.txt" | cut -d: -f1 | while read n; do echo "--- monkey actions before crash (line $n)"; sed -n "$((n>60?n-60:1)),$((n+3))p" "$out/monkey.txt" | grep -v "^\s*//\s*$"; done | head -400
+  for pid in $(grep "Process: $pkg, PID:" "$out/logcat.txt" | sed 's/.*PID: //' | sort -u); do
+    echo "--- app log, process $pid (last 120 lines before death)"
+    grep "( *$pid)" "$out/logcat.txt" | grep -v "Choreographer\|OpenGLRenderer\|EGL_emulation" | tail -120
+  done
+  echo
   echo "===== ANRs ====="
   grep -A20 "ANR in $pkg" "$out/logcat.txt" | head -200
 } > "$out/summary.txt"
