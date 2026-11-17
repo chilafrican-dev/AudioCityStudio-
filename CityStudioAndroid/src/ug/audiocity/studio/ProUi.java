@@ -65,7 +65,7 @@ final class ProUi {
 
     void menu() {
         if (!a.canEdit()) return;
-        String[] items = {"Routing, sends & sidechain", "Insert slots (selected track)", "Buses (reverb, delay, groups)", "Master chain & loudness meter", "Automation", "Tempo, time signature & markers", "Recording & audio settings", "Undo history", "Project templates", "Channel presets", "Editing: crossfades & ripple", "Track folders", "Loop & edit range…", "Range edit (cut, copy, paste, insert time)…", "Project notes", "Duplicate this project", "Keyboard shortcuts", "Clip launcher (scenes)", "MIDI controller mapping", "Get loops online (free CC0)", "AI MIDI generator…"};
+        String[] items = {"Routing, sends & sidechain", "Insert slots (selected track)", "Buses (reverb, delay, groups)", "Master chain & loudness meter", "Automation", "Tempo, time signature & markers", "Recording & audio settings", "Undo history", "Project templates", "Channel presets", "Editing: crossfades & ripple", "Track folders", "Loop & edit range…", "Range edit (cut, copy, paste, insert time)…", "Project notes", "Duplicate this project", "Keyboard shortcuts", "Clip launcher (scenes)", "MIDI controller mapping", "Get loops online (free CC0)", "AI MIDI generator…", "Auto parts: melody, bass, guitar…"};
         new AlertDialog.Builder(a).setTitle("Pro tools").setItems(items, (d, i) -> {
             switch (i) {
                 case 0: if (needTrack()) routing(a.selected); break;
@@ -88,12 +88,15 @@ final class ProUi {
                 case 17: launcher(); break;
                 case 18: midiMapping(); break;
                 case 19: onlineLoops(); break;
+                case 21: autoParts(); break;
                 default: aiGenerate(); break;
             }
         }).show();
     }
     /** Opens the AI MIDI generator sheet (new tracks with live MIDI clips at the playhead). */
     void aiGenerate() { new AiGenerateUi(a, this).show(); }
+    /** Opens Auto parts: five ready-made melody, bass or guitar options that fit the project's chords. */
+    void autoParts() { new AutoPartsUi(a, this).show(); }
     boolean needTrack() { if (a.selected == null) { a.toast("Select a track first."); return false; } return true; }
 
     /** Extra items for the track menu. */
