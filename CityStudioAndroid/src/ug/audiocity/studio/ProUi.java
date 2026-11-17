@@ -96,7 +96,7 @@ final class ProUi {
     /** Opens the AI MIDI generator sheet (new tracks with live MIDI clips at the playhead). */
     void aiGenerate() { new AiGenerateUi(a, this).show(); }
     /** Opens Auto parts: five ready-made melody, bass or guitar options that fit the project's chords. */
-    void autoParts() { new AutoPartsUi(a, this).show(); }
+    void autoParts() { new AutoPartsUi(a, this).showQuick(); }
     boolean needTrack() { if (a.selected == null) { a.toast("Select a track first."); return false; } return true; }
 
     /** Extra items for the track menu. */

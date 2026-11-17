@@ -22,11 +22,19 @@ final class AutoPartsUi {
     static final int[] COLORS = {0xffff7aa8, 0xff9d8cff, 0xfff0b34a, 0xff3ec6e0};
     static final int[] BASS_PATCH = {12, 13, 15, 15, 14, 15, 16, 15, 13};
 
+    /** Playable sounds per part: {name, sampled id or "", synth patch}. A sampled id falls back to its synth patch when not installed. */
+    static final String[][][] SOUNDS = {
+        {{"Grand piano", "freepats-ydp-grand-compact", "0"}, {"Electric piano", "freepats-fm-piano2", "1"}, {"Marimba", "", "8"}, {"Nylon pluck", "", "10"}, {"Silk lead", "", "6"}, {"Glass bell", "", "5"}},
+        {{"Pluck bass", "", "15"}, {"Round bass", "", "2"}, {"Saw bass", "", "13"}, {"Square bass", "", "14"}, {"Sine bass", "", "12"}, {"Deep sub", "", "16"}, {"Sub 808", "", "11"}},
+        {{"Clean guitar", "freepats-electric-guitar-clean", "10"}, {"Direct guitar", "freepats-electric-guitar-direct", "10"}, {"Jazz guitar", "freepats-electric-guitar-jazz", "10"}, {"Nylon pluck", "", "10"}, {"Afro pluck", "", "3"}},
+        {{"Lead guitar", "freepats-electric-guitar-direct", "10"}, {"Jazz guitar", "freepats-electric-guitar-jazz", "10"}, {"Clean guitar", "freepats-electric-guitar-clean", "10"}, {"Silk lead", "", "6"}}};
+    int sound = -1; String soundName = "";
     final MainActivity a; final ProUi ui;
     int part = 0, style = -1, mood = 1, bars = 8, key = 9; boolean minor = true, keyChosen = false;
     boolean chordsAdded = false;
     final List<Button> partButtons = new ArrayList<>(), moodButtons = new ArrayList<>(), styleButtons = new ArrayList<>();
-    LinearLayout styleRow, results, box; TextView barsValue, chordInfo, keyInfo;
+    LinearLayout styleRow, soundRow, results, box;
+    final List<Button> soundButtons = new ArrayList<>(); TextView barsValue, chordInfo, keyInfo;
     AlertDialog dialog; AutoParts.Analysis analysis; double[] kicks; double startBeat; long startFrame; int lengthFrames;
     SampledInstruments.Pack pack; Synth.Config config; String packId;
     final java.util.HashMap<String, SampledInstruments.Pack> cache = new java.util.HashMap<>();
@@ -45,6 +53,7 @@ final class AutoPartsUi {
         for (int i = 0; i < partButtons.size(); i++) style(partButtons.get(i), i == part);
         for (int i = 0; i < moodButtons.size(); i++) style(moodButtons.get(i), i == mood);
         for (int i = 0; i < styleButtons.size(); i++) style(styleButtons.get(i), i - 1 == style);
+        for (int i = 0; i < soundButtons.size(); i++) style(soundButtons.get(i), i - 1 == sound);
         barsValue.setText(String.valueOf(bars));
     }
 
@@ -53,6 +62,14 @@ final class AutoPartsUi {
         for (int i = -1; i < names.length; i++) {
             final int s = i; Button b = chip(i < 0 ? "Surprise me" : names[i], new Runnable() { public void run() { style = s; } }); styleButtons.add(b);
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, a.dp(44)); p.rightMargin = a.dp(6); styleRow.addView(b, p);
+        }
+    }
+
+    void buildSounds() {
+        soundRow.removeAllViews(); soundButtons.clear(); String[][] names = SOUNDS[part];
+        for (int i = -1; i < names.length; i++) {
+            final int sIdx = i; Button b = chip(i < 0 ? "Automatic" : names[i][0], new Runnable() { public void run() { sound = sIdx; } }); soundButtons.add(b);
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, a.dp(44)); p.rightMargin = a.dp(6); soundRow.addView(b, p);
         }
     }
 
@@ -66,7 +83,7 @@ final class AutoPartsUi {
         box.addView(heading("WHAT DO YOU WANT?"));
         LinearLayout partRow = new LinearLayout(a);
         for (int i = 0; i < AutoParts.PART_NAMES.length; i++) {
-            final int p = i; Button b = chip(AutoParts.PART_NAMES[i], new Runnable() { public void run() { part = p; style = -1; buildStyles(); results.removeAllViews(); } }); partButtons.add(b);
+            final int p = i; Button b = chip(AutoParts.PART_NAMES[i], new Runnable() { public void run() { part = p; style = -1; sound = -1; buildStyles(); buildSounds(); results.removeAllViews(); } }); partButtons.add(b);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, a.dp(48), 1); lp.rightMargin = a.dp(5); partRow.addView(b, lp);
         }
         box.addView(partRow);
@@ -81,6 +98,9 @@ final class AutoPartsUi {
 
         box.addView(heading("STYLE"));
         HorizontalScrollView sv = new HorizontalScrollView(a); sv.setHorizontalScrollBarEnabled(false); styleRow = new LinearLayout(a); sv.addView(styleRow); box.addView(sv); buildStyles();
+
+        box.addView(heading("SOUND"));
+        HorizontalScrollView sv2 = new HorizontalScrollView(a); sv2.setHorizontalScrollBarEnabled(false); soundRow = new LinearLayout(a); sv2.addView(soundRow); box.addView(sv2); buildSounds();
 
         box.addView(heading("LENGTH (BARS)"));
         LinearLayout barsRow = new LinearLayout(a); barsRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -102,6 +122,101 @@ final class AutoPartsUi {
         dialog = new AlertDialog.Builder(a).setView(scroll).setNegativeButton("Close", null).create();
         dialog.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() { public void onDismiss(android.content.DialogInterface d) { a.liveMidi.voices.cancelScheduled(15); } });
         dialog.show();
+    }
+
+    // ------------------------------------------------------------------ the one-tap way
+
+    Core.Track previewTrack; long savedLoopStart, savedLoopEnd; boolean savedLoop, previewing; AutoParts.Option current; int currentPart; TextView nowPlaying; View playerCard; int lastStyle = -1, quickMood = 1;
+    final java.util.Random random = new java.util.Random();
+
+    /** The easy sheet: tap what you want, hear it with your song straight away, keep it or ask for another. */
+    void showQuick() {
+        if (!a.canEdit()) return;
+        a.engine.pause();
+        LinearLayout q = a.column(); q.setPadding(a.dp(16), a.dp(10), a.dp(16), a.dp(10)); q.setBackgroundColor(SHEET);
+        q.addView(a.label("Make me a part", 20, VIOLET, true));
+        TextView sub = a.label("Tap one. I listen to the chords in your song, write a part that fits, and play it with your music. No music skill needed.", 12, MUTED, false); sub.setPadding(0, a.dp(2), 0, a.dp(8)); q.addView(sub);
+        String[] big = {"🎹  Melody", "🎸  Bass", "🎸  Strum", "🎸  Guitar solo"}; String[] small = {"a tune to sing along", "deep groove", "chords with rhythm", "a lead line"};
+        for (int row = 0; row < 2; row++) {
+            LinearLayout line = new LinearLayout(a);
+            for (int col = 0; col < 2; col++) {
+                final int part1 = row * 2 + col; final int partNo = part1 == 2 ? AutoParts.RHYTHM : part1 == 3 ? AutoParts.SOLO : part1;
+                Button b = new Button(a); b.setAllCaps(false); b.setText(big[part1] + "\n" + small[part1]); b.setTextSize(15); b.setTextColor(INK); b.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD)); b.setBackground(pill(COLORS[partNo], COLORS[partNo], 16));
+                b.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { quickMake(partNo); } });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, a.dp(84), 1); lp.rightMargin = a.dp(col == 0 ? 8 : 0); lp.bottomMargin = a.dp(8); line.addView(b, lp);
+            }
+            q.addView(line);
+        }
+        LinearLayout moods = new LinearLayout(a); final List<Button> mb = new ArrayList<>();
+        for (int i = 0; i < AutoParts.MOODS.length; i++) {
+            final int m = i; final Button b = new Button(a); b.setText(AutoParts.MOODS[i]); b.setAllCaps(false); b.setTextSize(13); b.setMinHeight(0); b.setMinimumHeight(0); b.setMinWidth(0); b.setMinimumWidth(0); mb.add(b);
+            b.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { quickMood = m; for (int k = 0; k < mb.size(); k++) style(mb.get(k), k == quickMood); } });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, a.dp(42), 1); lp.rightMargin = a.dp(5); moods.addView(b, lp);
+        }
+        for (int k = 0; k < mb.size(); k++) style(mb.get(k), k == quickMood);
+        q.addView(moods);
+
+        LinearLayout card = a.column(); card.setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10)); card.setBackground(pill(CHIP, EDGE, 14)); card.setVisibility(View.GONE); playerCard = card;
+        nowPlaying = a.label("", 15, TXT, true); card.addView(nowPlaying);
+        LinearLayout buttons = new LinearLayout(a);
+        Button another = chip("🔄  Another", new Runnable() { public void run() { quickMake(currentPart); } }), keepB = chip("👍  Keep it", new Runnable() { public void run() { quickKeep(); } }), stop = chip("■ Stop", new Runnable() { public void run() { stopPreview(false); } });
+        style(another, false); style(keepB, true); style(stop, false);
+        LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, a.dp(52), 1); b1.rightMargin = a.dp(6); buttons.addView(another, b1);
+        LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, a.dp(52), 1); b2.rightMargin = a.dp(6); buttons.addView(keepB, b2);
+        buttons.addView(stop, new LinearLayout.LayoutParams(a.dp(78), a.dp(52))); LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2); bp.topMargin = a.dp(8); card.addView(buttons, bp);
+        LinearLayout.LayoutParams cardP = new LinearLayout.LayoutParams(-1, -2); cardP.topMargin = a.dp(12); q.addView(card, cardP);
+
+        Button more = chip("More choices: style, sound, length…", new Runnable() { public void run() { stopPreview(false); sound = -1; if (dialog != null) dialog.dismiss(); show(); } }); style(more, false);
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-1, a.dp(46)); mp.topMargin = a.dp(12); q.addView(more, mp);
+        ScrollView scroll = new ScrollView(a); scroll.addView(q);
+        dialog = new AlertDialog.Builder(a).setView(scroll).setNegativeButton("Close", null).create();
+        dialog.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() { public void onDismiss(android.content.DialogInterface d) { stopPreview(false); } });
+        dialog.show();
+    }
+
+    void quickMake(final int partNo) {
+        if (!a.canEdit()) return;
+        stopPreview(false); currentPart = partNo; sound = sound < 0 ? 0 : sound + 1; // each press tries the next sound too
+        readProject(); final AutoParts.Analysis an = analysis; final int md = quickMood, bpb = ui.map().beatsPerBar(); final int styles = AutoParts.STYLES[partNo].length;
+        int st; do { st = random.nextInt(styles); } while (styles > 1 && st == lastStyle); lastStyle = st; final int chosen = st;
+        a.busy("Writing your " + AutoParts.PART_NAMES[partNo].toLowerCase(java.util.Locale.US) + "…", new MainActivity.Task() { public void run() throws Exception {
+            final long seed = System.nanoTime(); final List<AiMidiGenerator.Note> notes = AutoParts.generate(partNo, chosen, md, an, bpb, kicks, seed);
+            instrumentFor(partNo, md, chosen);
+            current = new AutoParts.Option(AutoParts.PART_NAMES[partNo] + " · " + AutoParts.STYLES[partNo][chosen], chosen, seed, notes);
+            a.runOnUiThread(new Runnable() { public void run() { startPreview(partNo, md, an, bpb); } });
+        } });
+    }
+
+    void startPreview(int partNo, int md, AutoParts.Analysis an, int bpb) {
+        if (dialog == null || !dialog.isShowing() || current == null) return;
+        Core.Session s = a.session; Core.Track t = new Core.Track("Auto · Preview", COLORS[partNo]); t.volume = partNo == AutoParts.BASS ? .78 : .72; polish(t, partNo);
+        t.clips.add(ProMidi.clip(current.title, proNotes(current.notes), config, pack, packId, startFrame, lengthFrames));
+        if (!previewing) { savedLoop = a.engine.loop; savedLoopStart = s.loopStart; savedLoopEnd = s.loopEnd; }
+        previewing = true; previewTrack = t; s.tracks.add(t); s.loopStart = startFrame; s.loopEnd = startFrame + lengthFrames; a.engine.loop = true; a.engine.position = startFrame;
+        if (!an.found) { // no chords yet: add a quiet chord bed to the preview so the part is heard in context
+            Core.Track bed = new Core.Track("Auto · Preview chords", 0xff3ec6e0); bed.volume = .5; polish(bed, AutoParts.MELODY);
+            bed.clips.add(ProMidi.clip("Chords", proNotes(AutoParts.chordBlocks(an.chords, bpb, 60)), Synth.factory(1), null, null, startFrame, lengthFrames)); s.tracks.add(bed); previewBed = bed;
+        }
+        nowPlaying.setText(current.title + "  ·  " + soundName); playerCard.setVisibility(View.VISIBLE);
+        if (a.requestAudioFocus()) a.engine.play(s);
+        a.refresh();
+    }
+    Core.Track previewBed;
+
+    /** Removes the temporary tracks and puts the loop settings back. */
+    void stopPreview(boolean keepPlayerCard) {
+        if (!previewing) { a.engine.pause(); return; }
+        a.engine.pause(); Core.Session s = a.session;
+        if (previewTrack != null) s.tracks.remove(previewTrack); if (previewBed != null) s.tracks.remove(previewBed); previewTrack = null; previewBed = null;
+        s.loopStart = savedLoopStart; s.loopEnd = savedLoopEnd; a.engine.loop = savedLoop; previewing = false;
+        if (!keepPlayerCard && playerCard != null) playerCard.setVisibility(View.GONE);
+        a.refresh();
+    }
+
+    void quickKeep() {
+        if (current == null || !previewing) return;
+        final AutoParts.Option o = current; final int p = currentPart; final AutoParts.Analysis an = analysis; final int bpb = ui.map().beatsPerBar(); final int md = quickMood;
+        stopPreview(true); keep(o, p, md, an, bpb); playerCard.setVisibility(View.GONE);
     }
 
     void chooseKey() {
@@ -138,14 +253,26 @@ final class AutoPartsUi {
 
     void instrumentFor(int partNo, int moodNo, int styleNo) {
         config = null; pack = null; packId = null; String id = null; Synth.Config patch;
-        switch (partNo) {
-            case AutoParts.BASS: patch = Synth.factory(BASS_PATCH[Math.max(0, Math.min(BASS_PATCH.length - 1, styleNo))]); break;
-            case AutoParts.RHYTHM: patch = Synth.factory(10); id = "freepats-electric-guitar-clean"; break;
-            case AutoParts.SOLO: patch = Synth.factory(10); id = styleNo == 1 ? "freepats-electric-guitar-jazz" : "freepats-electric-guitar-direct"; break;
-            default: patch = Synth.factory(6); id = moodNo == 0 || moodNo == 2 ? "freepats-ydp-grand-compact" : "freepats-fm-piano2";
+        int pick = sound;
+        if (pick < 0) { // automatic: the sound that suits the part, mood and style
+            if (partNo == AutoParts.BASS) { int want = BASS_PATCH[Math.max(0, Math.min(BASS_PATCH.length - 1, styleNo))]; pick = 0; for (int i = 0; i < SOUNDS[1].length; i++) if (Integer.parseInt(SOUNDS[1][i][2]) == want) pick = i; }
+            else if (partNo == AutoParts.MELODY) pick = moodNo == 0 || moodNo == 2 ? 0 : 1;
+            else if (partNo == AutoParts.SOLO) pick = styleNo == 1 ? 1 : 0; else pick = 0;
         }
+        String[][] list = SOUNDS[partNo]; String[] choice = list[Math.floorMod(pick, list.length)]; soundName = choice[0]; id = choice[1].isEmpty() ? null : choice[1]; patch = Synth.factory(Integer.parseInt(choice[2]));
         config = patch;
         if (id != null) try { for (SampledInstruments.Info info : a.instrumentLibrary.list()) if (info.filename.startsWith("factory-" + id + "/")) { SampledInstruments.Pack hit; synchronized (cache) { hit = cache.get(info.filename); } if (hit == null) { hit = a.instrumentLibrary.load(info); synchronized (cache) { cache.put(info.filename, hit); } } pack = hit; packId = info.filename; break; } } catch (Exception ignored) { pack = null; packId = null; }
+    }
+
+    /** Studio polish so parts do not sound dry and thin: space, a little echo, warmth for bass, gentle level control. */
+    static void polish(Core.Track t, int partNo) {
+        Core.Fx f = t.fx; f.eq = true; f.comp = true; f.threshold = -20; f.ratio = 2.5; f.room = true;
+        switch (partNo) {
+            case AutoParts.BASS: f.sat = true; f.drive = 2.2; f.low = 2; f.mid = -1; f.high = 1; f.roomMix = .02; f.highPassHz = 35; f.hpf = true; break;
+            case AutoParts.MELODY: f.roomMix = .2; f.delay = true; f.delayMix = .11; f.delayFeedback = .3; f.high = 1.5; f.low = -1; break;
+            case AutoParts.RHYTHM: f.roomMix = .14; f.delay = true; f.delayMix = .07; f.high = 1; f.low = -1.5; f.hpf = true; f.highPassHz = 80; break;
+            default: f.roomMix = .2; f.delay = true; f.delayMix = .15; f.delayFeedback = .35; f.sat = true; f.drive = 1.6; f.high = 1; f.low = -2; f.hpf = true; f.highPassHz = 100; break;
+        }
     }
 
     void make() {
@@ -192,13 +319,13 @@ final class AutoPartsUi {
         instrumentFor(p, md, o.style);
         String label = AutoParts.PART_NAMES[p] + " · " + AutoParts.STYLES[p][o.style];
         Core.Track t = new Core.Track("Auto · " + AutoParts.PART_NAMES[p], COLORS[p]); t.volume = p == AutoParts.BASS ? .78 : p == AutoParts.MELODY ? .74 : .66;
-        if (p == AutoParts.RHYTHM || p == AutoParts.SOLO) { t.fx.room = true; t.fx.roomMix = .08; }
+        polish(t, p);
         t.clips.add(ProMidi.clip(label, proNotes(o.notes), config, pack, packId, startFrame, lengthFrames));
         Core.Track chords = null;
         if (addChords) {
             Synth.Config piano = Synth.factory(1); SampledInstruments.Pack ydp = null; String ydpId = null;
             try { for (SampledInstruments.Info info : a.instrumentLibrary.list()) if (info.filename.startsWith("factory-freepats-ydp-grand-compact/")) { ydp = a.instrumentLibrary.load(info); ydpId = info.filename; break; } } catch (Exception ignored) { ydp = null; ydpId = null; }
-            chords = new Core.Track("Auto · Chords", 0xff3ec6e0); chords.volume = .55; chords.fx.room = true; chords.fx.roomMix = .09;
+            chords = new Core.Track("Auto · Chords", 0xff3ec6e0); chords.volume = .55; polish(chords, AutoParts.MELODY);
             chords.clips.add(ProMidi.clip("Chords · " + an.describe(), proNotes(AutoParts.chordBlocks(an.chords, bpb, 66)), piano, ydp, ydpId, startFrame, lengthFrames));
         }
         ui.edit("Auto parts");

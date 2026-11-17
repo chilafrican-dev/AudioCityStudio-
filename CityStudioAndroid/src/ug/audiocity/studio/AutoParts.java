@@ -115,7 +115,7 @@ public final class AutoParts {
 
     public static final class Option {
         public final String title; public final int style; public final long seed; public final List<AiMidiGenerator.Note> notes;
-        Option(String title, int style, long seed, List<AiMidiGenerator.Note> notes) { this.title = title; this.style = style; this.seed = seed; this.notes = notes; }
+        public Option(String title, int style, long seed, List<AiMidiGenerator.Note> notes) { this.title = title; this.style = style; this.seed = seed; this.notes = notes; }
     }
 
     /** Five takes. style < 0 means "surprise me": a different style for each option. */
