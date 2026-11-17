@@ -375,7 +375,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
  void copyClips(){if(!canEdit())return;clipboardTracks.clear();clipboardClips.clear();for(Core.Track t:session.tracks)for(Core.Clip c:t.clips)if(multi.contains(c)||(multi.isEmpty()&&c==clip)){clipboardTracks.add(t);clipboardClips.add(c.copy());}if(clipboardClips.isEmpty())toast("Select a clip, or tap All, then Copy.");else toast(clipboardClips.size()+(clipboardClips.size()==1?" clip":" clips")+" copied. Move the playhead and tap Paste.");}
  /** Paste at the playhead: the earliest copied clip lands there, others keep their spacing and tracks. */
  void pasteClips(){if(!canEdit())return;if(clipboardClips.isEmpty()){toast("Nothing copied yet.");return;}long lo=Long.MAX_VALUE;for(Core.Clip c:clipboardClips)lo=Math.min(lo,c.start);long at=Core.snap(Math.max(0,engine.position),session.bpm,session.snapDivision),shift=at-lo;for(Core.Clip c:clipboardClips)if(c.start+shift+c.length>Core.MAX_FRAMES){toast("Not enough room after the playhead.");return;}engine.pause();checkpoint();multi.clear();int n=0;for(int i=0;i<clipboardClips.size();i++){Core.Track t=clipboardTracks.get(i);if(!session.tracks.contains(t)){t=selected;if(t==null)continue;}Core.Clip d=clipboardClips.get(i).copy();d.start+=shift;t.clips.add(d);multi.add(d);n++;}clip=null;save(false);refresh();toast(n+(n==1?" clip":" clips")+" pasted at the playhead.");}
- void selectAllClips(){if(!canEdit())return;multi.clear();for(Core.Track t:session.tracks)multi.addAll(t.clips);clip=null;if(multi.isEmpty())toast("No clips in this project yet.");else toast(multi.size()+" clips selected · ✎ moves them · ⧉ duplicates · 🗑 deletes · tap a clip to clear");refresh();}
+ void selectAllClips(){if(!canEdit())return;multi.clear();for(Core.Track t:session.tracks)multi.addAll(t.clips);clip=null;if(multi.isEmpty())toast("No clips in this project yet.");else toast(multi.size()+" clips selected · hold a selected clip, then drag to move them all · ⧉ duplicates · 🗑 deletes · tap a clip to clear");refresh();}
  void moveSelection(){input("Move selected clips by bars (e.g. 2 or -1)","1",true,v->{double bars=Double.parseDouble(v);long shift=Math.round(bars*Core.beat(session.bpm)*session.timeSignature);for(Core.Clip c:multi)if(c.start+shift<0||c.start+shift+c.length>Core.MAX_FRAMES)throw new IllegalArgumentException("That move goes outside the session.");checkpoint();for(Core.Clip c:multi)c.start+=shift;save(false);refresh();});}
  void trackHeight(int deltaDp){trackHeightDp=Math.max(60,Math.min(152,trackHeightDp+deltaDp));if(timeline!=null){timeline.row=dp(trackHeightDp);timeline.invalidate();}try{getPreferences(MODE_PRIVATE).edit().putInt("trackHeight",trackHeightDp).apply();}catch(Exception ignored){}}
  void deleteSelectedClip(){if(!canEdit())return;if(!multi.isEmpty()){engine.pause();checkpoint();int n=0;for(Core.Track t:session.tracks)for(Core.Clip c:new ArrayList<>(t.clips))if(multi.contains(c)){t.clips.remove(c);n++;}multi.clear();clip=null;save(false);refresh();toast(n+" clips deleted. Undo restores them.");return;}if(selected==null||clip==null||!selected.clips.contains(clip)){toast("Select a clip to delete.");return;}engine.pause();checkpoint();selected.clips.remove(clip);clip=null;save(false);refresh();toast("Clip deleted. Undo restores it.");}
@@ -404,7 +404,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
  class ReductionMeter extends View{Paint p=new Paint(3);ReductionMeter(){super(MainActivity.this);setContentDescription("Live compressor gain reduction in decibels");}protected void onDraw(Canvas c){float reduction=selected==null?0:selected.reduction,w=getWidth();p.setTextSize(dp(10));p.setColor(DIM);c.drawText("GAIN REDUCTION",0,dp(13),p);p.setTextAlign(Paint.Align.RIGHT);p.setColor(TEXT);c.drawText(String.format(Locale.US,"%.1f dB",reduction),w,dp(13),p);p.setTextAlign(Paint.Align.LEFT);p.setColor(0xff252e35);c.drawRoundRect(0,dp(23),w,dp(29),dp(3),dp(3),p);p.setColor(0xffdac493);c.drawRoundRect(0,dp(23),Math.min(1,reduction/18)*w,dp(29),dp(3),dp(3),p);}}
  class Timeline extends View {
  Paint p=new Paint(3);float dx,dy,startScroll,startVertical;long touchTime,oldStart;Core.Clip touched;Core.Track target;
- boolean moving=false,scrolling=false,pinching=false;int mode=0,oldOffset,oldLength,oldEnv;final float head=dp(96),ruler=dp(31);float row=dp(trackHeightDp);
+ boolean moving=false,scrolling=false,pinching=false;int mode=0,oldOffset,oldLength,oldEnv;final float head=dp(96),ruler=dp(31);float row=dp(trackHeightDp);java.util.IdentityHashMap<Core.Clip,Long> groupStarts;long groupMin,groupMax;
  final ArrangeGesture gesture=new ArrangeGesture();final ScaleGestureDetector scaleDetector;
  Timeline(){super(MainActivity.this);setLayerType(View.LAYER_TYPE_SOFTWARE,null);
   setContentDescription("Arrangement: swipe to scroll, pinch to zoom, tap clips to select. Hold then drag to move. Choose Trim for edge edits.");
@@ -413,7 +413,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
    public boolean onScale(ScaleGestureDetector detector){float anchor=Math.max(0,detector.getFocusX()-head),old=zoom;zoom=Math.max(.05f,Math.min(240,zoom*detector.getScaleFactor()));timelineScroll=ArrangeGesture.zoomScroll(timelineScroll,anchor,old,zoom);invalidate();return true;}
   });
  }
- void cancelClipDrag(){if(moving&&touched!=null){touched.start=oldStart;touched.offset=oldOffset;touched.length=oldLength;touched.envelopeOffset=oldEnv;}moving=false;pro.guideFrame=-1;pro.guideText=null;pro.dragEdge=0;}
+ void cancelClipDrag(){if(moving&&groupStarts!=null){for(java.util.Map.Entry<Core.Clip,Long> en:groupStarts.entrySet())en.getKey().start=en.getValue();groupStarts=null;moving=false;return;}if(moving&&touched!=null){touched.start=oldStart;touched.offset=oldOffset;touched.length=oldLength;touched.envelopeOffset=oldEnv;}moving=false;pro.guideFrame=-1;pro.guideText=null;pro.dragEdge=0;}
 
  void rect(Canvas c,float l,float t,float r,float b,int color,float radius){p.setColor(color);p.setStyle(Paint.Style.FILL);c.drawRoundRect(l,t,r,b,radius,radius,p);}void word(Canvas c,String s,float x,float y,int size,int color,boolean bold){p.setStyle(Paint.Style.FILL);p.setColor(color);p.setTextSize(dp(size));p.setTypeface(Typeface.create("sans-serif",bold?Typeface.BOLD:Typeface.NORMAL));p.setTextAlign(Paint.Align.LEFT);c.drawText(s,x,y,p);}String shorten(String name,int len){return name.length()>len?name.substring(0,len-1)+"…":name;}
  protected void onDraw(Canvas c){float w=getWidth(),h=getHeight(),beatPx=zoom*getResources().getDisplayMetrics().density;Path border=new Path();border.addRoundRect(new RectF(0,0,w,h),dp(16),dp(16),Path.Direction.CW);c.save();c.clipPath(border);c.drawColor(0xff0e1014);if(session==null){c.restore();return;}long beat=Core.beat(session.bpm);double playBeat=engine.position/(double)beat;if(engine.playing&&!pinching&&!scrolling&&!moving&&(playBeat*beatPx-timelineScroll>w-head-dp(20)||playBeat*beatPx-timelineScroll<0))timelineScroll=Math.max(0,(float)(playBeat*beatPx)-(w-head)*.2f);float maxY=Math.max(0,pro.rows().size()*row-(h-ruler));timelineVertical=Math.max(0,Math.min(maxY,timelineVertical));
@@ -438,12 +438,16 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
     target=pro.rows().get(index);
     if(x>=head){long frame=(long)((x-head+timelineScroll)/bp*Core.beat(session.bpm));for(Core.Clip c:target.clips)if(frame>=c.start&&frame<c.start+c.length){touched=c;oldStart=c.start;oldOffset=c.offset;oldLength=c.length;oldEnv=c.envelopeOffset;}}
    }
-   gesture.begin(touchTime,x,y,Math.max(dp(10),ViewConfiguration.get(MainActivity.this).getScaledTouchSlop()),touched!=null&&arrangeTool!=0);
+   groupStarts=null;gesture.begin(touchTime,x,y,Math.max(dp(10),ViewConfiguration.get(MainActivity.this).getScaledTouchSlop()),touched!=null&&(arrangeTool!=0||multi.contains(touched)));
    return true;
   }
   if(action==MotionEvent.ACTION_MOVE){
    float mx=x-dx,my=y-dy;int state=gesture.move(SystemClock.uptimeMillis(),x,y);
-   if(state==ArrangeGesture.EDIT&&touched!=null){
+   if(state==ArrangeGesture.EDIT&&touched!=null&&multi.contains(touched)&&arrangeTool!=2){
+    if(groupStarts==null){engine.pause();checkpoint();moving=true;groupStarts=new java.util.IdentityHashMap<>();groupMin=Long.MAX_VALUE;groupMax=0;for(Core.Clip c:multi){groupStarts.put(c,c.start);groupMin=Math.min(groupMin,c.start);groupMax=Math.max(groupMax,c.start+c.length);}performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);}
+    long raw=(long)(mx/bp*Core.beat(session.bpm));long first=Core.snap(Math.max(0,groupMin+raw),session.bpm,session.snapDivision);long delta=Math.max(-groupMin,Math.min(Core.MAX_FRAMES-groupMax,first-groupMin));
+    for(java.util.Map.Entry<Core.Clip,Long> en:groupStarts.entrySet())en.getKey().start=en.getValue()+delta;
+   }else if(state==ArrangeGesture.EDIT&&touched!=null){
     if(!moving){engine.pause();checkpoint();moving=true;selected=target;clip=touched;pro.beginDrag(touched,dx,head,bp);
      if(arrangeTool!=2)pro.dragEdge=0;else if(pro.dragEdge==0)pro.dragEdge=(dx-(head+(float)(oldStart/(double)Core.beat(session.bpm)*bp)-timelineScroll))<oldLength/(double)Core.beat(session.bpm)*bp/2?-1:1;
      performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);updateInspector();
@@ -457,6 +461,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
    invalidate();return true;
   }
   if(action==MotionEvent.ACTION_UP){
+   if(moving&&groupStarts!=null){groupStarts=null;moving=false;save(false);toast(multi.size()+" clips moved.");invalidate();return true;}
    if(moving){pro.drop(target,touched);moving=false;save(false);updateInspector();invalidate();return true;}
    if(scrolling)return true;
    if(mode==1&&x>=head){boolean was=engine.playing;engine.seek(pro.snapSeek((long)((x-head+timelineScroll)/bp*Core.beat(session.bpm)),bp));if(was)engine.play(session);invalidate();return true;}
