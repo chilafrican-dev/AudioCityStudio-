@@ -59,12 +59,14 @@ public final class AudioIO {
  /** Audio output stream used by the engine: AAudio (native, exclusive/MMAP when the device allows) or AudioTrack. */
  abstract static class Output{
   abstract void start()throws IOException;abstract int write(float[] data,int offset,int samples)throws IOException;abstract long heard();abstract int burst();abstract int bufferFrames();abstract String describe();abstract void interrupt();abstract void close();
+  /** When set, playback goes to this output (used for the top earpiece during speaker takes). */
+  static volatile android.media.AudioDeviceInfo preferred;
   static Output open(boolean lowLatency,boolean preferNative,int burstHint)throws IOException{
-   if(lowLatency&&preferNative&&NativeAudio.AVAILABLE){long h=NativeAudio.open(Core.RATE,2,true,2);if(h==0)h=NativeAudio.open(Core.RATE,2,false,2);if(h!=0)return new NativeOutput(h);}
+   if(preferred==null&&lowLatency&&preferNative&&NativeAudio.AVAILABLE){long h=NativeAudio.open(Core.RATE,2,true,2);if(h==0)h=NativeAudio.open(Core.RATE,2,false,2);if(h!=0)return new NativeOutput(h);}
    return new TrackOutput(lowLatency,burstHint);}
  }
  static final class TrackOutput extends Output{final AudioTrack t;final int burst;
-  TrackOutput(boolean lowLatency,int burstHint){int min=AudioTrack.getMinBufferSize(Core.RATE,AudioFormat.CHANNEL_OUT_STEREO,AudioFormat.ENCODING_PCM_FLOAT);t=new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()).setAudioFormat(new AudioFormat.Builder().setSampleRate(Core.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_FLOAT).build()).setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(Math.max(min,4096)).setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY).build();burst=Math.max(32,Math.min(512,burstHint));if(lowLatency)try{t.setBufferSizeInFrames(burst*2);}catch(Exception ignored){}}
+  TrackOutput(boolean lowLatency,int burstHint){int min=AudioTrack.getMinBufferSize(Core.RATE,AudioFormat.CHANNEL_OUT_STEREO,AudioFormat.ENCODING_PCM_FLOAT);t=new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()).setAudioFormat(new AudioFormat.Builder().setSampleRate(Core.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_FLOAT).build()).setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(Math.max(min,4096)).setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY).build();burst=Math.max(32,Math.min(512,burstHint));if(lowLatency)try{t.setBufferSizeInFrames(burst*2);}catch(Exception ignored){}android.media.AudioDeviceInfo want=Output.preferred;if(want!=null)try{t.setPreferredDevice(want);}catch(Exception ignored){}}
   void start(){t.play();}int write(float[] d,int o,int n){return t.write(d,o,n,AudioTrack.WRITE_BLOCKING);}long heard(){return t.getPlaybackHeadPosition()&0xffffffffL;}int burst(){return burst;}int bufferFrames(){return t.getBufferSizeInFrames();}String describe(){return "AudioTrack (Java)";}
   void interrupt(){try{t.pause();}catch(Exception ignored){}}void close(){try{t.pause();t.flush();t.release();}catch(Exception ignored){}}}
  static final class NativeOutput extends Output{final long h;volatile boolean closed;NativeOutput(long handle){h=handle;}
@@ -97,6 +99,8 @@ public final class AudioIO {
   public volatile boolean useNative=true;
   /** Playback level; lowered while recording through the phone speaker so less beat reaches the microphone. */
   public volatile float outputGain=1f;
+  /** Speaker layout during speaker takes: 0 both, 1 left only, 2 right only, 3 top earpiece. */
+  public volatile int speakerRoute;
   public volatile String outputPath="";
   private Thread thread;
   private volatile Output device;
@@ -157,7 +161,7 @@ public final class AudioIO {
        double g=monitorGain*session.master;
        for(int i=0;i<n*2;i++){double combined=data[i]+mon[i]*g;data[i]=(float)Math.max(-.89125,Math.min(.89125,combined));}
       }
-      float og=outputGain;if(og!=1f)for(int gi=0;gi<n*2;gi++)data[gi]*=og;
+      float og=outputGain;if(og!=1f)for(int gi=0;gi<n*2;gi++)data[gi]*=og;SpeakerChoice.route(data,n,speakerRoute);
       int written=0;
       while(playing&&written<n*2){
        int v=track.write(data,written,n*2-written);
@@ -188,7 +192,7 @@ public final class AudioIO {
  public static final class Capture {
   public volatile boolean running;public volatile float meter;public volatile String error,route;
   /** Optional input device (for example a USB audio interface), first input channel (0-based) and whether to record a stereo pair. */
-  public volatile AudioDeviceInfo device;public volatile boolean echoCancel;public volatile int channel=0;public volatile boolean stereo=false;
+  public volatile AudioDeviceInfo device;public volatile boolean echoCancel,cameraMic;public volatile int channel=0;public volatile boolean stereo=false;
   /** When set, every recorded frame is also pushed here for input monitoring. */
   public volatile Pro.Ring monitor;
   private Thread thread;private AudioRecord recorder;
@@ -203,7 +207,7 @@ public final class AudioIO {
    if(device!=null&&!r.setPreferredDevice(device)){r.release();return null;}
    channelsOut[0]=Math.max(1,r.getChannelCount());return r;}
   public void begin(File file,Runnable finished){running=true;route=null;final AudioDeviceInfo wanted=device;final int first=channel;final boolean pair=stereo;thread=new Thread(()->{AudioRecord r=null;try{int[] channels={1};
-   int[] order=echoCancel?new int[]{MediaRecorder.AudioSource.VOICE_COMMUNICATION,MediaRecorder.AudioSource.MIC}:new int[]{MediaRecorder.AudioSource.UNPROCESSED,MediaRecorder.AudioSource.MIC};for(int source:order){r=open(source,wanted,first,pair,channels);if(r!=null)break;}
+   int[] order=echoCancel?new int[]{MediaRecorder.AudioSource.VOICE_COMMUNICATION,MediaRecorder.AudioSource.MIC}:cameraMic?new int[]{MediaRecorder.AudioSource.CAMCORDER,MediaRecorder.AudioSource.UNPROCESSED,MediaRecorder.AudioSource.MIC}:new int[]{MediaRecorder.AudioSource.UNPROCESSED,MediaRecorder.AudioSource.MIC};for(int source:order){r=open(source,wanted,first,pair,channels);if(r!=null)break;}
    if(r!=null&&echoCancel){try{if(android.media.audiofx.AcousticEchoCanceler.isAvailable()){android.media.audiofx.AcousticEchoCanceler aec=android.media.audiofx.AcousticEchoCanceler.create(r.getAudioSessionId());if(aec!=null)aec.setEnabled(true);}}catch(Exception ignored){}}
    if(r==null&&wanted!=null){r=open(MediaRecorder.AudioSource.MIC,null,0,false,channels);if(r!=null)route="The selected input could not be opened, so the phone microphone was used.";}
    if(r==null)throw new IOException("Microphone could not be opened.");
