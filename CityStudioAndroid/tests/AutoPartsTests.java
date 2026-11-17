@@ -101,6 +101,18 @@ public final class AutoPartsTests {
         check(h.get(0).startBeat == 0 && Math.abs(h.get(1).startBeat - 1.25) < .26 && Math.abs(h.get(2).startBeat - 2.5) < .26, "hum timing " + h.get(1).startBeat + " " + h.get(2).startBeat);
         check(h.get(0).pitch >= 57 && h.get(0).pitch <= 81, "hum moved to a melody register");
         check(AutoParts.fromHum(new float[rate * 2], 120, an, bpb).isEmpty(), "silence gives nothing");
+        // Hummed along with the song: notes keep their place against the beat (0.2 s at 120 BPM is beat 0.5).
+        List<AiMidiGenerator.Note> al = AutoParts.fromHum(hum, 120, an, bpb, true);
+        check(al.size() == 3 && Math.abs(al.get(0).startBeat - .5) < 1e-9 && Math.abs(al.get(1).startBeat - 1.5) < .26, "aligned hum timing " + al.get(0).startBeat + " " + al.get(1).startBeat);
+        // Quiet leftovers of the song under the hum are ignored.
+        float[] dirty = hum.clone(); for (int i = 0; i < dirty.length; i++) dirty[i] += (float) (.012 * Math.sin(2 * Math.PI * 392 * i / rate));
+        check(AutoParts.fromHum(dirty, 120, an, bpb, true).size() == 3, "leftover song ignored");
+        // Wrong notes: gentle fixing moves only strong or long notes; full fixing moves every note onto the chord.
+        List<AiMidiGenerator.Note> wrong = new ArrayList<>(); wrong.add(new AiMidiGenerator.Note(71, 90, 0, .5)); wrong.add(new AiMidiGenerator.Note(62, 90, .5, .5)); wrong.add(new AiMidiGenerator.Note(65, 90, 1, 1));
+        List<AiMidiGenerator.Note> gentle = AutoParts.fitToChords(wrong, an, bpb, false), full = AutoParts.fitToChords(wrong, an, bpb, true);
+        check(an.chords[0].has(gentle.get(0).pitch) && gentle.get(1).pitch == 62 && an.chords[0].has(gentle.get(2).pitch), "gentle fix: " + gentle.get(0).pitch + " " + gentle.get(1).pitch + " " + gentle.get(2).pitch);
+        for (AiMidiGenerator.Note n : full) check(an.chords[0].has(n.pitch), "full fix puts every note on the chord");
+        check(Math.abs(gentle.get(0).pitch - 71) <= 2, "fix moves a note only a small step");
         // Tweaks
         List<AiMidiGenerator.Note> base = AutoParts.generate(AutoParts.MELODY, 1, 3, an, bpb, null, 7);
         List<AiMidiGenerator.Note> s = AutoParts.simpler(base, bpb), b = AutoParts.busier(base, an);

@@ -400,11 +400,17 @@ public final class AutoParts {
     }
 
     /** "Hum it": mono audio at 12 kHz. Finds the hummed notes, moves them into the key and onto the beat grid. */
-    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb) {
+    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb) { return fromHum(mono12k, bpm, an, bpb, false); }
+
+    /** aligned = the audio starts exactly at the first beat of the clip (hummed along with the song), so notes keep their place against the beat. */
+    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb, boolean aligned) {
         List<AiMidiGenerator.Note> out = new ArrayList<>(); if (mono12k == null) return out;
         final int hop = 120; int frames = Math.max(0, (mono12k.length - 700) / hop); if (frames < 10) return out;
         double[] midi = new double[frames];
-        for (int f = 0; f < frames; f++) { double hz = PitchCorrector.detect(mono12k, f * hop, 80, 900); midi[f] = hz > 0 ? 69 + 12 * Math.log(hz / 440) / Math.log(2) : Double.NaN; }
+        // Loudness gate: only the clearly hummed parts count, so leftover song or room noise is ignored.
+        double[] rms = new double[frames]; for (int f = 0; f < frames; f++) { double e = 0; for (int i = 0; i < 384; i++) { double v = mono12k[f * hop + i]; e += v * v; } rms[f] = Math.sqrt(e / 384); }
+        double[] sortedRms = rms.clone(); Arrays.sort(sortedRms); double loud = sortedRms[(int) (frames * .95)], gate = Math.max(.004, loud * .18);
+        for (int f = 0; f < frames; f++) { double hz = rms[f] >= gate ? PitchCorrector.detect(mono12k, f * hop, 80, 900) : 0; midi[f] = hz > 0 ? 69 + 12 * Math.log(hz / 440) / Math.log(2) : Double.NaN; }
         double[] sm = new double[frames]; double[] win = new double[5];
         for (int f = 0; f < frames; f++) { int n = 0; for (int k = -2; k <= 2; k++) { int j = f + k; if (j >= 0 && j < frames && !Double.isNaN(midi[j])) win[n++] = midi[j]; } if (n < 2 || Double.isNaN(midi[f])) { sm[f] = n >= 4 ? med(win, n) : Double.NaN; } else sm[f] = med(win, n); }
         List<double[]> raw = new ArrayList<>(); // {startFrame, endFrame, meanPitch}
@@ -423,7 +429,7 @@ public final class AutoParts {
         if (raw.isEmpty()) return out;
         double[] ps = new double[raw.size()]; for (int i = 0; i < ps.length; i++) ps[i] = raw.get(i)[2]; double median = med(ps.clone(), ps.length);
         int shift = 0; while (median + shift < 60) shift += 12; while (median + shift > 78) shift -= 12;
-        double bps = bpm / 60.0, t0 = raw.get(0)[0] * hop / 12000.0, end = an.chords.length * (double) bpb; double lastStart = -1;
+        double bps = bpm / 60.0, t0 = aligned ? 0 : raw.get(0)[0] * hop / 12000.0, end = an.chords.length * (double) bpb; double lastStart = -1;
         for (double[] r : raw) {
             double start = Math.round((r[0] * hop / 12000.0 - t0) * bps * 4) / 4.0, len = Math.max(.25, Math.round((r[1] - r[0]) * hop / 12000.0 * bps * 4) / 4.0);
             if (start >= end) break; if (start <= lastStart) start = lastStart + .25; if (start >= end) break;
@@ -433,6 +439,21 @@ public final class AutoParts {
         }
         return out;
     }
+    /**
+     * Fixes notes that clash with the chords. Gentle (all = false): only long notes and notes on the strong beats move to
+     * the nearest chord note, so the tune keeps its shape. all = true pulls every note onto the chords.
+     */
+    public static List<AiMidiGenerator.Note> fitToChords(List<AiMidiGenerator.Note> notes, Analysis an, int bpb, boolean all) {
+        List<AiMidiGenerator.Note> out = new ArrayList<>();
+        for (AiMidiGenerator.Note n : notes) {
+            int bar = Math.max(0, Math.min(an.chords.length - 1, (int) (n.startBeat / bpb))); Chord c = an.chords[bar]; double inBar = n.startBeat - bar * (double) bpb;
+            boolean strong = Math.abs(inBar % 2) < 1e-6 || n.lengthBeat >= .95; int pitch = n.pitch;
+            if ((all || strong) && !c.has(pitch)) for (int d = 1; d <= 4; d++) { if (c.has(pitch - d)) { pitch -= d; break; } if (c.has(pitch + d)) { pitch += d; break; } }
+            out.add(note(pitch, n.velocity, n.startBeat, n.lengthBeat));
+        }
+        return out;
+    }
+
     static double med(double[] v, int n) { double[] c = Arrays.copyOf(v, n); Arrays.sort(c); return c[n / 2]; }
 
     /** Octave up or down, refused when it would leave a comfortable range. */

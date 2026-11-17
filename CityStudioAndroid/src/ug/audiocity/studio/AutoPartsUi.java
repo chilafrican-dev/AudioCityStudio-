@@ -175,6 +175,7 @@ final class AutoPartsUi {
         LinearLayout tweaks = new LinearLayout(a); String[] tw = {"⬆ Higher", "⬇ Lower", "Simpler", "Busier"};
         for (int i = 0; i < tw.length; i++) { final int kind = i; Button b = chip(tw[i], new Runnable() { public void run() { tweak(kind); } }); style(b, false); b.setTextSize(12); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, a.dp(42), 1); lp.rightMargin = a.dp(i < 3 ? 5 : 0); tweaks.addView(b, lp); }
         LinearLayout.LayoutParams twp = new LinearLayout.LayoutParams(-1, -2); twp.topMargin = a.dp(6); card.addView(tweaks, twp);
+        Button fix = chip("✨  Fix wrong notes", new Runnable() { public void run() { tweak(4); } }); style(fix, false); fix.setTextSize(12); LinearLayout.LayoutParams fxp = new LinearLayout.LayoutParams(-1, a.dp(42)); fxp.topMargin = a.dp(6); card.addView(fix, fxp);
         LinearLayout.LayoutParams cardP = new LinearLayout.LayoutParams(-1, -2); cardP.topMargin = a.dp(6); q.addView(card, 2, cardP);
 
         Button more = chip("More choices: style, sound, length…", new Runnable() { public void run() { stopPreview(false); sound = -1; if (dialog != null) dialog.dismiss(); show(); } }); style(more, false);
@@ -246,7 +247,7 @@ final class AutoPartsUi {
     void tweak(int kind) {
         if (current == null) return; boolean bass = currentPart == AutoParts.BASS; List<AiMidiGenerator.Note> n;
         if (kind == 0) n = AutoParts.transpose(current.notes, 12, bass ? 24 : 45, bass ? 60 : 96); else if (kind == 1) n = AutoParts.transpose(current.notes, -12, bass ? 24 : 45, bass ? 60 : 96);
-        else if (kind == 2) n = AutoParts.simpler(current.notes, ui.map().beatsPerBar()); else n = AutoParts.busier(current.notes, analysis);
+        else if (kind == 2) n = AutoParts.simpler(current.notes, ui.map().beatsPerBar()); else if (kind == 4) { n = AutoParts.fitToChords(current.notes, analysis, ui.map().beatsPerBar(), true); boolean same = true; for (int i = 0; i < n.size(); i++) if (n.get(i).pitch != current.notes.get(i).pitch) same = false; if (same) { a.toast("Every note already fits the chords."); return; } } else n = AutoParts.busier(current.notes, analysis);
         if (n == null) { a.toast(kind == 0 ? "That's as high as it goes." : "That's as low as it goes."); return; }
         if (n.size() > 400) { a.toast("That's as busy as it gets."); return; }
         present(currentPart, current.title, n);
@@ -337,37 +338,68 @@ final class AutoPartsUi {
     void humIt() {
         if (!a.canEdit()) return; stopPreview(false);
         if (a.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) { a.requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 77); a.toast("Allow the microphone, then tap Hum it again."); return; }
-        readProject(); final AutoParts.Analysis an = analysis; final int bpb = ui.map().beatsPerBar(), bpm = (int) Math.round(a.session.bpm);
+        readProject(); final AutoParts.Analysis an = analysis; final int bpb = ui.map().beatsPerBar(), bpm = (int) Math.round(a.session.bpm); final Core.Session s = a.session;
+        final boolean phones = a.headphonesConnected(); final long regionStart = startFrame; final int regionFrames = lengthFrames;
+        if (regionFrames > Core.RATE * 70L) { a.toast("That is too long to hum in one go. Use a faster tempo or fewer bars."); return; }
+        final boolean oldLoop = a.engine.loop, oldClick = a.engine.click; final long oldStart = s.loopStart, oldEnd = s.loopEnd; final float oldGain = a.engine.outputGain; final boolean[] restored = {true};
+        final Runnable restore = new Runnable() { public void run() { if (restored[0]) return; restored[0] = true; a.engine.pause(); a.engine.click = oldClick; a.engine.loop = oldLoop; s.loopStart = oldStart; s.loopEnd = oldEnd; a.engine.outputGain = oldGain; a.refresh(); } };
         LinearLayout col = a.column(); col.setPadding(a.dp(16), a.dp(10), a.dp(16), a.dp(4)); col.setBackgroundColor(SHEET);
         col.addView(a.label("Hum your tune", 18, VIOLET, true));
-        TextView help = a.label("Hold the phone close and hum or sing \"la la la\", one note at a time, up to 15 seconds. The song stays silent while I listen. I'll fix the notes so they fit your key.", 12, MUTED, false); help.setPadding(0, a.dp(2), 0, a.dp(10)); col.addView(help);
-        final TextView status = a.label("Press Start, then hum.", 14, TXT, true); status.setGravity(Gravity.CENTER);
+        TextView help = a.label((phones ? "Your song plays in your headphones after a count." : "Your song plays quietly from the speaker after a count. I remove it from the recording afterwards. Headphones give the best result.") + " Hum or sing \"la la la\" along with it. Don't worry about wrong notes: I move them onto your key and chords.", 12, MUTED, false); help.setPadding(0, a.dp(2), 0, a.dp(10)); col.addView(help);
+        final TextView status = a.label("Press Start, listen for the count, then hum.", 14, TXT, true); status.setGravity(Gravity.CENTER);
         final Button go = new Button(a); go.setAllCaps(false); go.setText("🎤  Start"); go.setTextSize(20); go.setTextColor(INK); go.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD)); go.setBackground(pill(COLORS[0], COLORS[0], 22));
         col.addView(go, new LinearLayout.LayoutParams(-1, a.dp(120))); LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.topMargin = a.dp(10); col.addView(status, sp);
         final AlertDialog d = new AlertDialog.Builder(a).setView(col).setNegativeButton("Cancel", null).create();
-        d.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() { public void onDismiss(android.content.DialogInterface x) { humming = false; } });
+        d.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() { public void onDismiss(android.content.DialogInterface x) { humming = false; restore.run(); } });
         go.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
             if (humming) { humming = false; go.setEnabled(false); status.setText("Finding your notes…"); return; }
-            humming = true; go.setText("■  Done"); status.setText("Listening… hum now");
+            humming = true; go.setText("■  Done"); status.setText("Count-in…");
+            restored[0] = false; s.loopStart = regionStart; s.loopEnd = regionStart + regionFrames; a.engine.loop = true; a.engine.click = true; a.engine.position = regionStart; a.engine.outputGain = phones ? oldGain : oldGain * .5f;
             new Thread(new Runnable() { public void run() {
-                final float[] buf = new float[12000 * 15]; int n = 0; String problem = null; android.media.AudioRecord rec = null;
+                long countFrames = Core.beat(s.bpm) * bpb; final float[] mic = new float[(int) Math.min(Core.RATE * 90L, regionFrames + countFrames + Core.RATE * 4L)]; int n = 0; String problem = null; android.media.AudioRecord rec = null;
+                java.util.ArrayList<Long> stamps = new java.util.ArrayList<>(); long origin = -1;
                 try {
                     int min = android.media.AudioRecord.getMinBufferSize(Core.RATE, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT);
                     rec = new android.media.AudioRecord(android.media.MediaRecorder.AudioSource.MIC, Core.RATE, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, Math.max(min, Core.RATE / 2));
-                    short[] in = new short[Core.RATE / 10]; int step = Core.RATE / 12000; rec.startRecording(); long shown = 0;
-                    while (humming && n < buf.length) {
-                        int r = rec.read(in, 0, in.length); if (r <= 0) break; float peak = 0;
-                        for (int i = 0; i + step <= r && n < buf.length; i += step) { float sum = 0; for (int k = 0; k < step; k++) sum += in[i + k]; float val = sum / (step * 32768f); buf[n++] = val; peak = Math.max(peak, Math.abs(val)); }
-                        final int secs = n / 12000; final boolean quiet = peak < .01f;
-                        if (System.currentTimeMillis() - shown > 400) { shown = System.currentTimeMillis(); a.runOnUiThread(new Runnable() { public void run() { if (humming) status.setText("Listening… " + secs + " s" + (quiet ? "  ·  I can't hear you, hum louder" : "")); } }); }
+                    short[] in = new short[Core.RATE / 50]; rec.startRecording(); long shown = 0;
+                    a.runOnUiThread(new Runnable() { public void run() { if (humming && a.requestAudioFocus()) a.engine.playCounted(s, bpb); } });
+                    while (humming && n < mic.length) {
+                        int r = rec.read(in, 0, Math.min(in.length, mic.length - n)); if (r <= 0) break; float peak = 0;
+                        for (int i = 0; i < r; i++) { float val = in[i] / 32768f; mic[n++] = val; peak = Math.max(peak, Math.abs(val)); }
+                        // Where in the recording does the first beat of the song fall? Sample the playback position as we go.
+                        if (a.engine.playing && a.engine.countInRemaining <= 0) { long pos = a.engine.position; if (pos > regionStart && pos < regionStart + regionFrames && stamps.size() < 400) stamps.add(n - (pos - regionStart - a.engine.latencyFrames)); }
+                        if (stamps.size() >= 15) { java.util.ArrayList<Long> c = new java.util.ArrayList<>(stamps); java.util.Collections.sort(c); origin = c.get(c.size() / 2); if (n >= origin + regionFrames + Core.RATE * 3 / 10) break; }
+                        final boolean started = !stamps.isEmpty(), quiet = peak < .01f;
+                        if (System.currentTimeMillis() - shown > 400) { shown = System.currentTimeMillis(); a.runOnUiThread(new Runnable() { public void run() { if (humming) status.setText(started ? "Hum along now…" + (quiet ? "  ·  I can't hear you, hum louder" : "") : "Count-in…"); } }); }
                     }
                 } catch (Exception ex) { problem = "The microphone could not start."; }
                 finally { if (rec != null) try { rec.stop(); } catch (Exception ignored) {} if (rec != null) rec.release(); }
-                final boolean cancelled = !d.isShowing(); humming = false;
-                final List<AiMidiGenerator.Note> notes = problem == null && !cancelled ? AutoParts.fromHum(java.util.Arrays.copyOf(buf, n), bpm, an, bpb) : new ArrayList<AiMidiGenerator.Note>(); final String issue = problem;
+                final boolean cancelled = !d.isShowing(); humming = false; a.runOnUiThread(restore);
+                a.runOnUiThread(new Runnable() { public void run() { if (d.isShowing()) { go.setEnabled(false); status.setText(phones ? "Finding your notes…" : "Removing the song from your hum, then finding your notes…"); } } });
+                List<AiMidiGenerator.Note> found = new ArrayList<>();
+                if (problem == null && !cancelled) try {
+                    if (origin < 0) problem = "The song did not start. Try again.";
+                    else {
+                        float[] mono48;
+                        if (phones) { int from = (int) Math.max(0, origin), len = Math.max(0, Math.min(regionFrames, n - from)); mono48 = java.util.Arrays.copyOfRange(mic, from, from + len); }
+                        else {
+                            // Take away the song that leaked from the speaker, and use its measured delay to line the hum up exactly.
+                            final int margin = Core.RATE * 15 / 100, total = regionFrames + margin * 2, recorded = n; final long base = origin - margin;
+                            float[] ref = new float[regionFrames * 2], block = new float[1024]; Core.Renderer renderer = new Core.Renderer(s); renderer.meterLoudness = false;
+                            for (int p = 0; p < regionFrames; p += 512) { int k = Math.min(512, regionFrames - p); renderer.render(regionStart + p, k, block, true); System.arraycopy(block, 0, ref, p * 2, k * 2); }
+                            final float[] cleaned = new float[total]; final int[] at = {0};
+                            BleedRemover.Reader take = new BleedRemover.Reader() { public void read(long f, float[] out, int k) { for (int i = 0; i < k; i++) { long q = base + f + i; float val = q >= 0 && q < recorded ? mic[(int) q] : 0; out[i * 2] = val; out[i * 2 + 1] = val; } } };
+                            BleedRemover.Report rep = BleedRemover.process(take, BleedRemover.of(ref), total, .9, new BleedRemover.Sink() { public void write(float[] sb, int k) { for (int i = 0; i < k && at[0] < total; i++) cleaned[at[0]++] = sb[i * 2]; } });
+                            int lag = Math.max(0, Math.min(total - 1, rep.delayFrames)); mono48 = java.util.Arrays.copyOfRange(cleaned, lag, Math.min(total, lag + regionFrames));
+                        }
+                        int step = Core.RATE / 12000; float[] mono12 = new float[mono48.length / step]; for (int i = 0; i < mono12.length; i++) { float sum = 0; for (int k = 0; k < step; k++) sum += mono48[i * step + k]; mono12[i] = sum / step; }
+                        found = AutoParts.fitToChords(AutoParts.fromHum(mono12, bpm, an, bpb, true), an, bpb, false);
+                    }
+                } catch (Exception ex) { problem = "Something went wrong while finding your notes. Try again."; } catch (OutOfMemoryError ex) { problem = "Not enough memory for a take this long. Try fewer bars."; }
+                final List<AiMidiGenerator.Note> notes = found; final String issue = problem;
                 a.runOnUiThread(new Runnable() { public void run() {
-                    if (cancelled || a.dead) return;
-                    if (issue != null || notes.size() < 2) { go.setEnabled(true); go.setText("🎤  Try again"); status.setText(issue != null ? issue : "I couldn't hear a clear tune. Hum louder, closer, one note at a time."); return; }
+                    if (cancelled || a.dead || !d.isShowing()) return;
+                    if (issue != null || notes.size() < 2) { go.setEnabled(true); go.setText("🎤  Try again"); status.setText(issue != null ? issue : "I couldn't hear a clear tune. Hum louder and closer to the phone."); return; }
                     d.dismiss(); again = new Runnable() { public void run() { humIt(); } }; present(AutoParts.MELODY, "Melody · Hummed", notes);
                 } });
             } }, "hum").start();
