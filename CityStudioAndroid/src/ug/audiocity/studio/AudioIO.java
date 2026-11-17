@@ -95,6 +95,8 @@ public final class AudioIO {
   volatile String error;
   /** Prefer the native AAudio stream (libaudiocity.so) when it is built into the APK. */
   public volatile boolean useNative=true;
+  /** Playback level; lowered while recording through the phone speaker so less beat reaches the microphone. */
+  public volatile float outputGain=1f;
   public volatile String outputPath="";
   private Thread thread;
   private volatile Output device;
@@ -155,6 +157,7 @@ public final class AudioIO {
        double g=monitorGain*session.master;
        for(int i=0;i<n*2;i++){double combined=data[i]+mon[i]*g;data[i]=(float)Math.max(-.89125,Math.min(.89125,combined));}
       }
+      float og=outputGain;if(og!=1f)for(int gi=0;gi<n*2;gi++)data[gi]*=og;
       int written=0;
       while(playing&&written<n*2){
        int v=track.write(data,written,n*2-written);
@@ -185,7 +188,7 @@ public final class AudioIO {
  public static final class Capture {
   public volatile boolean running;public volatile float meter;public volatile String error,route;
   /** Optional input device (for example a USB audio interface), first input channel (0-based) and whether to record a stereo pair. */
-  public volatile AudioDeviceInfo device;public volatile int channel=0;public volatile boolean stereo=false;
+  public volatile AudioDeviceInfo device;public volatile boolean echoCancel;public volatile int channel=0;public volatile boolean stereo=false;
   /** When set, every recorded frame is also pushed here for input monitoring. */
   public volatile Pro.Ring monitor;
   private Thread thread;private AudioRecord recorder;
@@ -200,7 +203,8 @@ public final class AudioIO {
    if(device!=null&&!r.setPreferredDevice(device)){r.release();return null;}
    channelsOut[0]=Math.max(1,r.getChannelCount());return r;}
   public void begin(File file,Runnable finished){running=true;route=null;final AudioDeviceInfo wanted=device;final int first=channel;final boolean pair=stereo;thread=new Thread(()->{AudioRecord r=null;try{int[] channels={1};
-   for(int source:new int[]{MediaRecorder.AudioSource.UNPROCESSED,MediaRecorder.AudioSource.MIC}){r=open(source,wanted,first,pair,channels);if(r!=null)break;}
+   int[] order=echoCancel?new int[]{MediaRecorder.AudioSource.VOICE_COMMUNICATION,MediaRecorder.AudioSource.MIC}:new int[]{MediaRecorder.AudioSource.UNPROCESSED,MediaRecorder.AudioSource.MIC};for(int source:order){r=open(source,wanted,first,pair,channels);if(r!=null)break;}
+   if(r!=null&&echoCancel){try{if(android.media.audiofx.AcousticEchoCanceler.isAvailable()){android.media.audiofx.AcousticEchoCanceler aec=android.media.audiofx.AcousticEchoCanceler.create(r.getAudioSessionId());if(aec!=null)aec.setEnabled(true);}}catch(Exception ignored){}}
    if(r==null&&wanted!=null){r=open(MediaRecorder.AudioSource.MIC,null,0,false,channels);if(r!=null)route="The selected input could not be opened, so the phone microphone was used.";}
    if(r==null)throw new IOException("Microphone could not be opened.");
    recorder=r;r.startRecording();int width=channels[0];short[] samples=new short[1024*width];
