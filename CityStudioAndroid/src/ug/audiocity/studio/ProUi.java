@@ -696,10 +696,37 @@ final class ProUi {
     void install() {
         recovered = prefs().getBoolean("running", false);
         final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> { try { if (a.session != null && a.session.directory != null) AudioIO.save(a.session.copy()); } catch (Throwable ignored) {} if (previous != null) previous.uncaughtException(thread, error); });
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            try { writeCrash(thread, error); } catch (Throwable ignored) {}
+            try { if (a.session != null && a.session.directory != null) AudioIO.save(a.session.copy()); } catch (Throwable ignored) {}
+            if (previous != null) previous.uncaughtException(thread, error);
+        });
+        a.handler.postDelayed(this::showLastCrash, 1200);
         a.handler.postDelayed(new Runnable() { public void run() { if (a.dead) return; if (a.session != null && !a.working && a.capture == null && a.midiTake == null) { try { AudioIO.save(a.session.copy()); } catch (Exception ignored) {} } a.handler.postDelayed(this, 60000); } }, 60000);
         if (a.getResources().getConfiguration().smallestScreenWidthDp >= 600) a.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
         applyAudioSettings();
+    }
+    java.io.File crashFile() { return new java.io.File(a.getFilesDir(), "last-crash.txt"); }
+    /** Keeps the error report of a crash so it can be shown (and sent to the developer) the next time the app opens. */
+    void writeCrash(Thread thread, Throwable error) throws Exception {
+        java.io.StringWriter sw = new java.io.StringWriter(); java.io.PrintWriter pw = new java.io.PrintWriter(sw);
+        String version = "?"; try { version = a.getPackageManager().getPackageInfo(a.getPackageName(), 0).versionName; } catch (Throwable ignored) {}
+        pw.println("Audio City Studio " + version + " · Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT + ") · " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL);
+        pw.println("Time: " + new java.util.Date() + " · thread: " + thread.getName());
+        pw.println("Screen: " + a.getClass().getSimpleName() + " · tracks: " + (a.session == null ? "-" : String.valueOf(a.session.tracks.size())) + " · playing: " + a.engine.playing);
+        pw.println(); error.printStackTrace(pw); pw.flush();
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(crashFile())) { out.write(sw.toString().getBytes("UTF-8")); }
+    }
+    void showLastCrash() {
+        if (a.dead) return; java.io.File f = crashFile(); if (!f.isFile()) return;
+        final String text; try { text = new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8"); } catch (Exception e) { f.delete(); return; }
+        f.delete();
+        TextView body = new TextView(a); body.setText("The app closed because of an error. Please tap Copy and send this report so it can be fixed.\n\n" + text); body.setTextIsSelectable(true); body.setTextSize(11); body.setTypeface(android.graphics.Typeface.MONOSPACE); body.setPadding(a.dp(18), a.dp(10), a.dp(18), a.dp(10));
+        ScrollView sv = new ScrollView(a); sv.addView(body);
+        new AlertDialog.Builder(a).setTitle("Crash report").setView(sv)
+            .setPositiveButton("Copy", (d, i) -> { android.content.ClipboardManager cm = (android.content.ClipboardManager) a.getSystemService(android.content.Context.CLIPBOARD_SERVICE); cm.setPrimaryClip(android.content.ClipData.newPlainText("Audio City crash report", text)); a.toast("Crash report copied. Paste it in the chat."); })
+            .setNeutralButton("Share", (d, i) -> { android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND); send.setType("text/plain"); send.putExtra(android.content.Intent.EXTRA_SUBJECT, "Audio City Studio crash report"); send.putExtra(android.content.Intent.EXTRA_TEXT, text); a.startActivity(android.content.Intent.createChooser(send, "Send crash report")); })
+            .setNegativeButton("Close", null).show();
     }
     void foreground(boolean on) { prefs().edit().putBoolean("running", on).apply(); }
     /** After the first project opens: tell the user if the previous run ended unexpectedly. */
