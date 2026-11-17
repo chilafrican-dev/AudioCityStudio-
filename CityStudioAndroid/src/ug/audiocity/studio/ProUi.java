@@ -713,7 +713,8 @@ final class ProUi {
         String version = "?"; try { version = a.getPackageManager().getPackageInfo(a.getPackageName(), 0).versionName; } catch (Throwable ignored) {}
         pw.println("Audio City Studio " + version + " · Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT + ") · " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL);
         pw.println("Time: " + new java.util.Date() + " · thread: " + thread.getName());
-        pw.println("Screen: " + a.getClass().getSimpleName() + " · tracks: " + (a.session == null ? "-" : String.valueOf(a.session.tracks.size())) + " · playing: " + a.engine.playing);
+        pw.println("Page: " + a.screen + " · tracks: " + (a.session == null ? "-" : String.valueOf(a.session.tracks.size())) + " · playing: " + a.engine.playing);
+        pw.println("Last actions:"); pw.println(MainActivity.trailText());
         pw.println(); error.printStackTrace(pw);
         try { java.io.File note = new java.io.File(a.getFilesDir(), "layout-note.txt"); if (note.isFile()) { pw.println(); pw.println("---- earlier warning ----"); pw.println(new String(java.nio.file.Files.readAllBytes(note.toPath()), "UTF-8")); note.delete(); } } catch (Throwable ignored) {}
         pw.flush();
