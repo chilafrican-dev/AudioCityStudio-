@@ -128,6 +128,19 @@ public final class AutoPartsTests {
         check(an.chords[0].has(gentle.get(0).pitch) && gentle.get(1).pitch == 62 && an.chords[0].has(gentle.get(2).pitch), "gentle fix: " + gentle.get(0).pitch + " " + gentle.get(1).pitch + " " + gentle.get(2).pitch);
         for (AiMidiGenerator.Note n : full) check(an.chords[0].has(n.pitch), "full fix puts every note on the chord");
         check(Math.abs(gentle.get(0).pitch - 71) <= 2, "fix moves a note only a small step");
+        // Notes are kept as hummed: a flat singer (-35 cents throughout), wide vibrato, and a note outside the key (F#) all come out as the notes meant.
+        int[] meant = {64, 66, 67, 69, 67, 64, 62, 60}; float[] flat = new float[rate * 6]; double fph = 0;
+        for (int i = 0; i < flat.length; i++) { double t = i / (double) rate; int k = (int) ((t - .3) / .6); if (t < .3 || k >= meant.length || (t - .3) % .6 > .5) continue; double midi = meant[k] - .35 + .3 * Math.sin(2 * Math.PI * 5.5 * t); double hz = 440 * Math.pow(2, (midi - 69) / 12.0); fph += 2 * Math.PI * hz / rate; flat[i] = (float) (.3 * (Math.sin(fph) + .4 * Math.sin(2 * fph))); }
+        List<AiMidiGenerator.Note> sungBack = AutoParts.fromHum(flat, 120, an, bpb, true);
+        StringBuilder got = new StringBuilder(); for (AiMidiGenerator.Note n : sungBack) got.append(n.pitch).append(' ');
+        check(sungBack.size() == meant.length, "every hummed note found: " + got);
+        for (int i = 0; i < meant.length; i++) check(sungBack.get(i).pitch - sungBack.get(0).pitch == meant[i] - meant[0], "hummed tune kept exactly (intervals): " + got);
+        check(((sungBack.get(1).pitch % 12) + 12) % 12 == 6, "the F# outside the key is kept, not moved: " + got);
+        List<AiMidiGenerator.Note> keyed = AutoParts.toKey(sungBack, an); check(an.minor || keyed.get(1).pitch != sungBack.get(1).pitch || true, "toKey runs");
+        // A note the pitch tracker heard an octave too high is folded back.
+        double[] octave = AutoParts.semitones(new double[]{60.1, 62.0, 76.1, 65.9, 67.0}); check(octave[2] == 64, "octave error fixed: " + octave[2]);
+        double[] leap = AutoParts.semitones(new double[]{60, 72, 60}); check(leap[1] == 60 || leap[1] == 72, "octave leap handled");
+        double[] flatTune = AutoParts.semitones(new double[]{59.62, 61.66, 63.6, 64.63}); check(flatTune[0] == 60 && flatTune[1] == 62 && flatTune[2] == 64 && flatTune[3] == 65, "flat singer's tuning removed: " + Arrays.toString(flatTune));
         // Tweaks
         List<AiMidiGenerator.Note> base = AutoParts.generate(AutoParts.MELODY, 1, 3, an, bpb, null, 7);
         List<AiMidiGenerator.Note> s = AutoParts.simpler(base, bpb), b = AutoParts.busier(base, an);

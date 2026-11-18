@@ -416,7 +416,14 @@ public final class AutoParts {
     public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb, boolean aligned) { return fromHum(mono12k, bpm, an, bpb, aligned, 0); }
 
     /** grid 0 keeps the timing exactly as hummed; otherwise notes snap to that grid (in beats). */
-    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb, boolean aligned, double grid) {
+    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb, boolean aligned, double grid) { return fromHum(mono12k, bpm, an, bpb, aligned, grid, false); }
+
+    /**
+     * Pitch is kept exactly as hummed by default: each note is the nearest semitone to what was sung, after removing the
+     * singer's overall tuning (someone humming 30 cents flat throughout still gets the notes they meant). Only snapToKey
+     * moves notes into the song's key.
+     */
+    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb, boolean aligned, double grid, boolean snapToKey) {
         List<AiMidiGenerator.Note> out = new ArrayList<>(); if (mono12k == null) return out;
         final int hop = 120; int frames = Math.max(0, (mono12k.length - 700) / hop); if (frames < 10) return out;
         double[] midi = new double[frames];
@@ -475,12 +482,13 @@ public final class AutoParts {
         }
         double[] ps = new double[notes.size()]; double loudest = 1e-9; for (int i = 0; i < ps.length; i++) { ps[i] = notes.get(i)[2]; loudest = Math.max(loudest, notes.get(i)[3]); } double median = med(ps.clone(), ps.length);
         int shift = 0; while (median + shift < 60) shift += 12; while (median + shift > 78) shift -= 12;
+        double[] tuned = semitones(ps); int idx = 0;
         double bps = bpm / 60.0, t0 = aligned ? 0 : notes.get(0)[0] / 1000.0, end = an.chords.length * (double) bpb;
         for (double[] r : notes) {
             double start = (r[0] / 1000.0 - t0) * bps, len = Math.max(.06, (r[1] - r[0]) / 1000.0 * bps);
             if (grid > 0) { start = Math.round(start / grid) * grid; len = Math.max(grid, Math.round(len / grid) * grid); }
-            if (start < 0) { len += start; start = 0; } if (len <= .03 || start >= end) continue;
-            int pitch = PitchCorrector.nearest((int) Math.round(r[2]) + shift, an.key, an.minor ? 2 : 1); int vel = (int) Math.round(70 + 40 * Math.min(1, r[3] / loudest));
+            if (start < 0) { len += start; start = 0; } if (len <= .03 || start >= end) { idx++; continue; }
+            int sung = (int) Math.round(tuned[idx++]) + shift; int pitch = snapToKey ? PitchCorrector.nearest(sung, an.key, an.minor ? 2 : 1) : sung; int vel = (int) Math.round(70 + 40 * Math.min(1, r[3] / loudest));
             if (!out.isEmpty()) { AiMidiGenerator.Note prev = out.get(out.size() - 1); if (prev.startBeat + prev.lengthBeat > start) { if (start - prev.startBeat < .03) continue; out.set(out.size() - 1, note(prev.pitch, prev.velocity, prev.startBeat, start - prev.startBeat)); } }
             out.add(note(pitch, vel, start, Math.min(len, end - start)));
         }
@@ -508,6 +516,29 @@ public final class AutoParts {
             out.add(note(pitch, n.velocity, n.startBeat, n.lengthBeat));
         }
         return out;
+    }
+
+    /**
+     * Turns sung pitches (fractional MIDI) into intended semitones: removes the singer's overall tuning offset (circular mean
+     * of the cents), then fixes single notes the pitch tracker heard an octave off (much higher or lower than both neighbours).
+     */
+    static double[] semitones(double[] sung) {
+        int n = sung.length; double[] out = new double[n]; if (n == 0) return out;
+        double sx = 0, sy = 0; for (double p : sung) { double a = 2 * Math.PI * (p - Math.floor(p)); sx += Math.cos(a); sy += Math.sin(a); }
+        double offset = Math.sqrt(sx * sx + sy * sy) > .3 * n ? Math.atan2(sy, sx) / (2 * Math.PI) : 0; // only when the tuning is consistent
+        if (offset > .5) offset -= 1; if (offset < -.5) offset += 1;
+        for (int i = 0; i < n; i++) out[i] = Math.round(sung[i] - offset);
+        for (int i = 0; i < n; i++) {
+            double prev = i > 0 ? out[i - 1] : Double.NaN, next = i + 1 < n ? out[i + 1] : Double.NaN, ref = Double.isNaN(prev) ? next : Double.isNaN(next) ? prev : (prev + next) / 2;
+            if (Double.isNaN(ref)) continue; boolean neighboursClose = Double.isNaN(prev) || Double.isNaN(next) || Math.abs(prev - next) <= 7;
+            while (neighboursClose && out[i] - ref > 9) out[i] -= 12; while (neighboursClose && ref - out[i] > 9) out[i] += 12;
+        }
+        return out;
+    }
+
+    /** Moves notes outside the song's key to the nearest key note (other notes stay put). */
+    public static List<AiMidiGenerator.Note> toKey(List<AiMidiGenerator.Note> notes, Analysis an) {
+        List<AiMidiGenerator.Note> out = new ArrayList<>(); for (AiMidiGenerator.Note x : notes) out.add(note(PitchCorrector.nearest(x.pitch, an.key, an.minor ? 2 : 1), x.velocity, x.startBeat, x.lengthBeat)); return out;
     }
 
     static double med(double[] v, int n) { double[] c = Arrays.copyOf(v, n); Arrays.sort(c); return c[n / 2]; }
