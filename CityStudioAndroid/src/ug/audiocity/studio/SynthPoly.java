@@ -14,14 +14,18 @@ public final class SynthPoly {
  static final class SampleVoice {
   final int channel,note;final SampledInstruments.Region region;final double velocity,step;
   double at=0,releaseFrame=-1,pitchStep,lastBend,lowL,lowR;long ageFrames;boolean pending;float left,right;
-  SampleVoice(int ch,int note,int vel,SampledInstruments.Region r){channel=ch;this.note=note;region=r;velocity=Math.pow(vel/127.0,.8)*Math.max(.01,Math.min(2,r.gain));step=Math.pow(2,(note-r.root)/12.0);pitchStep=step;}
+  /** Drums (MIDI channel 10) are one-shots: they play to the end of the sample like a drum machine, ignore note-off, and use a straight velocity scale. */
+  final boolean oneShot;
+  SampleVoice(int ch,int note,int vel,SampledInstruments.Region r){this(ch,note,vel,r,1);}
+  SampleVoice(int ch,int note,int vel,SampledInstruments.Region r,double level){channel=ch;this.note=note;region=r;oneShot=ch==9;velocity=(oneShot?vel/127.0:Math.pow(vel/127.0,.8))*Math.max(.01,Math.min(2,r.gain))*level;step=Math.pow(2,(note-r.root)/12.0);pitchStep=step;}
   void release(){if(releaseFrame<0)releaseFrame=0;}
+  void noteOff(){if(!oneShot)release();}
   boolean done(){return !region.loop&&at>=region.pcm.length/2.0||releaseFrame>=region.releaseFrames;}
   void tick(double bend){int n=region.pcm.length/2;double pos=at;
    if(region.loop&&region.loopEnd>region.loopStart&&pos>=region.loopEnd){pos=region.loopStart+(pos-region.loopStart)%(region.loopEnd-region.loopStart);at=pos;}
    if(n<1||pos>=n){left=right=0;at=n;return;}
    int i=(int)pos,j=Math.min(n-1,i+1);double frac=pos-i;
-   float envelope=(float)Math.min(1,ageFrames/(Core.RATE*.004));
+   float envelope=oneShot?1f:(float)Math.min(1,ageFrames/(Core.RATE*.004));
    if(releaseFrame>=0){envelope*=Math.max(0,1-releaseFrame/(double)region.releaseFrames);releaseFrame++;}
    left=(float)((region.pcm[i*2]+(region.pcm[j*2]-region.pcm[i*2])*frac)*velocity*envelope*.6);
    right=(float)((region.pcm[i*2+1]+(region.pcm[j*2+1]-region.pcm[i*2+1])*frac)*velocity*envelope*.6);
@@ -29,6 +33,9 @@ public final class SynthPoly {
    if(bend!=lastBend){pitchStep=step*Math.pow(2,bend/12.0);lastBend=bend;}at+=pitchStep;ageFrames++;
   }
  }
+ /** Same lane levels the pattern editor mixes with, so a placed pattern sounds like it did in the editor (kick loudest, hats softest). */
+ static final float[] PATTERN_LEVELS={.72f,.52f,.5f,.27f,.27f,.31f,.42f,.42f};
+ static double patternLevel(SampledInstruments.Pack pack,int note){if(pack==null||!"Pattern drum kit".equals(pack.source)||note<36||note>43)return 1;return PATTERN_LEVELS[note-36]/(.6*.8*.7);} // undo the voice (.6) and output stage (tanh(x*.8)*.7) gains
  private final SampledInstruments.Pack[] samplePacks=new SampledInstruments.Pack[16];
  final ArrayList<SampleVoice> sampled=new ArrayList<>();
  public synchronized void setSamplePack(SampledInstruments.Pack pack){silence();Arrays.fill(samplePacks,pack);}
@@ -43,17 +50,17 @@ public final class SynthPoly {
  public synchronized void message(int status,int a,int b){int channel=status&15,type=status&240;
   if(type==144&&b>0){
    for(Voice v:voices)if(v.channel==channel&&v.note==a)v.release();
-   for(SampleVoice v:sampled)if(v.channel==channel&&v.note==a)v.release();
+   if(channel!=9)for(SampleVoice v:sampled)if(v.channel==channel&&v.note==a)v.release();
    if(voices.size()+sampled.size()>=16){if(!sampled.isEmpty())sampled.remove(0);else voices.remove(0);}
    SampledInstruments.Pack pack=samplePacks[channel];
-   if(pack!=null){SampledInstruments.Region r=pack.find(a,b);if(r!=null)sampled.add(new SampleVoice(channel,a,b,r));}
+   if(pack!=null){SampledInstruments.Region r=pack.find(a,b);if(r!=null)sampled.add(new SampleVoice(channel,a,b,r,patternLevel(pack,a)));}
    else voices.add(new Voice(channel,a,b,config[channel]));
   }else if(type==128||type==144&&b==0){
    for(Voice v:voices)if(v.channel==channel&&v.note==a){if(sustain[channel])v.pending=true;else v.release();}
-   for(SampleVoice v:sampled)if(v.channel==channel&&v.note==a){if(sustain[channel])v.pending=true;else v.release();}
+   for(SampleVoice v:sampled)if(v.channel==channel&&v.note==a){if(sustain[channel])v.pending=true;else v.noteOff();}
   }else if(type==176&&a==64){sustain[channel]=b>=64;if(!sustain[channel]){
    for(Voice v:voices)if(v.channel==channel&&v.pending)v.release();
-   for(SampleVoice v:sampled)if(v.channel==channel&&v.pending)v.release();
+   for(SampleVoice v:sampled)if(v.channel==channel&&v.pending){v.pending=false;v.noteOff();}
   }}else if(type==176&&(a==120||a==123)){
    for(Voice v:voices)if(v.channel==channel)v.release();for(SampleVoice v:sampled)if(v.channel==channel)v.release();
    if(a==120){voices.removeIf(v->v.channel==channel);sampled.removeIf(v->v.channel==channel);}
