@@ -1,5 +1,14 @@
 # Audio City Studio for Android
 
+> Arrange rebuild status (16 November 2026): the new 960-PPQN data-model foundation
+> and tests are in `arrange/model`. It is not yet connected to the application.
+> Read [ARRANGE-REBUILD.md](ARRANGE-REBUILD.md) and [ARRANGE-ACCEPTANCE.md](ARRANGE-ACCEPTANCE.md)
+> before evaluating this source as a replacement Arrange engine.
+
+> Stage 2 update: a host-tested native resident-PCM playback kernel now lives in
+> `jni/arrange`. It is not connected to the Android audio path yet. See
+> [ARRANGE-PLAYBACK-STAGE2.md](ARRANGE-PLAYBACK-STAGE2.md) for results and remaining work.
+
 Version 0.12.0 — development build, developed for Nico Pan / Audio City.
 
 Native Android application with an ash-grey and dark-grey interface, rounded panels, silver knobs, waveform arrangement, channel strips, meters and transport controls. This is an independently built DAW interface inspired by conventional studio workflows; it is not affiliated with Apple or Logic Pro.

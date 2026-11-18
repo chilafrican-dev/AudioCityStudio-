@@ -60,7 +60,17 @@ public final class SampledInstruments {
   return out;
  }
  private static void visit(File root,File dir,List<File> out,int depth){if(depth>8)return;File[] entries=dir.listFiles();if(entries==null)return;Arrays.sort(entries,Comparator.comparing(File::getName));for(File f:entries){if(f.isDirectory())visit(root,f,out,depth+1);else out.add(f);}}
- public synchronized Pack load(Info info)throws IOException{
+ /** Decoded instruments are large (tens of MB each). Share one decoded copy per file instead of decoding it again for every clip and preview. */
+ private static final Map<String,java.lang.ref.WeakReference<Pack>> CACHE=new HashMap<>();
+ private static Pack recent;
+ public Pack load(Info info)throws IOException{
+  File file=new File(home,info.filename);String key=file.getCanonicalPath()+"|"+file.length()+"|"+file.lastModified();
+  synchronized(CACHE){java.lang.ref.WeakReference<Pack> ref=CACHE.get(key);Pack hit=ref==null?null:ref.get();if(hit!=null){recent=hit;return hit;}}
+  Pack pack=decode(info);
+  synchronized(CACHE){java.lang.ref.WeakReference<Pack> ref=CACHE.get(key);Pack hit=ref==null?null:ref.get();if(hit!=null){recent=hit;return hit;}CACHE.values().removeIf(r->r.get()==null);CACHE.put(key,new java.lang.ref.WeakReference<>(pack));recent=pack;}
+  return pack;
+ }
+ private synchronized Pack decode(Info info)throws IOException{
   File file=new File(home,info.filename);String homePath=home.getCanonicalPath()+File.separator;
   if(!file.getCanonicalPath().startsWith(homePath)||!file.isFile())throw new IOException("Instrument sample is missing");
   if(info.filename.toLowerCase(Locale.US).endsWith(".wav"))return monoPack(info.name,readWav(file),60,"Imported WAV");
@@ -149,7 +159,7 @@ public final class SampledInstruments {
   String p=s.trim().toUpperCase(Locale.US);if(p.length()<2)return fallback;String[] names={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
   for(int i=11;i>=0;i--)if(p.startsWith(names[i]))try{return (Integer.parseInt(p.substring(names[i].length()))+1)*12+i;}catch(Exception ignored){}return fallback;
  }
- static float gain(Map<String,String> m){try{return (float)Math.pow(10,Float.parseFloat(m.get("volume"))/20);}catch(Exception ignored){return 1f;}}
+ static float gain(Map<String,String> m){try{double db=Double.parseDouble(m.get("volume"));if(!Double.isFinite(db))return 1f;return (float)Math.pow(10,Math.max(-96,Math.min(24,db))/20);}catch(Exception ignored){return 1f;}}
  static Pack readSFZ(File sfz,String name)throws IOException{
   byte[] bytes=readLimited(sfz,4*1024*1024);String sfzText=new String(bytes,"UTF-8");
   // SFZ 1 subset: <control> default_path, <global>, <group>, <region>, key/lokey/hikey,
@@ -161,7 +171,7 @@ public final class SampledInstruments {
   while(matcher.find()){
    if(matcher.group(1)!=null){section=matcher.group(1).toLowerCase(Locale.US);
     if(section.equals("group"))group=new HashMap<>(globals);
-    else if(section.equals("region")){region=new HashMap<>(group);definitions.add(region);}continue;
+    else if(section.equals("region")){region=new HashMap<>(globals);region.putAll(group);definitions.add(region);}continue;
    }
    String key=matcher.group(2).toLowerCase(Locale.US),value=matcher.group(3);
    if(section.equals("control")&&key.equals("default_path"))defaultPath=value;
@@ -197,9 +207,13 @@ public final class SampledInstruments {
  /** Decode mono/stereo 16/24-bit integer WAV into Core.RATE stereo floats, with rate conversion. */
  static int wavSampleRate(File file)throws IOException{
   try(InputStream in=new BufferedInputStream(new FileInputStream(file))){
-   byte[] h=readN(in,28);
-   if(!new String(h,0,4,"US-ASCII").equals("RIFF")||!new String(h,8,4,"US-ASCII").equals("WAVE")||!new String(h,12,4,"US-ASCII").equals("fmt "))throw new IOException("Invalid WAV header");
-   return SampleAudio.le(h,24);
+   byte[] header=readN(in,12);if(!new String(header,0,4,"US-ASCII").equals("RIFF")||!new String(header,8,4,"US-ASCII").equals("WAVE"))throw new IOException("Invalid WAV header");
+   for(int i=0;i<120;i++){
+    byte[] h=readN(in,8);int size=SampleAudio.le(h,4);if(size<0||size>MAX_WAV)throw new IOException("Unsupported WAV chunk");
+    if(new String(h,0,4,"US-ASCII").equals("fmt ")){if(size<16)throw new IOException("Invalid WAV format");byte[] fmt=readN(in,16);int rate=SampleAudio.le(fmt,4);if(rate<8000||rate>192000)throw new IOException("Invalid sample rate");return rate;}
+    long remaining=size+(size&1);while(remaining>0){long n=in.skip(remaining);if(n<=0){if(in.read()<0)throw new EOFException();n=1;}remaining-=n;}
+   }
+   throw new IOException("WAV format chunk is missing");
   }
  }
  static float[] readWav(File file)throws IOException{
@@ -227,7 +241,7 @@ public final class SampledInstruments {
  static float wavValue(byte[] b,int at,int bits,int format){if(bits==16)return (short)((b[at]&255)|(b[at+1]<<8))/32768f;
   if(bits==24){int x=(b[at]&255)|((b[at+1]&255)<<8)|(b[at+2]<<16);return x/8388608f;}
   int x=(b[at]&255)|((b[at+1]&255)<<8)|((b[at+2]&255)<<16)|(b[at+3]<<24);
-  return format==3?Float.intBitsToFloat(x):x/2147483648f;
+  float value=format==3?Float.intBitsToFloat(x):x/2147483648f;return Float.isFinite(value)?value:0;
  }
  static byte[] readN(InputStream in,int length)throws IOException{byte[] b=new byte[length];int i=0;while(i<length){int n=in.read(b,i,length-i);if(n<0)throw new EOFException();i+=n;}return b;}
 }

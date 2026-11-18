@@ -56,9 +56,11 @@ final class ProLive {
 
     /** One hardware control → one app target. note = true for pads/keys (note-on), else a CC number. channel −1 = any. */
     static final class Mapping {
-        final int channel, number; final boolean note; final String target;
+        final int channel, number; final boolean note; final String target; private boolean pressed;
         Mapping(int channel, int number, boolean note, String target) { this.channel = channel; this.number = number; this.note = note; this.target = target; }
         boolean matches(int status, int a) { int type = status & 0xF0, ch = status & 15; if (channel >= 0 && ch != channel) return false; return note ? type == 0x90 && a == number : type == 0xB0 && a == number; }
+        boolean consumes(int status,int a){int type=status&0xF0,ch=status&15;if(channel>=0&&channel!=ch)return false;return note?(type==0x90||type==0x80)&&a==number:type==0xB0&&a==number;}
+        synchronized boolean press(int value){if(note)return value>0;boolean high=value>=64,rising=high&&!pressed;pressed=high;return rising;}
         String label() { return (note ? "Note " + number : "CC " + number) + (channel >= 0 ? " ch " + (channel + 1) : ""); }
     }
 
@@ -68,15 +70,15 @@ final class ProLive {
     /** Applies a controller value (0–127) to its target. Returns a transport action for the UI, or null. */
     static String apply(Core.Session s, Mapping m, int value) {
         double v = Math.max(0, Math.min(127, value)) / 127.0; String[] p = m.target.split(":", 3);
-        if (p[0].equals("transport")) return m.note || value >= 64 ? m.target : null;
+        if (p[0].equals("transport")) return m.press(value) ? m.target : null;
         if (p[0].equals("master") && p.length > 1 && p[1].equals("volume")) { s.master = Core.faderGain(v); return null; }
         if (p[0].equals("track") && p.length == 3) {
             Core.Track t = s.track(p[1]); if (t == null) t = s.bus(p[1]); if (t == null) return null;
             switch (p[2]) {
                 case "volume": t.volume = Core.faderGain(v); break;
                 case "pan": t.pan = v * 2 - 1; break;
-                case "mute": if (m.note || value >= 64) t.mute = m.note ? !t.mute : value >= 64; break;
-                case "solo": if (m.note || value >= 64) t.solo = m.note ? !t.solo : value >= 64; break;
+                case "mute": t.mute = m.note ? !t.mute : value >= 64; break;
+                case "solo": t.solo = m.note ? !t.solo : value >= 64; break;
                 default:
                     if (p[2].startsWith("send:")) { for (Pro.Send x : t.sends) if (x.bus.equals(p[2].substring(5))) x.level = v * v * 2; }
                     else if (p[2].startsWith("insert:")) { String[] q = p[2].split(":"); if (q.length == 3) for (Pro.Insert i : t.inserts) if (i.id.equals(q[1])) { int idx = Integer.parseInt(q[2]); Pro.Kind k = i.info(); if (idx < 0 || idx >= k.names.length) break; double lo = k.min[idx], hi = k.max[idx]; i.set(idx, k.units[idx].equals("Hz") && lo > 0 ? lo * Math.pow(hi / lo, v) : lo + (hi - lo) * v); i.touch(); } }

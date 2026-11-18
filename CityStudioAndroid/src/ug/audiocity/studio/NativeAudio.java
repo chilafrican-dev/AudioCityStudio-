@@ -14,6 +14,8 @@ final class NativeAudio {
     /** Blocking write of interleaved frames starting at offsetSamples; returns frames written or a negative AAudio error. */
     static native int write(long handle, float[] data, int offsetSamples, int frames, long timeoutNanos);
     static native long framesRead(long handle);
+    /** {stream frame, CLOCK_MONOTONIC nanos} of the frame at the speaker; false when the device cannot say yet. */
+    static native boolean timestamp(long handle, long[] out);
     static native int framesPerBurst(long handle);
     static native int bufferFrames(long handle);
     static native boolean exclusive(long handle);

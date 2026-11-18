@@ -154,6 +154,43 @@ final class ProEdit {
     }
 
     /** Playhead position for a loop range when heard frames have been played starting from start (looping at end). */
+    /**
+     * Keeps everything at the same bar and beat when the tempo map or time signature changes. MIDI regions follow the
+     * tempo: every note keeps its beat position and musical length. Audio regions are time-based: they move to stay on
+     * their bar and beat but their audio keeps its recorded speed. The loop range and markers follow too.
+     */
+    static void followTempoMap(Core.Session s, Pro.TempoMap before, Pro.TempoMap after) {
+        for (Core.Track t : s.tracks) for (Core.Clip c : t.clips) {
+            long newStart = Math.max(0, after.frameAt(before.beatAt(c.start)));
+            if (c.notes != null) {
+                long origin = c.start - c.offset, newOrigin = after.frameAt(before.beatAt(origin));
+                for (Pro.Note n : c.notes) {
+                    long a = after.frameAt(before.beatAt(origin + n.start)), b = after.frameAt(before.beatAt(origin + n.end()));
+                    n.start = Math.max(0, a - newOrigin); n.length = Math.max(1, b - a);
+                }
+                long end = after.frameAt(before.beatAt(c.start + c.length));
+                c.offset = (int) Math.max(0, newStart - newOrigin); c.envelopeOffset = c.offset; c.length = (int) Math.max(1, Math.min(Core.MAX_FRAMES - newStart, end - newStart));
+                c.start = newStart; ProMidi.refresh(c);
+            } else c.start = Math.min(newStart, Core.MAX_FRAMES - c.length);
+        }
+        if (s.loopEnd > s.loopStart) { s.loopStart = Math.max(0, after.frameAt(before.beatAt(s.loopStart))); s.loopEnd = Math.max(s.loopStart + 1, after.frameAt(before.beatAt(s.loopEnd))); }
+        for (Pro.Marker m : s.markers) m.frame = Math.max(0, after.frameAt(before.beatAt(m.frame)));
+    }
+
+    /**
+     * Quantizes a MIDI region on the song's tempo map: every note start moves toward the nearest grid line (division notes
+     * per beat: 1 = 1/4, 2 = 1/8, 4 = 1/16, 8 = 1/32) by the given strength (1 = fully, 0.5 = halfway, keeping some feel).
+     * Lengths are kept. Returns how many notes moved.
+     */
+    static int quantizeClip(Core.Session s, Core.Clip c, int division, double strength) { Quantizer.Settings q = Quantizer.Settings.division(division); q.strength = strength * 100; return quantizeClip(s, c, q); }
+    /** Quantizes a MIDI region with the full settings, on the song's tempo map. Returns how many notes changed. */
+    static int quantizeClip(Core.Session s, Core.Clip c, Quantizer.Settings q) {
+        if (c.notes == null || q == null || !q.on()) return 0; long origin = c.start - c.offset; List<Long> before = new ArrayList<>(); for (Pro.Note n : c.notes) before.add(n.start * 1000 + n.velocity);
+        Quantizer.apply(q, c.notes, origin, new Pro.TempoMap(s)); int moved = 0; List<Long> after = new ArrayList<>(); for (Pro.Note n : c.notes) after.add(n.start * 1000 + n.velocity);
+        Collections.sort(before); Collections.sort(after); for (int i = 0; i < before.size(); i++) if (!before.get(i).equals(after.get(i))) moved++;
+        ProMidi.refresh(c); return moved;
+    }
+
     static long loopPosition(long heard, long loopStart, long loopEnd) {
         if (loopEnd <= loopStart || heard < loopEnd) return heard; return loopStart + (heard - loopEnd) % (loopEnd - loopStart);
     }

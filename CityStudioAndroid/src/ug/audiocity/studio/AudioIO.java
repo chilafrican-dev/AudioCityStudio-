@@ -10,7 +10,13 @@ public final class AudioIO {
  static double clamp(double n,double a,double b){return Double.isFinite(n)?Math.max(a,Math.min(b,n)):a;}
  public static void save(Core.Session s)throws Exception {ProjectIO.save(s);}
  public static Core.Session load(File dir)throws Exception {return ProjectIO.load(dir,Disk::new);}
- public static Core.Session retimeProject(Core.Session original,int bpm,boolean preservePitch)throws Exception {if(bpm<40||bpm>240)throw new IOException("Use a tempo between 40 and 240 BPM.");double speed=bpm/(double)original.bpm;if(preservePitch&&(speed<.5||speed>2))throw new IOException("For pitch-preserving stretching, change tempo by 0.5×–2× per step. Use an intermediate tempo or choose resampling.");Core.Session result=original.copy();java.util.LinkedHashMap<String,Core.Source> sources=new java.util.LinkedHashMap<>();for(Core.Track t:result.tracks)for(Core.Clip c:allClips(t)){if(c.notes!=null)continue;if((c.start+c.length)/speed>Core.MAX_FRAMES||c.source.frames()/speed>Core.MAX_FRAMES)throw new IOException("The new tempo would exceed the 60-minute timeline or source-file limit.");sources.put(c.file,c.source);if(c.tuneSourceFile!=null&&!sources.containsKey(c.tuneSourceFile)){Disk dry=drySource(c,new File(original.directory));if(dry.frames()/speed>Core.MAX_FRAMES)throw new IOException("The retimed original vocal would exceed 60 minutes.");sources.put(c.tuneSourceFile,dry);}}java.util.HashMap<String,String> names=new java.util.HashMap<>();java.util.HashMap<String,Disk> rendered=new java.util.HashMap<>();java.util.ArrayList<File> created=new java.util.ArrayList<>();boolean success=false;try{for(java.util.Map.Entry<String,Core.Source> source:sources.entrySet()){File file=new File(original.directory,java.util.UUID.randomUUID()+".pcm");created.add(file);try(Writer writer=new Writer(file)){TimeStretch.Sink sink=(l,r)->writer.sample(l,r);if(preservePitch)TimeStretch.preservePitch(source.getValue(),speed,sink);else TimeStretch.resample(source.getValue(),speed,sink);}names.put(source.getKey(),file.getName());rendered.put(source.getKey(),new Disk(file));}for(Core.Track t:result.tracks)for(Core.Clip c:allClips(t)){if(c.notes!=null){ProMidi.retime(c,speed);continue;}c.stretchFile=null;String oldFile=c.file,oldDryFile=c.tuneSourceFile;int oldOffset=c.offset,oldDryOffset=c.tuneSourceOffset;int offset=(int)Math.round(c.offset/speed),length=(int)Math.round((c.offset+(long)c.length)/speed)-offset;c.start=Math.round(c.start/speed);c.envelopeOffset=(int)Math.round(c.envelopeOffset/speed);c.envelopeLength=Math.max(1,(int)Math.round(c.envelopeLength/speed));c.envelopeOffset=Math.min(c.envelopeOffset,c.envelopeLength-1);c.fadeIn=(int)Math.round(c.fadeIn/speed);c.fadeOut=(int)Math.round(c.fadeOut/speed);c.source=rendered.get(oldFile);c.file=names.get(oldFile);c.offset=Math.min(offset,c.source.frames()-1);if(oldDryFile!=null){c.tuneSourceFile=names.get(oldDryFile);c.tuneSourceOffset=Math.max(0,(int)Math.round((oldDryOffset+(long)oldOffset)/speed)-c.offset);}c.length=Math.max(1,Math.min(length,Math.min(c.source.frames()-c.offset,c.envelopeLength-c.envelopeOffset)));if(oldDryFile!=null){int available=rendered.get(oldDryFile).frames()-c.tuneSourceOffset-c.offset;if(available<1)throw new IOException("Retimed original vocal boundaries do not match.");c.length=Math.min(c.length,available);}c.peaks=Core.peaks(c.source);}ProjectIO.retimeExtras(result,speed);result.bpm=bpm;if(!preservePitch&&bpm!=original.bpm){result.tuneKey=0;result.tuneScale=0;result.tuneConfigured=false;}success=true;return result;}finally{if(!success)for(File f:created)f.delete();}}
+ public static Core.Session retimeProject(Core.Session original,int bpm,boolean preservePitch)throws Exception {if(bpm<40||bpm>240)throw new IOException("Use a tempo between 40 and 240 BPM.");double speed=bpm/(double)original.bpm;if(original.loopEnd/speed>Core.MAX_FRAMES)throw new IOException("The new tempo would move the loop range beyond the 60-minute limit.");if(preservePitch&&(speed<.5||speed>2))throw new IOException("For pitch-preserving stretching, change tempo by 0.5×–2× per step. Use an intermediate tempo or choose resampling.");Core.Session result=original.copy();java.util.LinkedHashMap<String,Core.Source> sources=new java.util.LinkedHashMap<>();for(Core.Track t:result.tracks)for(Core.Clip c:allClips(t)){if((c.start+c.length)/speed>Core.MAX_FRAMES||c.source.frames()/speed>Core.MAX_FRAMES)throw new IOException("The new tempo would exceed the 60-minute timeline or source-file limit.");if(c.notes!=null&&c.drumPattern==null)continue;sources.put(c.file,c.source);if(c.tuneSourceFile!=null&&!sources.containsKey(c.tuneSourceFile)){Disk dry=drySource(c,new File(original.directory));if(dry.frames()/speed>Core.MAX_FRAMES)throw new IOException("The retimed original vocal would exceed 60 minutes.");sources.put(c.tuneSourceFile,dry);}}java.util.HashMap<String,String> names=new java.util.HashMap<>();java.util.HashMap<String,Disk> rendered=new java.util.HashMap<>();java.util.ArrayList<File> created=new java.util.ArrayList<>();boolean success=false;try{for(java.util.Map.Entry<String,Core.Source> source:sources.entrySet()){File file=new File(original.directory,java.util.UUID.randomUUID()+".pcm");created.add(file);try(Writer writer=new Writer(file)){TimeStretch.Sink sink=(l,r)->writer.sample(l,r);if(preservePitch)TimeStretch.preservePitch(source.getValue(),speed,sink);else TimeStretch.resample(source.getValue(),speed,sink);}names.put(source.getKey(),file.getName());rendered.put(source.getKey(),new Disk(file));}for(Core.Track t:result.tracks)for(Core.Clip c:allClips(t)){if(c.notes!=null&&c.drumPattern==null){ProMidi.retime(c,speed);rewriteMidi(c,result,bpm,created);continue;}c.stretchFile=null;String oldFile=c.file,oldDryFile=c.tuneSourceFile;int oldOffset=c.offset,oldDryOffset=c.tuneSourceOffset;int offset=(int)Math.round(c.offset/speed),length=(int)Math.round((c.offset+(long)c.length)/speed)-offset;c.start=Math.round(c.start/speed);c.envelopeOffset=(int)Math.round(c.envelopeOffset/speed);c.envelopeLength=Math.max(1,(int)Math.round(c.envelopeLength/speed));c.envelopeOffset=Math.min(c.envelopeOffset,c.envelopeLength-1);c.fadeIn=(int)Math.round(c.fadeIn/speed);c.fadeOut=(int)Math.round(c.fadeOut/speed);c.source=rendered.get(oldFile);c.file=names.get(oldFile);c.offset=Math.min(offset,c.source.frames()-1);if(oldDryFile!=null){c.tuneSourceFile=names.get(oldDryFile);c.tuneSourceOffset=Math.max(0,(int)Math.round((oldDryOffset+(long)oldOffset)/speed)-c.offset);}c.length=Math.max(1,Math.min(length,Math.min(c.source.frames()-c.offset,c.envelopeLength-c.envelopeOffset)));if(oldDryFile!=null){int available=rendered.get(oldDryFile).frames()-c.tuneSourceOffset-c.offset;if(available<1)throw new IOException("Retimed original vocal boundaries do not match.");c.length=Math.min(c.length,available);}c.peaks=Core.peaks(c.source);if(c.drumPattern!=null){c.drumPattern=BeatPilotDrumRollData.retempo(c.drumPattern,bpm);c.notes=BeatPilotDrumRollData.decode(c.drumPattern).notes();rewriteMidi(c,result,bpm,created);}}ProjectIO.retimeExtras(result,speed);result.bpm=bpm;if(!preservePitch&&bpm!=original.bpm){result.tuneKey=0;result.tuneScale=0;result.tuneConfigured=false;}success=true;return result;}finally{if(!success)for(File f:created)f.delete();}}
+ static void rewriteMidi(Core.Clip c,Core.Session project,int bpm,List<File> created)throws IOException{
+  if(c.midiFile==null||c.notes==null)return;
+  File file=new File(project.directory,UUID.randomUUID()+".mid");created.add(file);
+  MidiTake take=Pro.take(c.instrument==null?Synth.factory(0):c.instrument,bpm,c.notes,null);
+  try(OutputStream out=new FileOutputStream(file)){take.writeMidi(out);}c.midiFile=file.getName();
+ }
  static java.util.List<Core.Clip> allClips(Core.Track t){java.util.ArrayList<Core.Clip> all=new java.util.ArrayList<>(t.clips);all.addAll(t.takes);for(Core.Clip c:t.slots)if(c!=null)all.add(c);return all;}
  public static Disk drySource(Core.Clip clip,File directory)throws IOException{if(clip.tuneSourceFile==null)return null;File path=new File(directory,clip.tuneSourceFile);if(!path.getCanonicalFile().getParentFile().equals(directory.getCanonicalFile()))throw new IOException("Invalid original vocal path.");return new Disk(path);}
  public static void restoreUntunedClip(Core.Clip clip,File directory)throws IOException{Disk dry=drySource(clip,directory);if(dry==null)throw new IOException("This older clip has no preserved dry source. Re-import the original recording.");long offset=clip.tuneSourceOffset+(long)clip.offset;if(offset<0||offset+clip.length>dry.frames())throw new IOException("Original vocal boundaries no longer match.");clip.source=dry;clip.file=clip.tuneSourceFile;clip.offset=(int)offset;clip.tuneSourceFile=null;clip.tuneSourceOffset=0;clip.vocalNotes=null;clip.peaks=Core.peaks(dry);}
@@ -33,11 +39,14 @@ public final class AudioIO {
     }
 
  public static void backup(OutputStream destination,Core.Session session)throws Exception {
-  save(session);java.util.zip.ZipOutputStream zip=new java.util.zip.ZipOutputStream(destination);java.util.LinkedHashSet<String> names=new java.util.LinkedHashSet<>();names.add("session.json");names.addAll(ProjectIO.files(session));byte[] block=new byte[65536];for(String name:names){File file=new File(session.directory,name);zip.putNextEntry(new java.util.zip.ZipEntry(name));try(InputStream in=new FileInputStream(file)){int n;while((n=in.read(block))!=-1)zip.write(block,0,n);}zip.closeEntry();}zip.finish();zip.flush();
+  InstrumentArchive.embed(session);save(session);java.util.LinkedHashSet<String> names=new java.util.LinkedHashSet<>();names.add("session.json");names.addAll(ProjectIO.files(session));
+  if(names.size()>2000)throw new IOException("Project backup has too many files (maximum 2000).");long total=0;File directory=new File(session.directory).getCanonicalFile();
+  for(String name:names){File file=new File(directory,name).getCanonicalFile();if(!directory.equals(file.getParentFile())||!file.isFile())throw new IOException("Missing or invalid project source: "+name);total+=file.length();if(total>1073741824L)throw new IOException("Project backup exceeds the supported 1 GB unpacked limit. Split the project before backing it up.");if(name.equals("session.json")&&file.length()>1048576)throw new IOException("Project metadata exceeds the supported backup limit.");}
+  java.util.zip.ZipOutputStream zip=new java.util.zip.ZipOutputStream(destination);byte[] block=new byte[65536];for(String name:names){File file=new File(session.directory,name);zip.putNextEntry(new java.util.zip.ZipEntry(name));try(InputStream in=new FileInputStream(file)){int n;while((n=in.read(block))!=-1)zip.write(block,0,n);}zip.closeEntry();}zip.finish();zip.flush();
  }
  public static Core.Session restore(InputStream source,File directory)throws Exception {
   File[] existing=directory.listFiles();if(existing==null||existing.length!=0)throw new IOException("Restore requires a new empty project folder.");boolean restored=false;java.util.HashSet<String> names=new java.util.HashSet<>();try{
-  java.util.zip.ZipInputStream zip=new java.util.zip.ZipInputStream(source);java.util.zip.ZipEntry entry;byte[] buffer=new byte[65536];long total=0;int count=0;while((entry=zip.getNextEntry())!=null){String name=entry.getName();if(entry.isDirectory()||name.contains("/")||name.contains("\\")||(!name.equals("session.json")&&!name.endsWith(".pcm")&&!name.endsWith(".mid"))||!names.add(name)||++count>2000)throw new IOException("Invalid project archive.");File file=new File(directory,name);if(!file.getCanonicalFile().getParentFile().equals(directory.getCanonicalFile()))throw new IOException("Invalid archive path.");long fileBytes=0;try(OutputStream out=new BufferedOutputStream(new FileOutputStream(file))){int n;while((n=zip.read(buffer))!=-1){fileBytes+=n;total+=n;if(fileBytes>(name.equals("session.json")?1048576:Core.MAX_FRAMES*8)||total>1073741824L)throw new IOException("Project backup exceeds supported size.");out.write(buffer,0,n);}}zip.closeEntry();}if(!names.contains("session.json"))throw new IOException("This is not an Audio City Studio project backup.");Core.Session result=load(directory);restored=true;return result;}finally{if(!restored){for(String name:names)new File(directory,name).delete();directory.delete();}}
+  java.util.zip.ZipInputStream zip=new java.util.zip.ZipInputStream(source);java.util.zip.ZipEntry entry;byte[] buffer=new byte[65536];long total=0;int count=0;while((entry=zip.getNextEntry())!=null){String name=entry.getName();if(entry.isDirectory()||name.contains("/")||name.contains("\\")||(!name.equals("session.json")&&!name.endsWith(".pcm")&&!name.endsWith(".mid")&&!name.endsWith(".acpack"))||!names.add(name)||++count>2000)throw new IOException("Invalid project archive.");File file=new File(directory,name);if(!file.getCanonicalFile().getParentFile().equals(directory.getCanonicalFile()))throw new IOException("Invalid archive path.");long fileBytes=0;try(OutputStream out=new BufferedOutputStream(new FileOutputStream(file))){int n;while((n=zip.read(buffer))!=-1){fileBytes+=n;total+=n;if(fileBytes>(name.equals("session.json")?1048576:Core.MAX_FRAMES*8)||total>1073741824L)throw new IOException("Project backup exceeds supported size.");out.write(buffer,0,n);}}zip.closeEntry();}if(!names.contains("session.json"))throw new IOException("This is not an Audio City Studio project backup.");Core.Session result=load(directory);restored=true;return result;}finally{if(!restored){for(String name:names)new File(directory,name).delete();directory.delete();}}
  }
  public static long tailFrames(Core.Session s){return Export.tailFrames(s);}
  public static void wav(OutputStream target,Core.Session s)throws Exception {wav(target,s,16);}
@@ -49,23 +58,40 @@ public final class AudioIO {
  static void drainAac(MediaCodec codec,MediaMuxer mux,MediaCodec.BufferInfo info,int[] track,boolean end)throws IOException{int idle=0;while(true){int out=codec.dequeueOutputBuffer(info,end?10000:0);if(out==MediaCodec.INFO_TRY_AGAIN_LATER){if(!end)return;if(++idle>500)throw new IOException("The AAC encoder did not finish.");continue;}if(out==MediaCodec.INFO_OUTPUT_FORMAT_CHANGED){if(track[0]>=0)throw new IOException("The AAC encoder changed format twice.");track[0]=mux.addTrack(codec.getOutputFormat());mux.start();continue;}if(out<0)continue;ByteBuffer data=codec.getOutputBuffer(out);if((info.flags&MediaCodec.BUFFER_FLAG_CODEC_CONFIG)!=0)info.size=0;if(info.size>0&&track[0]>=0&&data!=null){data.position(info.offset);data.limit(info.offset+info.size);mux.writeSampleData(track[0],data,info);}codec.releaseOutputBuffer(out,false);if((info.flags&MediaCodec.BUFFER_FLAG_END_OF_STREAM)!=0)return;}}
  /** Audio output stream used by the engine: AAudio (native, exclusive/MMAP when the device allows) or AudioTrack. */
  abstract static class Output{
+  /** Fills {stream frame, System.nanoTime()} for the frame now leaving the speaker. Returns true when the hardware reported it. */
+  boolean timestamp(long[] out){out[0]=heard();out[1]=System.nanoTime();return false;}
   abstract void start()throws IOException;abstract int write(float[] data,int offset,int samples)throws IOException;abstract long heard();abstract int burst();abstract int bufferFrames();abstract String describe();abstract void interrupt();abstract void close();
+  /** When set, playback goes to this output (used for the top earpiece during speaker takes). */
+  static volatile android.media.AudioDeviceInfo preferred;
   static Output open(boolean lowLatency,boolean preferNative,int burstHint)throws IOException{
-   if(lowLatency&&preferNative&&NativeAudio.AVAILABLE){long h=NativeAudio.open(Core.RATE,2,true,2);if(h==0)h=NativeAudio.open(Core.RATE,2,false,2);if(h!=0)return new NativeOutput(h);}
+   if(preferred==null&&lowLatency&&preferNative&&NativeAudio.AVAILABLE){long h=NativeAudio.open(Core.RATE,2,true,2);if(h==0)h=NativeAudio.open(Core.RATE,2,false,2);if(h!=0)return new NativeOutput(h);}
    return new TrackOutput(lowLatency,burstHint);}
  }
  static final class TrackOutput extends Output{final AudioTrack t;final int burst;
-  TrackOutput(boolean lowLatency,int burstHint){int min=AudioTrack.getMinBufferSize(Core.RATE,AudioFormat.CHANNEL_OUT_STEREO,AudioFormat.ENCODING_PCM_FLOAT);t=new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()).setAudioFormat(new AudioFormat.Builder().setSampleRate(Core.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_FLOAT).build()).setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(Math.max(min,4096)).setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY).build();burst=Math.max(32,Math.min(512,burstHint));if(lowLatency)try{t.setBufferSizeInFrames(burst*2);}catch(Exception ignored){}}
-  void start(){t.play();}int write(float[] d,int o,int n){return t.write(d,o,n,AudioTrack.WRITE_BLOCKING);}long heard(){return t.getPlaybackHeadPosition()&0xffffffffL;}int burst(){return burst;}int bufferFrames(){return t.getBufferSizeInFrames();}String describe(){return "AudioTrack (Java)";}
+  TrackOutput(boolean lowLatency,int burstHint){int min=AudioTrack.getMinBufferSize(Core.RATE,AudioFormat.CHANNEL_OUT_STEREO,AudioFormat.ENCODING_PCM_FLOAT);t=new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()).setAudioFormat(new AudioFormat.Builder().setSampleRate(Core.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_FLOAT).build()).setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(Math.max(min,4096)).setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY).build();burst=Math.max(32,Math.min(512,burstHint));if(lowLatency)try{t.setBufferSizeInFrames(burst*2);}catch(Exception ignored){}android.media.AudioDeviceInfo want=Output.preferred;if(want!=null)try{t.setPreferredDevice(want);}catch(Exception ignored){}}
+  void start(){t.play();}int write(float[] d,int o,int n){return t.write(d,o,n,AudioTrack.WRITE_BLOCKING);}long heard(){return t.getPlaybackHeadPosition()&0xffffffffL;}final android.media.AudioTimestamp ts=new android.media.AudioTimestamp();boolean timestamp(long[] out){try{if(t.getTimestamp(ts)){out[0]=ts.framePosition;out[1]=ts.nanoTime;return true;}}catch(Exception ignored){}return super.timestamp(out);}int burst(){return burst;}int bufferFrames(){return t.getBufferSizeInFrames();}String describe(){return "AudioTrack (Java)";}
   void interrupt(){try{t.pause();}catch(Exception ignored){}}void close(){try{t.pause();t.flush();t.release();}catch(Exception ignored){}}}
  static final class NativeOutput extends Output{final long h;volatile boolean closed;NativeOutput(long handle){h=handle;}
   void start()throws IOException{int r=NativeAudio.start(h);if(r<0)throw new IOException("AAudio could not start ("+r+").");}
   int write(float[] d,int o,int n){if(closed)return -1;int frames=NativeAudio.write(h,d,o,n/2,200000000L);return frames<0?frames:frames*2;}
-  long heard(){return NativeAudio.framesRead(h);}int burst(){return NativeAudio.framesPerBurst(h);}int bufferFrames(){return NativeAudio.bufferFrames(h);}
+  long heard(){return NativeAudio.framesRead(h);}boolean timestamp(long[] out){try{if(NativeAudio.timestamp(h,out))return true;}catch(Throwable ignored){}return super.timestamp(out);}int burst(){return NativeAudio.framesPerBurst(h);}int bufferFrames(){return NativeAudio.bufferFrames(h);}
   String describe(){return NativeAudio.exclusive(h)?"AAudio · exclusive (MMAP)":"AAudio · shared";}
   void interrupt(){NativeAudio.stop(h);}synchronized void close(){if(closed)return;closed=true;NativeAudio.stop(h);NativeAudio.close(h);}}
  public static final class Engine {
   volatile boolean playing,loop,click,recording;
+  // ---- The master clock. Everything that needs to know "where in the song are we" (MIDI recording, audio recording,
+  // pads) asks the audio clock, never a UI timer: which output frame reached the speaker at which System.nanoTime().
+  public final TransportClock clock=new TransportClock();
+  /** True when the time came from the audio hardware itself (exact); false when estimated from the play head. */
+  public volatile boolean clockFromHardware;
+  /** Measured recording delay correction in frames (from the recording timing test); added to recorded audio. */
+  public volatile long latencyTrim;
+  /** Output-stream frame at the speaker at a System.nanoTime() moment, or -1 before the first block. */
+  /** Song frame (straight on, not loop-wrapped) the listener heard at that System.nanoTime() moment. */
+  public long heardAt(long nanos){return clock.heardAt(nanos,transportFrames-latencyFrames);}
+  /** Song position the listener heard at that moment, wrapped into the cycle when looping. */
+  public long songAt(long nanos){return clock.songAt(nanos,position);}
+  public boolean clockRunning(){return clock.running();}
   /** Low-latency mode uses the device burst size for blocks and a two-burst output buffer. */
   public volatile boolean lowLatency;
   public volatile int burstFrames=192,latencyFrames;
@@ -78,24 +104,35 @@ public final class AudioIO {
   volatile long position;
   public volatile long transportFrames;
   public volatile float clickVolume=1f;
+  public volatile long countInRemaining,countInTotal;
+  public volatile int countInBeats;
   volatile SynthPoly midiMonitor;
   volatile float peak,peakLeft,peakRight,peakHold,reduction;
   volatile boolean overloaded;
   volatile String error;
   /** Prefer the native AAudio stream (libaudiocity.so) when it is built into the APK. */
   public volatile boolean useNative=true;
+  /** Playback level; lowered while recording through the phone speaker so less beat reaches the microphone. */
+  public volatile float outputGain=1f;
+  /** Output strip Dim: lowers the master output by 20 dB without touching the mix. */
+  public volatile boolean dim;
+  /** Speaker layout during speaker takes: 0 both, 1 left only, 2 right only, 3 top earpiece. */
+  public volatile int speakerRoute;
   public volatile String outputPath="";
   private Thread thread;
   private volatile Output device;
-  public synchronized void play(Core.Session session){
+  public synchronized void play(Core.Session session){playCounted(session,0);}
+  public synchronized void playCounted(Core.Session session,int beats){
    if(playing)return;
    if(thread!=null&&thread.isAlive()){error="Audio output is still stopping. Try Play again.";return;}
-   if(loop&&session.loopEnd>session.loopStart){
-    if(position<session.loopStart||position>=session.loopEnd)position=session.loopStart;
-   }else if(loop&&position>=Math.max(Core.beat(session.bpm)*4,session.end()))position=0;
+   if(loop){
+    long ls=TakeBounds.loopStart(session),le=TakeBounds.loopEnd(session);
+    if(le>ls&&(position<ls||position>=le))position=ls;
+   }
    playing=true;
    long start=position;
-   transportFrames=start;
+   countInBeats=beats;countInTotal=CountIn.frames(session.bpm,beats);countInRemaining=countInTotal;
+   transportFrames=start-countInTotal;
    thread=new Thread(()->{
     Core.Renderer renderer=new Core.Renderer(session);live=renderer;
     android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
@@ -106,16 +143,19 @@ public final class AudioIO {
      latencyFrames=track.bufferFrames();track.start();
      float[] data=new float[Math.max(1024,block*2)],midiData=new float[Math.max(1024,block*2)],mon=new float[Math.max(1024,block*2)];
      Core.Processor monitorFx=null;Core.Fx monitorSource=null;
-     long cursor=start,heardBase=start;
+     long cursor=start,heardBase=start-countInTotal;clock.start(heardBase);long[] stamp=new long[2];
+     long preRoll=countInTotal;
      while(playing){
       long end=recording?Core.MAX_FRAMES:Math.min(Core.MAX_FRAMES,Math.max(Core.beat(session.bpm)*4,session.end()+tailFrames(session)));
       boolean ranged=session.loopEnd>session.loopStart;
-      long loopStart=ranged?session.loopStart:0,loopEnd=ranged?session.loopEnd:Math.max(Core.beat(session.bpm)*4,session.end());
+      long loopStart=ranged?session.loopStart:TakeBounds.loopStart(session,renderer.tempoMap()),loopEnd=ranged?session.loopEnd:TakeBounds.loopEnd(session,renderer.tempoMap());
       if(loop&&cursor>=loopEnd){cursor=loopStart;renderer=new Core.Renderer(session);live=renderer;}
       if(!loop&&cursor>=end){playing=false;break;}
-      int n=(int)Math.min(block,(loop?loopEnd:end)-cursor);
+      boolean preparing=preRoll>0;
+      int n=(int)Math.min(block,preparing?preRoll:(loop?loopEnd:end)-cursor);
       renderer.clickLevel=.12f*Math.max(0f,Math.min(2f,clickVolume));
-      renderer.render(cursor,n,data,click);
+      if(preparing)CountIn.render(data,n,countInTotal-preRoll,session.bpm,clickVolume);
+      else renderer.render(cursor,n,data,click);
       float midiPeakL=0,midiPeakR=0;
       SynthPoly midi=midiMonitor;
       if(midi!=null){
@@ -139,15 +179,18 @@ public final class AudioIO {
        double g=monitorGain*session.master;
        for(int i=0;i<n*2;i++){double combined=data[i]+mon[i]*g;data[i]=(float)Math.max(-.89125,Math.min(.89125,combined));}
       }
+      float og=outputGain*(dim?.1f:1f);if(og!=1f)for(int gi=0;gi<n*2;gi++)data[gi]*=og;SpeakerChoice.route(data,n,speakerRoute);
       int written=0;
       while(playing&&written<n*2){
        int v=track.write(data,written,n*2-written);
        if(v<=0){if(!playing)break;throw new IOException("Audio output error "+v);}
        written+=v;
       }
-      cursor+=written/2;transportFrames+=written/2;
+      if(preparing){preRoll-=written/2;countInRemaining=preRoll;}else cursor+=written/2;
+      transportFrames+=written/2;
+      boolean hw=track.timestamp(stamp);if(stamp[0]>=0){clock.update(stamp[0],stamp[1],hw,loop,loopStart,loopEnd);clockFromHardware=hw;}
       long heard=heardBase+track.heard();
-      position=loop?ProEdit.loopPosition(heard,loopStart,loopEnd):Math.min(heard,cursor);
+      position=heard<start?start:loop?ProEdit.loopPosition(heard,loopStart,loopEnd):Math.min(heard,cursor);
       peakLeft=midi==null?renderer.peakLeft:midiPeakL;peakRight=midi==null?renderer.peakRight:midiPeakR;
       peak=Math.max(peakLeft,peakRight);peakHold=Math.max(peakHold,peak);
       reduction=renderer.limiterDb;overloaded|=renderer.overloaded;
@@ -155,7 +198,7 @@ public final class AudioIO {
      if(!loop&&position>session.end())position=session.end();
     }catch(Exception e){error=e.getMessage();playing=false;}
     finally{
-     if(track!=null)track.close();device=null;peak=peakLeft=peakRight=reduction=0;
+     if(track!=null)track.close();device=null;countInRemaining=0;peak=peakLeft=peakRight=reduction=0;
      for(Core.Track t:session.tracks)t.meter=t.meterL=t.meterR=t.reduction=0;
     }
    },"CityStudio-Audio");
@@ -168,9 +211,11 @@ public final class AudioIO {
  public static final class Capture {
   public volatile boolean running;public volatile float meter;public volatile String error,route;
   /** Optional input device (for example a USB audio interface), first input channel (0-based) and whether to record a stereo pair. */
-  public volatile AudioDeviceInfo device;public volatile int channel=0;public volatile boolean stereo=false;
+  public volatile AudioDeviceInfo device;public volatile boolean echoCancel,cameraMic;public volatile int channel=0;public volatile boolean stereo=false;
   /** When set, every recorded frame is also pushed here for input monitoring. */
   public volatile Pro.Ring monitor;
+  /** System.nanoTime() at which the first recorded frame entered the microphone, and whether the hardware reported it exactly. */
+  public volatile long firstFrameNanos;public volatile boolean firstFrameExact;
   private Thread thread;private AudioRecord recorder;
   static AudioRecord open(int source,AudioDeviceInfo device,int channel,boolean stereo,int[] channelsOut){
    int positional=stereo?AudioFormat.CHANNEL_IN_STEREO:AudioFormat.CHANNEL_IN_MONO;
@@ -183,11 +228,15 @@ public final class AudioIO {
    if(device!=null&&!r.setPreferredDevice(device)){r.release();return null;}
    channelsOut[0]=Math.max(1,r.getChannelCount());return r;}
   public void begin(File file,Runnable finished){running=true;route=null;final AudioDeviceInfo wanted=device;final int first=channel;final boolean pair=stereo;thread=new Thread(()->{AudioRecord r=null;try{int[] channels={1};
-   for(int source:new int[]{MediaRecorder.AudioSource.UNPROCESSED,MediaRecorder.AudioSource.MIC}){r=open(source,wanted,first,pair,channels);if(r!=null)break;}
+   int[] order=echoCancel?new int[]{MediaRecorder.AudioSource.VOICE_COMMUNICATION,MediaRecorder.AudioSource.MIC}:cameraMic?new int[]{MediaRecorder.AudioSource.CAMCORDER,MediaRecorder.AudioSource.UNPROCESSED,MediaRecorder.AudioSource.MIC}:new int[]{MediaRecorder.AudioSource.UNPROCESSED,MediaRecorder.AudioSource.MIC};for(int source:order){r=open(source,wanted,first,pair,channels);if(r!=null)break;}
+   if(r!=null&&echoCancel){try{if(android.media.audiofx.AcousticEchoCanceler.isAvailable()){android.media.audiofx.AcousticEchoCanceler aec=android.media.audiofx.AcousticEchoCanceler.create(r.getAudioSessionId());if(aec!=null)aec.setEnabled(true);}}catch(Exception ignored){}}
    if(r==null&&wanted!=null){r=open(MediaRecorder.AudioSource.MIC,null,0,false,channels);if(r!=null)route="The selected input could not be opened, so the phone microphone was used.";}
    if(r==null)throw new IOException("Microphone could not be opened.");
-   recorder=r;r.startRecording();int width=channels[0];short[] samples=new short[1024*width];
-   try(Writer w=new Writer(file)){while(running&&w.frames<Core.MAX_FRAMES){int count=r.read(samples,0,samples.length);if(count<0){if(!running)break;throw new IOException("Microphone read error "+count);}float max=0;Pro.Ring ring=monitor;for(int i=0;i+width-1<count;i+=width){float left=samples[i]/32768f,right=width>1?samples[i+1]/32768f:left;w.sample(left,right);if(ring!=null)ring.push(left,right);max=Math.max(max,Math.max(Math.abs(left),Math.abs(right)));}meter=max;}}
+   recorder=r;firstFrameNanos=0;firstFrameExact=false;r.startRecording();int width=channels[0];short[] samples=new short[1024*width];android.media.AudioTimestamp stamp=new android.media.AudioTimestamp();long readFrames=0;
+   try(Writer w=new Writer(file)){while(running&&w.frames<Core.MAX_FRAMES){int count=r.read(samples,0,samples.length);if(count<0){if(!running)break;throw new IOException("Microphone read error "+count);}long readAt=System.nanoTime();readFrames+=count/width;
+    if(!firstFrameExact){boolean ok=false;try{ok=r.getTimestamp(stamp,android.media.AudioTimestamp.TIMEBASE_MONOTONIC)==AudioRecord.SUCCESS&&stamp.nanoTime>0;}catch(Exception ignored){}
+     if(ok){firstFrameNanos=stamp.nanoTime-Math.round(stamp.framePosition*1e9/Core.RATE);firstFrameExact=true;}
+     else if(firstFrameNanos==0)firstFrameNanos=readAt-Math.round(readFrames*1e9/Core.RATE);} /* estimate: the frames just read ended about now */float max=0;Pro.Ring ring=monitor;for(int i=0;i+width-1<count;i+=width){float left=samples[i]/32768f,right=width>1?samples[i+1]/32768f:left;w.sample(left,right);if(ring!=null)ring.push(left,right);max=Math.max(max,Math.max(Math.abs(left),Math.abs(right)));}meter=max;}}
   }catch(Exception e){error=e.getMessage();}finally{running=false;if(r!=null){try{r.stop();}catch(Exception ignored){}r.release();}recorder=null;finished.run();}},"CityStudio-Record");thread.start();}
   public void stop(){running=false;AudioRecord r=recorder;if(r!=null)try{r.stop();}catch(Exception ignored){}}
  }

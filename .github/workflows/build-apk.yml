@@ -1,0 +1,70 @@
+name: Build APK
+
+# Builds Audio City Studio in the cloud: host tests first, then a development-signed APK.
+# Download the result from the run page -> Artifacts -> AudioCityStudio-apk.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: CityStudioAndroid   # change to "." if your repository root is the CityStudioAndroid folder
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK (platform 35, build tools 35.0.0, NDK 26.3)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0 ndk;26.3.11579264"
+
+      - name: Check the factory instrument packs are present
+        run: |
+          ls -la assets/instruments/*.zip
+          test "$(ls assets/instruments/*.zip | wc -l)" -ge 9
+
+      - name: Install ffmpeg (used by the export tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg zip
+
+      - name: Host tests (no phone needed)
+        run: bash run-core-tests.sh
+
+      - name: Host tests that need the Android platform jar
+        run: bash run-tests.sh
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+
+      - name: Restore signing key (optional secret KEYSTORE_BASE64)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p build
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > build/development.keystore
+            echo "Using the keystore from the KEYSTORE_BASE64 secret."
+          else
+            echo "No KEYSTORE_BASE64 secret: build.sh will create a fresh development key."
+          fi
+
+      - name: Build and sign the APK
+        run: bash build.sh
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioCityStudio-apk
+          path: CityStudioAndroid/AudioCityStudio.apk
+          if-no-files-found: error

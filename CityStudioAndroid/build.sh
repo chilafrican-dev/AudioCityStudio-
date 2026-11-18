@@ -2,17 +2,30 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 : "${ANDROID_SDK_ROOT:?Set ANDROID_SDK_ROOT to your Android SDK directory}"
+if [ "${CITYSTUDIO_REQUIRE_SIGNING_KEY:-0}" = "1" ] && [ ! -s build/development.keystore ]; then
+  echo "Existing signing key is required for an APK update. Configure KEYSTORE_BASE64; a replacement key will not be generated." >&2
+  exit 1
+fi
 tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
 platform="$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
+# Factory packs are ZIP assets, not disposable source archives. Fail before
+# packaging if an incomplete checkout would leave the instrument picker empty.
+for id in freepats-fm-piano2 freepats-ydp-grand-compact freepats-upright-kw-full freepats-upright-kw-small freepats-upright-kw-bright freepats-electric-guitar-clean freepats-electric-guitar-direct freepats-electric-guitar-jazz soundza-afrobeats-drums; do
+  [ -s "assets/instruments/$id.zip" ] || {
+    echo "Missing factory instrument: assets/instruments/$id.zip. Restore the instrument assets from the complete source archive before building." >&2
+    exit 1
+  }
+done
 rm -rf build/classes build/dex build/lib
 mkdir -p build/classes build/dex
 "$tools/aapt2" compile --dir res -o build/resources.zip
 "$tools/aapt2" link -o build/base.apk -I "$platform" --manifest AndroidManifest.xml -A assets build/resources.zip
+mapfile -t java_sources < <(find src -name "*.java" -print | sort)
 if command -v javac >/dev/null; then
-javac --release 8 -classpath "$platform" -d build/classes src/ug/audiocity/studio/*.java
+javac --release 8 -classpath "$platform" -d build/classes "${java_sources[@]}"
 else
 : "${ECJ_JAR:?Set ECJ_JAR to Eclipse ecj compiler jar when javac is unavailable}"
-java -jar "$ECJ_JAR" -source 1.8 -target 1.8 -classpath "$platform" -d build/classes src/ug/audiocity/studio/*.java
+java -jar "$ECJ_JAR" -source 1.8 -target 1.8 -classpath "$platform" -d build/classes "${java_sources[@]}"
 fi
 rm -f build/classes.jar
 (cd build/classes && zip -qr ../classes.jar .)

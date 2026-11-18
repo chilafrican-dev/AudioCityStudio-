@@ -1,0 +1,6 @@
+package ug.audiocity.studio;
+import java.io.*;import java.nio.file.*;
+/** Convert the user's original one-shot WAV folder into the bounded personal import format. */
+public final class AfroPackPayloadBuilder {
+ public static void main(String[] args)throws Exception{File folder=new File(args[0]),output=new File(args[2]);SampledInstruments.Region[] regions=new SampledInstruments.Region[14];for(int i=0;i<14;i++){float[] pcm=SampledInstruments.readWav(new File(folder,AfroDrumPack.FILES[i]));regions[i]=new SampledInstruments.Region(36+i,36+i,1,127,36+i,0,0,false,1,pcm,240);System.out.println(AfroDrumPack.TITLES[i]+": "+pcm.length/2+" frames");}String terms=new String(Files.readAllBytes(new File(args[1]).toPath()),"UTF-8");SampledInstruments.Pack pack=new SampledInstruments.Pack(AfroDrumPack.NAME,terms,regions);String generated=InstrumentArchive.write(pack,output.getParentFile());Files.move(new File(output.getParentFile(),generated).toPath(),output.toPath(),StandardCopyOption.REPLACE_EXISTING);try(InputStream input=new FileInputStream(output)){File verify=Files.createTempDirectory("afro-verify-").toFile();try{AfroDrumPack.install(input,verify);System.out.println("Verified "+AfroDrumPack.load(null,verify).regions.length+" original drum sounds.");}finally{for(File f:verify.listFiles())f.delete();verify.delete();}}}
+}

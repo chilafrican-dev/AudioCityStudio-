@@ -1,0 +1,42 @@
+name: Screenshots (emulator)
+# Opens pages of the app on an emulator and prints the screenshots into the log. Runs when a commit message contains [screens].
+on:
+  push:
+    branches: [ai-generator]
+  workflow_dispatch:
+jobs:
+  screens:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[screens]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0 ndk;26.3.11579264"
+      - name: Install tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q zip python3-pil
+      - name: Build the APK
+        working-directory: CityStudioAndroid
+        run: bash build.sh
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Take screenshots
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -memory 4096
+          script: bash CityStudioAndroid/tools/screens.sh CityStudioAndroid/AudioCityStudio.apk

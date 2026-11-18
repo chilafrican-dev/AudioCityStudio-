@@ -25,6 +25,16 @@ public final class BeatPilot {
   if(feel==2){for(int i=0;i<16;i+=4)src[2][i]=true;src[0][14]=true;}
   return src;
  }
+ /** Explicit auto-build template, editable in the same manual pattern rack. */
+ public static BeatPilotDrumPattern pattern(int genre,int feel,int bpm,int bars){BeatPilotDrumPattern pattern=new BeatPilotDrumPattern(bpm,bars);for(int b=0;b<bars;b++){boolean[][] hits=drumSteps(genre,feel,b);int[] lane={0,1,3};for(int part=0;part<3;part++)for(int step=0;step<16;step++)if(hits[part][step])pattern.set(b,lane[part],step,part==0?115:part==1?105:86);}return pattern;}
+ public static List<Core.Track> harmony(Core.Session session,int genre,int root,boolean minor,int progression,int bars,long at){
+  if(bars!=4&&bars!=8)throw new IllegalArgumentException("Choose four or eight bars");if(genre<0||genre>=GENRES.length||root<0||root>11)throw new IllegalArgumentException("Invalid music settings");
+  Core.Track bass=new Core.Track("Auto · Bass",DRUM_COLOR[1]),chords=new Core.Track("Auto · Chords",DRUM_COLOR[2]);bass.volume=.76;chords.volume=.62;chords.fx.room=true;chords.fx.roomMix=.09;
+  int[] degrees=PerformanceChords.degrees(minor,progression);int style=genre==2?1:genre==3?2:0;double bar=Core.RATE*60.0/session.bpm*4;
+  if(at<0||at+Math.round(bar*bars)>Core.MAX_FRAMES)throw new IllegalArgumentException("Groove exceeds project length");
+  for(int b=0;b<bars;b++)for(int part=0;part<2;part++){int degree=degrees[b%degrees.length];Core.Clip clip=ProMidi.clip(PocketComposer.chordName(root,minor,degree),PocketComposer.barNotes(part,root,minor,degree,session.bpm,style,false),Synth.factory(part==0?2:style==2?1:3),at+Math.round(b*bar),(int)Math.round(bar));(part==0?bass:chords).clips.add(clip);}
+  return java.util.Arrays.asList(bass,chords);
+ }
  /** Generates three separate, non-destructive Arrange tracks with a four- or eight-bar groove. */
  public static List<Core.Track> groove(Core.Session session,int genre,int feel,int root,boolean minor,int progression,int bars,long start)throws IOException {
   return groove(session,genre,feel,root,minor,progression,bars,start,null);

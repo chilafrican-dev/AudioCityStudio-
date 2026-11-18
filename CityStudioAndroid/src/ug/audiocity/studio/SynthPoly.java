@@ -9,25 +9,33 @@ public final class SynthPoly {
  static final class Voice {final int channel,note;final Synth.Config config;final double velocity,frequency;double phase,phase2,age,offAt=-1,offLevel,lpL,lpR;boolean pending;double[] string;int stringAt;double stringPosition;float left,right;
   Voice(int ch,int key,int vel,Synth.Config c){channel=ch;note=key;velocity=Math.pow(vel/127.0,.8);config=c.copy();frequency=440*Math.pow(2,(key-69)/12.0);int length=Math.max(2,(int)Math.round(Core.RATE/frequency));string=new double[length];Random random=new Random(91823+key*17+c.patch*701);for(int i=0;i<length;i++)string[i]=(random.nextDouble()*2-1)*.6;if(c.patch==10)for(int i=0;i<length;i++)string[i]=(string[i]+string[(i+1)%length])*.5;}
   void release(){if(offAt<0){offAt=age;offLevel=Synth.preEnvelope(age,config);}}boolean done(){return offAt>=0&&age>=offAt+config.release+.01;}
-  void tick(double bend){Synth.Config c=config;double f=frequency*Math.pow(2,bend/12),actual=f;if(c.patch==7)actual*=1+.6*Math.exp(-age*36);if(c.patch==11)actual*=1+2.2*Math.exp(-age*48);phase+=2*Math.PI*actual/Core.RATE;phase2+=2*Math.PI*f*Math.pow(2,c.detune/1200)/Core.RATE;double x=0,spread=0;switch(c.patch){case 0:x=Math.sin(phase)*.65+Math.sin(phase*2)*.18*Math.exp(-age*4)+Math.sin(phase*3)*.07;break;case 1:x=Math.sin(phase+1.8*Math.sin(phase*2)*Math.exp(-age*4))*.8;break;case 2:x=Math.sin(phase)*.8+Math.sin(phase*2)*.12;break;case 3:case 10:stringAt=(int)stringPosition;double fraction=stringPosition-stringAt;x=string[stringAt]+(string[(stringAt+1)%string.length]-string[stringAt])*fraction;string[stringAt]=(x+string[(stringAt+1)%string.length])*.5*(c.patch==3?.995:.998);stringPosition=(stringPosition+Math.pow(2,bend/12))%string.length;x=x*1.6+Math.sin(phase*2)*.08*Math.exp(-age*15);break;case 4:x=(Math.sin(phase)+Math.sin(phase2)+Math.sin(phase*.5)*.4)*.33;spread=(Math.sin(phase2)-Math.sin(phase))*.13;break;case 5:x=Math.sin(phase)*.65+Math.sin(phase*2.706)*.23*Math.exp(-age*3)+Math.sin(phase*5.41)*.1*Math.exp(-age*6);break;case 6:x=(Synth.saw(phase,f)+Synth.saw(phase2,f*Math.pow(2,c.detune/1200)))*.45;spread=(Math.sin(phase2)-Math.sin(phase))*.07;break;case 7:x=Math.sin(phase+Math.sin(phase*2)*1.4*Math.exp(-age*9))*.8;break;case 8:x=Math.sin(phase)*.65+Math.sin(phase*4)*.23*Math.exp(-age*18)+Math.sin(phase*9.9)*.08*Math.exp(-age*30);break;case 9:x=Synth.saw(phase,f)*.6+Synth.saw(phase2,f*Math.pow(2,c.detune/1200))*.3;break;case 11:x=Math.tanh((Math.sin(phase)+Math.sin(phase*2)*.08)*1.2)*.85;break;}double env=offAt<0?Synth.preEnvelope(age,c):offLevel*Math.max(0,1-(age-offAt)/c.release),alpha=1-Math.exp(-2*Math.PI*(250+c.tone*c.tone*14500)/Core.RATE);lpL+=alpha*((x-spread)*env*.31*velocity-lpL);lpR+=alpha*((x+spread)*env*.31*velocity-lpR);left=(float)lpL;right=(float)lpR;age+=1.0/Core.RATE;}
+  void tick(double bend){Synth.Config c=config;double f=frequency*Math.pow(2,bend/12),actual=f;if(c.patch==7)actual*=1+.6*Math.exp(-age*36);if(c.patch==11)actual*=1+2.2*Math.exp(-age*48);phase+=2*Math.PI*actual/Core.RATE;phase2+=2*Math.PI*f*Math.pow(2,c.detune/1200)/Core.RATE;double x=0,spread=0;switch(c.patch){case 0:x=Math.sin(phase)*.5+Math.sin(phase*2)*.22*Math.exp(-age*3)+Math.sin(phase*3)*.12*Math.exp(-age*5)+Math.sin(phase*4)*.06*Math.exp(-age*7)+Math.sin(phase2)*.3+Math.sin(phase2*2)*.1*Math.exp(-age*3);spread=(Math.sin(phase2)-Math.sin(phase))*.06;break;case 1:x=Math.sin(phase+1.8*Math.sin(phase*2)*Math.exp(-age*4))*.55+Math.sin(phase2+1.2*Math.sin(phase2*2)*Math.exp(-age*4))*.3+Math.sin(phase*14)*.05*Math.exp(-age*14);spread=(Math.sin(phase2)-Math.sin(phase))*.08;break;case 2:x=Math.tanh((Math.sin(phase)*.6+Math.sin(phase*2)*.25+Math.sin(phase*3)*.1+Math.sin(phase*.5)*.25)*1.3)*.75;break;case 3:case 10:stringAt=(int)stringPosition;double fraction=stringPosition-stringAt;x=string[stringAt]+(string[(stringAt+1)%string.length]-string[stringAt])*fraction;string[stringAt]=(x+string[(stringAt+1)%string.length])*.5*(c.patch==3?.995:.998);stringPosition=(stringPosition+Math.pow(2,bend/12))%string.length;x=x*1.6+Math.sin(phase*2)*.08*Math.exp(-age*15);break;case 4:x=(Math.sin(phase)+Math.sin(phase2)+Math.sin(phase*.5)*.4)*.33;spread=(Math.sin(phase2)-Math.sin(phase))*.13;break;case 5:x=Math.sin(phase)*.65+Math.sin(phase*2.706)*.23*Math.exp(-age*3)+Math.sin(phase*5.41)*.1*Math.exp(-age*6);break;case 6:x=(Synth.saw(phase,f)+Synth.saw(phase2,f*Math.pow(2,c.detune/1200)))*.45;spread=(Math.sin(phase2)-Math.sin(phase))*.07;break;case 7:x=Math.sin(phase+Math.sin(phase*2)*1.4*Math.exp(-age*9))*.8;break;case 8:x=Math.sin(phase)*.65+Math.sin(phase*4)*.23*Math.exp(-age*18)+Math.sin(phase*9.9)*.08*Math.exp(-age*30);break;case 9:x=Synth.saw(phase,f)*.6+Synth.saw(phase2,f*Math.pow(2,c.detune/1200))*.3;break;case 12:x=Math.sin(phase)*.95;break;case 13:x=Synth.saw(phase,f)*.6+Math.sin(phase*.5)*.3;break;case 14:x=(Math.sin(phase)+Math.sin(phase*3)/3+Math.sin(phase*5)/5+Math.sin(phase*7)/7)*.62+Math.sin(phase*.5)*.2;break;case 15:x=Math.sin(phase)*.7+Math.sin(phase*2)*.3*Math.exp(-age*6)+Math.sin(phase*3)*.12*Math.exp(-age*10);break;case 16:x=Math.sin(phase)*.92+Math.sin(phase*2)*.04;break;case 11:x=Math.tanh((Math.sin(phase)+Math.sin(phase*2)*.08)*1.2)*.85;break;}double env=offAt<0?Synth.preEnvelope(age,c):offLevel*Math.max(0,1-(age-offAt)/c.release),alpha=1-Math.exp(-2*Math.PI*(250+c.tone*c.tone*14500)/Core.RATE);lpL+=alpha*((x-spread)*env*.31*velocity-lpL);lpR+=alpha*((x+spread)*env*.31*velocity-lpR);left=(float)lpL;right=(float)lpR;age+=1.0/Core.RATE;}
  }
  static final class SampleVoice {
   final int channel,note;final SampledInstruments.Region region;final double velocity,step;
-  double at=0,releaseFrame=-1;boolean pending;float left,right;
-  SampleVoice(int ch,int note,int vel,SampledInstruments.Region r){channel=ch;this.note=note;region=r;velocity=Math.pow(vel/127.0,.8)*Math.max(.01,Math.min(2,r.gain));step=Math.pow(2,(note-r.root)/12.0);}
+  double at=0,releaseFrame=-1,pitchStep,lastBend,lowL,lowR;long ageFrames;boolean pending;float left,right;
+  /** Drums (MIDI channel 10) are one-shots: they play to the end of the sample like a drum machine, ignore note-off, and use a straight velocity scale. */
+  final boolean oneShot;
+  SampleVoice(int ch,int note,int vel,SampledInstruments.Region r){this(ch,note,vel,r,1);}
+  SampleVoice(int ch,int note,int vel,SampledInstruments.Region r,double level){channel=ch;this.note=note;region=r;oneShot=ch==9;velocity=(oneShot?vel/127.0:Math.pow(vel/127.0,.8))*Math.max(.01,Math.min(2,r.gain))*level;step=Math.pow(2,(note-r.root)/12.0);pitchStep=step;}
   void release(){if(releaseFrame<0)releaseFrame=0;}
-  boolean done(){return at>=region.pcm.length/2.0&&(!region.loop||releaseFrame>=0)||releaseFrame>=region.releaseFrames;}
-  void tick(){int n=region.pcm.length/2;double pos=at;
+  void noteOff(){if(!oneShot)release();}
+  boolean done(){return !region.loop&&at>=region.pcm.length/2.0||releaseFrame>=region.releaseFrames;}
+  void tick(double bend){int n=region.pcm.length/2;double pos=at;
    if(region.loop&&region.loopEnd>region.loopStart&&pos>=region.loopEnd){pos=region.loopStart+(pos-region.loopStart)%(region.loopEnd-region.loopStart);at=pos;}
    if(n<1||pos>=n){left=right=0;at=n;return;}
    int i=(int)pos,j=Math.min(n-1,i+1);double frac=pos-i;
-   float envelope=(float)Math.min(1,at/(Core.RATE*.004));
+   float envelope=oneShot?1f:(float)Math.min(1,ageFrames/(Core.RATE*.004));
    if(releaseFrame>=0){envelope*=Math.max(0,1-releaseFrame/(double)region.releaseFrames);releaseFrame++;}
    left=(float)((region.pcm[i*2]+(region.pcm[j*2]-region.pcm[i*2])*frac)*velocity*envelope*.6);
    right=(float)((region.pcm[i*2+1]+(region.pcm[j*2+1]-region.pcm[i*2+1])*frac)*velocity*envelope*.6);
-   at+=step;
+   if(channel!=9){lowL+=.034*(left-lowL);lowR+=.034*(right-lowR);left=(float)(Math.tanh((left+.3*lowL)*1.1)/1.1);right=(float)(Math.tanh((right+.3*lowR)*1.1)/1.1);}
+   if(bend!=lastBend){pitchStep=step*Math.pow(2,bend/12.0);lastBend=bend;}at+=pitchStep;ageFrames++;
   }
  }
+ /** Same lane levels the pattern editor mixes with, so a placed pattern sounds like it did in the editor (kick loudest, hats softest). */
+ static final float[] PATTERN_LEVELS={.72f,.52f,.5f,.27f,.27f,.31f,.42f,.42f};
+ static double patternLevel(SampledInstruments.Pack pack,int note){if(pack==null||!"Pattern drum kit".equals(pack.source)||note<36||note>43)return 1;return PATTERN_LEVELS[note-36]/(.6*.8*.7);} // undo the voice (.6) and output stage (tanh(x*.8)*.7) gains
  private final SampledInstruments.Pack[] samplePacks=new SampledInstruments.Pack[16];
  final ArrayList<SampleVoice> sampled=new ArrayList<>();
  public synchronized void setSamplePack(SampledInstruments.Pack pack){silence();Arrays.fill(samplePacks,pack);}
@@ -42,17 +50,17 @@ public final class SynthPoly {
  public synchronized void message(int status,int a,int b){int channel=status&15,type=status&240;
   if(type==144&&b>0){
    for(Voice v:voices)if(v.channel==channel&&v.note==a)v.release();
-   for(SampleVoice v:sampled)if(v.channel==channel&&v.note==a)v.release();
+   if(channel!=9)for(SampleVoice v:sampled)if(v.channel==channel&&v.note==a)v.release();
    if(voices.size()+sampled.size()>=16){if(!sampled.isEmpty())sampled.remove(0);else voices.remove(0);}
    SampledInstruments.Pack pack=samplePacks[channel];
-   if(pack!=null){SampledInstruments.Region r=pack.find(a,b);if(r!=null)sampled.add(new SampleVoice(channel,a,b,r));}
+   if(pack!=null){SampledInstruments.Region r=pack.find(a,b);if(r!=null)sampled.add(new SampleVoice(channel,a,b,r,patternLevel(pack,a)));}
    else voices.add(new Voice(channel,a,b,config[channel]));
   }else if(type==128||type==144&&b==0){
    for(Voice v:voices)if(v.channel==channel&&v.note==a){if(sustain[channel])v.pending=true;else v.release();}
-   for(SampleVoice v:sampled)if(v.channel==channel&&v.note==a){if(sustain[channel])v.pending=true;else v.release();}
+   for(SampleVoice v:sampled)if(v.channel==channel&&v.note==a){if(sustain[channel])v.pending=true;else v.noteOff();}
   }else if(type==176&&a==64){sustain[channel]=b>=64;if(!sustain[channel]){
    for(Voice v:voices)if(v.channel==channel&&v.pending)v.release();
-   for(SampleVoice v:sampled)if(v.channel==channel&&v.pending)v.release();
+   for(SampleVoice v:sampled)if(v.channel==channel&&v.pending){v.pending=false;v.noteOff();}
   }}else if(type==176&&(a==120||a==123)){
    for(Voice v:voices)if(v.channel==channel)v.release();for(SampleVoice v:sampled)if(v.channel==channel)v.release();
    if(a==120){voices.removeIf(v->v.channel==channel);sampled.removeIf(v->v.channel==channel);}
@@ -117,7 +125,7 @@ public final class SynthPoly {
  public synchronized void silence(){voices.clear();sampled.clear();scheduled.clear();Arrays.fill(sustain,false);Arrays.fill(bend,0);activeVoices=0;}
  private void renderVoices(float[] out,int frames){Arrays.fill(out,0,frames*2,0);
   for(Voice v:voices)for(int i=0;i<frames;i++){v.tick(bend[v.channel]);out[2*i]+=v.left;out[2*i+1]+=v.right;}
-  for(SampleVoice v:sampled)for(int i=0;i<frames;i++){v.tick();out[2*i]+=v.left;out[2*i+1]+=v.right;}
+  for(SampleVoice v:sampled)for(int i=0;i<frames;i++){v.tick(bend[v.channel]);out[2*i]+=v.left;out[2*i+1]+=v.right;}
   for(int i=0;i<frames*2;i++)out[i]=(float)(Math.tanh(out[i]*.8)*.7);
   voices.removeIf(Voice::done);sampled.removeIf(SampleVoice::done);activeVoices=voices.size()+sampled.size();
  }
