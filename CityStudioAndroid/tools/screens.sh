@@ -14,7 +14,8 @@ x=open('/tmp/ui.xml',encoding='utf-8',errors='ignore').read()
 for m in re.finditer(r'<node [^>]*>',x):
     n=m.group(0)
     t=re.search(r' text="([^"]*)"',n).group(1); d=re.search(r'content-desc="([^"]*)"',n).group(1)
-    if t and (sys.argv[1]==t or sys.argv[1] in t and len(t)<20) or (d and sys.argv[1] in d and len(d)<60):
+    q=sys.argv[1].lower(); tl=t.lower(); dl=d.lower()
+    if tl and (q==tl or q in tl and len(tl)<20) or (dl and q in dl and len(dl)<60):
         b=list(map(int,re.findall(r'\d+',re.search(r'bounds="([^"]*)"',n).group(1))))
         subprocess.call(['adb','shell','input','tap',str((b[0]+b[2])//2),str((b[1]+b[3])//2)]); print("tapped",sys.argv[1]); break
 else: print("not found",sys.argv[1])
@@ -27,7 +28,7 @@ shot start
 for w in "OK" "Close" "Not now" "Later" "Skip" "Cancel"; do tap_text "$w"; done
 adb shell am start -n $pkg/.MainActivity >/dev/null 2>&1; sleep 4
 shot app
-tap_text "+ Track"; tap_text "＋ Track"; tap_text "Track"; tap_text "Track"; shot arrange
+for k in 1 2; do tap_text "＋ Track"; tap_text "Apply"; done; shot arrange
 tap_text "Mixer"; sleep 2; shot mixer
 adb shell input swipe 540 1200 540 500 400; sleep 2; shot mixer-scrolled
 exit 0
