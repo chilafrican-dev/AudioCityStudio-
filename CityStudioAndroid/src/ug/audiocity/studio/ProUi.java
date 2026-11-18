@@ -1342,16 +1342,18 @@ final class ProUi {
         if (!Double.isFinite(refLufs)) return 1; if (!Double.isFinite(mixLufs)) mixLufs = -14; return Pro.gain(Math.max(-40, Math.min(40, mixLufs - refLufs)));
     }
     void matchReference() { final Core.Session project = a.session; if (project.reference == null) return; a.busy("Matching loudness…", () -> { double g = matchGain(project, project.reference); a.runOnUiThread(() -> { project.referenceGain = g; a.save(false); a.toast(String.format(Locale.US, "Reference re-matched (%+.1f dB).", Pro.db(g))); reopen(this::master); }); }); }
+    /** Measured mastering presets: the whole song is played through the chain and the levels set to hit the loudness target. */
     void masteringPresets() {
-        String[] names = {"Streaming · clean, about −14 LUFS", "Loud · club/rap, about −9 LUFS", "Warm & gentle · acoustic, about −16 LUFS", "Podcast voice · −16 LUFS", "Clear the master chain"};
-        new AlertDialog.Builder(a).setTitle("Mastering preset").setItems(names, (d, i) -> {
-            Core.Session s = a.session; edit("Mastering preset"); s.masterInserts.clear();
-            if (i < 4) { Pro.Insert eq = new Pro.Insert(Pro.EQ8); eq.set(0, 1); eq.set(2, i == 3 ? 70 : 28); if (i == 2) { eq.set(30, 1); eq.set(31, 2); eq.set(32, 9000); eq.set(33, -1.5); } if (i == 1) { eq.set(5, 1); eq.set(6, 1); eq.set(7, 90); eq.set(8, 1.5); } eq.touch(); s.masterInserts.add(eq);
-                Pro.Insert comp = new Pro.Insert(ProFx.COMP); comp.set(0, i == 1 ? -14 : -18); comp.set(1, i == 1 ? 3 : 2); comp.set(2, 30); comp.set(3, 200); comp.set(4, 8); comp.set(5, i == 1 ? 2 : 1); comp.touch(); s.masterInserts.add(comp);
-                if (i == 1) { Pro.Insert tape = new Pro.Insert(ProFx.TAPE); tape.set(0, 4); tape.set(4, 40); tape.touch(); s.masterInserts.add(tape); }
-                if (i != 3) s.masterInserts.add(new Pro.Insert(Pro.MULTIBAND));
-                Pro.Insert lim = new Pro.Insert(Pro.LIMITER); lim.set(0, i == 1 ? 8 : i == 2 ? 1 : 3); lim.set(1, -1); lim.touch(); s.masterInserts.add(lim); }
-            a.save(false); a.toast(i == 4 ? "Master chain cleared." : "Preset loaded. Play the loudest section and adjust the limiter input until Integrated LUFS is near the target; export can also normalise exactly."); reopen(this::master);
+        String[] names = Arrays.copyOf(ProMastering.NAMES, ProMastering.NAMES.length + 1); names[names.length - 1] = "Clear the master chain";
+        new AlertDialog.Builder(a).setTitle("Mastering preset · measured on your song").setItems(names, (d, i) -> {
+            Core.Session s = a.session;
+            if (i == ProMastering.NAMES.length) { edit("Clear master chain"); s.masterInserts.clear(); a.save(false); a.toast("Master chain cleared."); a.refresh(); return; }
+            a.engine.pause(); edit("Mastering preset"); final Core.Session project = s;
+            a.busy("Mastering: measuring your whole song (a few passes)…", () -> {
+                Core.Session work = project.copy(); ProMastering.Result r = ProMastering.apply(work, i);
+                a.runOnUiThread(() -> { if (a.session != project) return; project.masterInserts.clear(); for (Pro.Insert x : work.masterInserts) project.masterInserts.add(x); a.save(false); a.refresh();
+                    new AlertDialog.Builder(a).setTitle(ProMastering.NAMES[i]).setMessage(r.report(ProMastering.NAMES[i])).setPositiveButton("OK", null).setNeutralButton("Open master chain", (dd, w) -> master()).show(); });
+            });
         }).show();
     }
 

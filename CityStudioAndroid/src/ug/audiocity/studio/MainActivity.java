@@ -622,7 +622,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
    if(!master){float half=(wid-dp(4))/2;pill(c,"ø",in,yDevice(),half,dp(18),t.phaseInvert,0xffe3c27a);pill(c,"Low cut",in+half+dp(4),yDevice(),half,dp(18),t.fx.hpf,0xffa9cbe0);}
    else text(c,"STEREO OUT",cx,yDevice()+dp(13),8,DIM,true);
    // Setting
-   slotBox(c,in,ySetting(),wid,dp(18),master?"Output":"Setting",false,0);
+   slotBox(c,in,ySetting(),wid,dp(18),master?"Mastering":"Setting",false,0);
    // Gain reduction meter
    float red=master?engine.reduction:t.reduction;p.setColor(0xff1b2229);c.drawRect(in,yGr(),in+wid,yGr()+dp(6),p);if(red>.05f){p.setColor(0xffe0b26a);float gw=Math.min(wid,wid*red/20f);c.drawRect(in+wid-gw,yGr(),in+wid,yGr()+dp(6),p);}
    // EQ display
@@ -695,7 +695,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
   void tap(Core.Track t,boolean master,int z,int k,boolean right,boolean longPress,float local){
    switch(z){
     case Z_DEVICE:if(master)break;checkpoint();if(right)t.fx.hpf=!t.fx.hpf;else t.phaseInvert=!t.phaseInvert;toast(right?(t.fx.hpf?"Low cut on: rumble below "+Math.round(t.fx.highPassHz)+" Hz removed.":"Low cut off."):(t.phaseInvert?"Polarity inverted.":"Polarity normal."));break;
-    case Z_SETTING:if(master){pro.export();}else pro.factoryPresets(t);break;
+    case Z_SETTING:if(master){pro.masteringPresets();}else pro.factoryPresets(t);break;
     case Z_GR:case Z_EQ:if(master){pro.inserts(session.masterInserts,"Stereo Out · plug-ins");}else{selected=t;screen="FX";refresh();}break;
     case Z_INPUT:if(master)break;if(local<dp(9)+dp(30)){checkpoint();t.mono=!t.mono;toast(t.mono?"Mono channel: left and right are summed.":"Stereo channel.");}else if(instrument(t))pro.chooseTrackInstrument(t);else pro.chooseInput();break;
     case Z_FX:{if(master){if(k<session.masterInserts.size())pro.editInsert(session.masterInserts.get(k));else pro.inserts(session.masterInserts,"Stereo Out · plug-ins");break;}
