@@ -114,6 +114,8 @@ public final class AudioIO {
   public volatile boolean useNative=true;
   /** Playback level; lowered while recording through the phone speaker so less beat reaches the microphone. */
   public volatile float outputGain=1f;
+  /** Output strip Dim: lowers the master output by 20 dB without touching the mix. */
+  public volatile boolean dim;
   /** Speaker layout during speaker takes: 0 both, 1 left only, 2 right only, 3 top earpiece. */
   public volatile int speakerRoute;
   public volatile String outputPath="";
@@ -177,7 +179,7 @@ public final class AudioIO {
        double g=monitorGain*session.master;
        for(int i=0;i<n*2;i++){double combined=data[i]+mon[i]*g;data[i]=(float)Math.max(-.89125,Math.min(.89125,combined));}
       }
-      float og=outputGain;if(og!=1f)for(int gi=0;gi<n*2;gi++)data[gi]*=og;SpeakerChoice.route(data,n,speakerRoute);
+      float og=outputGain*(dim?.1f:1f);if(og!=1f)for(int gi=0;gi<n*2;gi++)data[gi]*=og;SpeakerChoice.route(data,n,speakerRoute);
       int written=0;
       while(playing&&written<n*2){
        int v=track.write(data,written,n*2-written);

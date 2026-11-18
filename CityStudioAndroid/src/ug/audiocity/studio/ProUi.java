@@ -377,7 +377,8 @@ final class ProUi {
         if (t != null && t.group != null && param.equals("volume") && before > 1e-6) { double ratio = now / before; for (Core.Track o : s.tracks) if (o != t && t.group.equals(o.group)) o.volume = Math.max(0, Math.min(2, o.volume * ratio)); }
         if (t != null && t.group != null && param.equals("pan")) { double delta = now - before; for (Core.Track o : s.tracks) if (o != t && t.group.equals(o.group)) o.pan = Math.max(-1, Math.min(1, o.pan + delta)); }
         Pro.Lane lane = t == null ? s.masterAutomation : t.automation.get(param);
-        if (writeAutomation && a.engine.playing) {
+        if ((writeAutomation || (t != null && t.automationMode >= 2)) && a.engine.playing) {
+            if (t != null && t.automationMode == 3) latched.put(t, param);
             if (lane == null) { lane = new Pro.Lane(param); if (t == null) s.masterAutomation = lane; else t.automation.put(param, lane); }
             long pos = a.engine.position; long from = lastWrite < 0 || lastWrite > pos || pos - lastWrite > Core.RATE ? pos : lastWrite; lane.write(from, pos, now); lastWrite = pos;
         } else if (lane != null && lane.enabled && lane.size() > 0 && SystemClock.uptimeMillis() - lastAutomationToast > 4000) {
@@ -385,8 +386,21 @@ final class ProUi {
         }
         if (!a.engine.playing) lastWrite = -1;
     }
+    /** Tracks in Latch mode keep writing their last value after the finger lifts, until playback stops. */
+    final java.util.Map<Core.Track, String> latched = new java.util.concurrent.ConcurrentHashMap<>(); final java.util.Map<Core.Track, Long> latchFrom = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Called from the transport tick. Write mode overwrites automation for the whole pass; Latch continues after release. */
+    void automationTick() {
+        Core.Session s = a.session; if (s == null) return;
+        if (!a.engine.playing) { latched.clear(); latchFrom.clear(); return; }
+        long pos = a.engine.position;
+        for (Core.Track t : s.tracks) {
+            String param = t.automationMode == 4 ? "volume" : latched.get(t); if (param == null || t.automationMode < 3) continue;
+            Pro.Lane lane = t.automation.get(param); if (lane == null) { lane = new Pro.Lane(param); t.automation.put(param, lane); }
+            long from = latchFrom.getOrDefault(t, pos); if (from > pos || pos - from > Core.RATE) from = pos; lane.write(from, pos, param.equals("pan") ? t.pan : t.volume); latchFrom.put(t, pos);
+        }
+    }
     /** The value the mixer should display (automation wins while a lane is active). */
-    double shownVolume(Core.Track t) { Core.Session s = a.session; if (t == null) { Pro.Lane l = s.masterAutomation; double v = l == null ? Double.NaN : l.at(a.engine.position); return Double.isNaN(v) ? s.master : v; } return Pro.automated(t, "volume", a.engine.position, t.volume); }
+    double shownVolume(Core.Track t) { Core.Session s = a.session; if (t == null) { Pro.Lane l = s.masterAutomation; double v = l == null ? Double.NaN : l.at(a.engine.position); return Double.isNaN(v) ? s.master : v; } return t.automationMode == 0 ? t.volume : Pro.automated(t, "volume", a.engine.position, t.volume); }
 
     // ---------------------------------------------------------------- takes, comping, slip
 
@@ -496,7 +510,7 @@ final class ProUi {
     /** Called before recording starts. */
     void configureCapture(AudioIO.Capture take, Core.Track target) {
         take.device = inputDevice(); take.channel = take.device == null ? 0 : prefs().getInt("inputChannel", 0); take.stereo = prefs().getBoolean("inputStereo", false);
-        if (prefs().getBoolean("monitor", false)) { Pro.Ring ring = new Pro.Ring(8192); take.monitor = ring; a.engine.monitor = ring; a.engine.monitorTrack = prefs().getBoolean("monitorFx", true) ? target : null; }
+        if (prefs().getBoolean("monitor", false) || (target != null && target.inputMonitor)) { Pro.Ring ring = new Pro.Ring(8192); take.monitor = ring; a.engine.monitor = ring; a.engine.monitorTrack = prefs().getBoolean("monitorFx", true) ? target : null; }
         else { a.engine.monitor = null; a.engine.monitorTrack = null; }
         checkBluetooth();
     }
