@@ -403,7 +403,10 @@ public final class AutoParts {
     public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb) { return fromHum(mono12k, bpm, an, bpb, false); }
 
     /** aligned = the audio starts exactly at the first beat of the clip (hummed along with the song), so notes keep their place against the beat. */
-    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb, boolean aligned) {
+    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb, boolean aligned) { return fromHum(mono12k, bpm, an, bpb, aligned, 0); }
+
+    /** grid 0 keeps the timing exactly as hummed; otherwise notes snap to that grid (in beats). */
+    public static List<AiMidiGenerator.Note> fromHum(float[] mono12k, int bpm, Analysis an, int bpb, boolean aligned, double grid) {
         List<AiMidiGenerator.Note> out = new ArrayList<>(); if (mono12k == null) return out;
         final int hop = 120; int frames = Math.max(0, (mono12k.length - 700) / hop); if (frames < 10) return out;
         double[] midi = new double[frames];
@@ -427,18 +430,61 @@ public final class AutoParts {
             if (f <= lastVoiced) f = lastVoiced + 1;
         }
         if (raw.isEmpty()) return out;
-        double[] ps = new double[raw.size()]; for (int i = 0; i < ps.length; i++) ps[i] = raw.get(i)[2]; double median = med(ps.clone(), ps.length);
-        int shift = 0; while (median + shift < 60) shift += 12; while (median + shift > 78) shift -= 12;
-        double bps = bpm / 60.0, t0 = aligned ? 0 : raw.get(0)[0] * hop / 12000.0, end = an.chords.length * (double) bpb; double lastStart = -1;
+        // ---- Exact timing. The pitch track is too coarse for timing, so each note's start and end come from a 1 ms loudness envelope.
+        int ms = mono12k.length / 12; double[] env = new double[ms];
+        for (int t = 0; t < ms; t++) { double e = 0; int c = 0; for (int i = Math.max(0, t * 12 - 24); i < Math.min(mono12k.length, t * 12 + 24); i++) { e += mono12k[i] * (double) mono12k[i]; c++; } env[t] = Math.sqrt(e / Math.max(1, c)); }
+        double[] envS = new double[ms]; for (int t = 0; t < ms; t++) { double sum = 0; int c = 0; for (int k = Math.max(0, t - 7); k <= Math.min(ms - 1, t + 7); k++) { sum += env[k]; c++; } envS[t] = sum / c; }
+        // Pitch frames describe a ~45 ms window starting at the frame, so the sound they hear is centred about 20 ms later.
+        List<double[]> notes = new ArrayList<>(); // {startMs, endMs, pitch, peak}
         for (double[] r : raw) {
-            double start = Math.round((r[0] * hop / 12000.0 - t0) * bps * 4) / 4.0, len = Math.max(.25, Math.round((r[1] - r[0]) * hop / 12000.0 * bps * 4) / 4.0);
-            if (start >= end) break; if (start <= lastStart) start = lastStart + .25; if (start >= end) break;
-            int pitch = PitchCorrector.nearest((int) Math.round(r[2]) + shift, an.key, an.minor ? 2 : 1);
-            if (!out.isEmpty()) { AiMidiGenerator.Note prev = out.get(out.size() - 1); if (prev.startBeat + prev.lengthBeat > start) out.set(out.size() - 1, note(prev.pitch, prev.velocity, prev.startBeat, Math.max(.2, start - prev.startBeat))); }
-            out.add(note(pitch, 92, start, Math.min(len, end - start))); lastStart = start;
+            int s0 = (int) (r[0] * 10) + 20, e0 = Math.min(ms - 1, (int) (r[1] * 10) + 20);
+            // "la la la" on one pitch stays voiced through the "l": split it where the loudness dips.
+            List<Integer> cuts = new ArrayList<>(); cuts.add(s0);
+            for (int t = s0 + 70; t < e0 - 70; t++) {
+                if (envS[t] > envS[t - 1] || envS[t] > envS[t + 1]) continue;
+                double left = 0, right = 0; for (int k = Math.max(cuts.get(cuts.size() - 1), t - 250); k < t; k++) left = Math.max(left, envS[k]); for (int k = t + 1; k < Math.min(e0, t + 250); k++) right = Math.max(right, envS[k]);
+                if (envS[t] < .55 * Math.min(left, right) && t - cuts.get(cuts.size() - 1) >= 70) cuts.add(t);
+            }
+            cuts.add(e0);
+            for (int i = 0; i + 1 < cuts.size(); i++) {
+                int a0 = cuts.get(i), b0 = cuts.get(i + 1); double peak = 0; for (int t = a0; t < Math.min(b0, a0 + 160); t++) peak = Math.max(peak, envS[t]);
+                int on = a0;
+                if (i == 0) { // fresh note: walk back to where the sound actually begins (pitch locks on only after the attack)
+                    int limit = notes.isEmpty() ? 0 : (int) notes.get(notes.size() - 1)[1];
+                    boolean legato = a0 - 25 > 0 && env[a0 - 25] > .5 * peak;
+                    if (!legato) { int t = Math.min(a0 + 10, ms - 1); while (t > Math.max(limit, a0 - 140) && env[t - 1] > .22 * peak) t--; on = t; }
+                } else { // after a dip: the new note starts where the loudness climbs back up
+                    int t = a0; while (t < b0 - 20 && env[t] < .45 * peak) t++; on = Math.max(a0, t - 6);
+                }
+                int off = b0; if (i + 1 == cuts.size() - 1) { while (off + 1 < ms && env[off + 1] > .2 * peak && off - b0 < 120) off++; } else { int t = b0; while (t > on + 40 && env[t] < .35 * peak) t--; off = Math.max(on + 40, t); }
+                // Pitch: middle of the note, skipping the scoop at the start.
+                List<Double> vals = new ArrayList<>(); for (int fr = (int) Math.ceil((on + 30 - 20) / 10.0); fr <= (off - 20 - 20) / 10; fr++) if (fr >= 0 && fr < frames && !Double.isNaN(sm[fr])) vals.add(sm[fr]);
+                if (vals.isEmpty()) vals.add(r[2]); Collections.sort(vals);
+                notes.add(new double[]{on, off, vals.get(vals.size() / 2), peak});
+            }
+        }
+        double[] ps = new double[notes.size()]; double loudest = 1e-9; for (int i = 0; i < ps.length; i++) { ps[i] = notes.get(i)[2]; loudest = Math.max(loudest, notes.get(i)[3]); } double median = med(ps.clone(), ps.length);
+        int shift = 0; while (median + shift < 60) shift += 12; while (median + shift > 78) shift -= 12;
+        double bps = bpm / 60.0, t0 = aligned ? 0 : notes.get(0)[0] / 1000.0, end = an.chords.length * (double) bpb;
+        for (double[] r : notes) {
+            double start = (r[0] / 1000.0 - t0) * bps, len = Math.max(.06, (r[1] - r[0]) / 1000.0 * bps);
+            if (grid > 0) { start = Math.round(start / grid) * grid; len = Math.max(grid, Math.round(len / grid) * grid); }
+            if (start < 0) { len += start; start = 0; } if (len <= .03 || start >= end) continue;
+            int pitch = PitchCorrector.nearest((int) Math.round(r[2]) + shift, an.key, an.minor ? 2 : 1); int vel = (int) Math.round(70 + 40 * Math.min(1, r[3] / loudest));
+            if (!out.isEmpty()) { AiMidiGenerator.Note prev = out.get(out.size() - 1); if (prev.startBeat + prev.lengthBeat > start) { if (start - prev.startBeat < .03) continue; out.set(out.size() - 1, note(prev.pitch, prev.velocity, prev.startBeat, start - prev.startBeat)); } }
+            out.add(note(pitch, vel, start, Math.min(len, end - start)));
         }
         return out;
     }
+
+    /** Moves hummed notes onto the beat grid (grid in beats, e.g. 0.25 = sixteenth notes), for a tighter feel. */
+    public static List<AiMidiGenerator.Note> snap(List<AiMidiGenerator.Note> notes, double grid) {
+        List<AiMidiGenerator.Note> out = new ArrayList<>(); double last = -1;
+        for (AiMidiGenerator.Note n : notes) { double st = Math.round(n.startBeat / grid) * grid; if (st <= last) st = last + grid; double len = Math.max(grid, Math.round(n.lengthBeat / grid) * grid); out.add(note(n.pitch, n.velocity, st, len)); last = st; }
+        for (int i = 0; i + 1 < out.size(); i++) { AiMidiGenerator.Note n = out.get(i), next = out.get(i + 1); if (n.startBeat + n.lengthBeat > next.startBeat) out.set(i, note(n.pitch, n.velocity, n.startBeat, next.startBeat - n.startBeat)); }
+        return out;
+    }
+
     /**
      * Fixes notes that clash with the chords. Gentle (all = false): only long notes and notes on the strong beats move to
      * the nearest chord note, so the tune keeps its shape. all = true pulls every note onto the chords.

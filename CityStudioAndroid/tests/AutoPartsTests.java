@@ -98,12 +98,20 @@ public final class AutoPartsTests {
         List<AiMidiGenerator.Note> h = AutoParts.fromHum(hum, 120, an, bpb);
         check(h.size() == 3, "three hummed notes found: " + h.size());
         check(h.get(0).pitch % 12 == 9 && h.get(1).pitch % 12 == 0 && h.get(2).pitch % 12 == 4, "hummed A C E: " + h.get(0).pitch + " " + h.get(1).pitch + " " + h.get(2).pitch);
-        check(h.get(0).startBeat == 0 && Math.abs(h.get(1).startBeat - 1.25) < .26 && Math.abs(h.get(2).startBeat - 2.5) < .26, "hum timing " + h.get(1).startBeat + " " + h.get(2).startBeat);
+        check(Math.abs(h.get(0).startBeat) < .02 && Math.abs(h.get(1).startBeat - 1.2) < .02 && Math.abs(h.get(2).startBeat - 2.5) < .02, "hum timing exact " + h.get(0).startBeat + " " + h.get(1).startBeat + " " + h.get(2).startBeat);
+        check(Math.abs(h.get(0).lengthBeat - 1.0) < .08 && Math.abs(h.get(2).lengthBeat - 1.7) < .1, "hum lengths " + h.get(0).lengthBeat + " " + h.get(2).lengthBeat);
         check(h.get(0).pitch >= 57 && h.get(0).pitch <= 81, "hum moved to a melody register");
         check(AutoParts.fromHum(new float[rate * 2], 120, an, bpb).isEmpty(), "silence gives nothing");
         // Hummed along with the song: notes keep their place against the beat (0.2 s at 120 BPM is beat 0.5).
         List<AiMidiGenerator.Note> al = AutoParts.fromHum(hum, 120, an, bpb, true);
-        check(al.size() == 3 && Math.abs(al.get(0).startBeat - .5) < 1e-9 && Math.abs(al.get(1).startBeat - 1.5) < .26, "aligned hum timing " + al.get(0).startBeat + " " + al.get(1).startBeat);
+        check(al.size() == 3 && Math.abs(al.get(0).startBeat - .4) < .02 && Math.abs(al.get(1).startBeat - 1.6) < .02 && Math.abs(al.get(2).startBeat - 2.9) < .02, "aligned hum timing exact " + al.get(0).startBeat + " " + al.get(1).startBeat + " " + al.get(2).startBeat);
+        // "la la la" on one pitch: the voice never stops (the l is voiced), only the loudness dips. Every syllable must be its own note, on time.
+        float[] la = new float[rate * 3]; double ph = 0; double[] syl = {.30, .62, .93, 1.25, 1.75};
+        for (int i = 0; i < la.length; i++) { double t = i / (double) rate; if (t < .3 || t > 2.3) continue; double amp = .3; for (double sy : syl) { double d = t - sy; if (d > -.05 && d < .035) amp = .3 * (.25 + .75 * Math.abs(d < 0 ? -d / .05 : d / .035)); } ph += 2 * Math.PI * 220 / rate; la[i] = (float) (amp * (Math.sin(ph) + .4 * Math.sin(2 * ph))); }
+        List<AiMidiGenerator.Note> las = AutoParts.fromHum(la, 120, an, bpb, true);
+        StringBuilder lb = new StringBuilder(); for (AiMidiGenerator.Note n : las) lb.append(String.format("%.3f/%.3f ", n.startBeat, n.lengthBeat)); check(las.size() == 5, "five la syllables: " + las.size() + " " + lb);
+        double[] expect = {.6, 1.24, 1.86, 2.5, 3.5}; for (int i = 0; i < 5; i++) check(Math.abs(las.get(i).startBeat - expect[i]) < .02, "la " + (i + 1) + " at " + las.get(i).startBeat + " expected " + expect[i]);
+        List<AiMidiGenerator.Note> snapped = AutoParts.snap(las, .25); for (AiMidiGenerator.Note n : snapped) check(Math.abs(n.startBeat * 4 - Math.rint(n.startBeat * 4)) < 1e-9, "snap to sixteenths");
         // Quiet leftovers of the song under the hum are ignored.
         float[] dirty = hum.clone(); for (int i = 0; i < dirty.length; i++) dirty[i] += (float) (.012 * Math.sin(2 * Math.PI * 392 * i / rate));
         check(AutoParts.fromHum(dirty, 120, an, bpb, true).size() == 3, "leftover song ignored");

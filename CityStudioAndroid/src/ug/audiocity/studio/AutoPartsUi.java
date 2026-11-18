@@ -175,7 +175,7 @@ final class AutoPartsUi {
         LinearLayout tweaks = new LinearLayout(a); String[] tw = {"⬆ Higher", "⬇ Lower", "Simpler", "Busier"};
         for (int i = 0; i < tw.length; i++) { final int kind = i; Button b = chip(tw[i], new Runnable() { public void run() { tweak(kind); } }); style(b, false); b.setTextSize(12); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, a.dp(42), 1); lp.rightMargin = a.dp(i < 3 ? 5 : 0); tweaks.addView(b, lp); }
         LinearLayout.LayoutParams twp = new LinearLayout.LayoutParams(-1, -2); twp.topMargin = a.dp(6); card.addView(tweaks, twp);
-        Button fix = chip("✨  Fix wrong notes", new Runnable() { public void run() { tweak(4); } }); style(fix, false); fix.setTextSize(12); LinearLayout.LayoutParams fxp = new LinearLayout.LayoutParams(-1, a.dp(42)); fxp.topMargin = a.dp(6); card.addView(fix, fxp);
+        LinearLayout fixRow = new LinearLayout(a); Button fix = chip("✨  Fix wrong notes", new Runnable() { public void run() { tweak(4); } }); style(fix, false); fix.setTextSize(12); Button snapB = chip("🎯  Snap to beat", new Runnable() { public void run() { tweak(5); } }); style(snapB, false); snapB.setTextSize(12); LinearLayout.LayoutParams f1 = new LinearLayout.LayoutParams(0, a.dp(42), 1); f1.rightMargin = a.dp(5); fixRow.addView(fix, f1); fixRow.addView(snapB, new LinearLayout.LayoutParams(0, a.dp(42), 1)); LinearLayout.LayoutParams fxp = new LinearLayout.LayoutParams(-1, -2); fxp.topMargin = a.dp(6); card.addView(fixRow, fxp);
         LinearLayout.LayoutParams cardP = new LinearLayout.LayoutParams(-1, -2); cardP.topMargin = a.dp(6); q.addView(card, 2, cardP);
 
         Button more = chip("More choices: style, sound, length…", new Runnable() { public void run() { stopPreview(false); sound = -1; if (dialog != null) dialog.dismiss(); show(); } }); style(more, false);
@@ -247,7 +247,7 @@ final class AutoPartsUi {
     void tweak(int kind) {
         if (current == null) return; boolean bass = currentPart == AutoParts.BASS; List<AiMidiGenerator.Note> n;
         if (kind == 0) n = AutoParts.transpose(current.notes, 12, bass ? 24 : 45, bass ? 60 : 96); else if (kind == 1) n = AutoParts.transpose(current.notes, -12, bass ? 24 : 45, bass ? 60 : 96);
-        else if (kind == 2) n = AutoParts.simpler(current.notes, ui.map().beatsPerBar()); else if (kind == 4) { n = AutoParts.fitToChords(current.notes, analysis, ui.map().beatsPerBar(), true); boolean same = true; for (int i = 0; i < n.size(); i++) if (n.get(i).pitch != current.notes.get(i).pitch) same = false; if (same) { a.toast("Every note already fits the chords."); return; } } else n = AutoParts.busier(current.notes, analysis);
+        else if (kind == 2) n = AutoParts.simpler(current.notes, ui.map().beatsPerBar()); else if (kind == 5) n = AutoParts.snap(current.notes, .25); else if (kind == 4) { n = AutoParts.fitToChords(current.notes, analysis, ui.map().beatsPerBar(), true); boolean same = true; for (int i = 0; i < n.size(); i++) if (n.get(i).pitch != current.notes.get(i).pitch) same = false; if (same) { a.toast("Every note already fits the chords."); return; } } else n = AutoParts.busier(current.notes, analysis);
         if (n == null) { a.toast(kind == 0 ? "That's as high as it goes." : "That's as low as it goes."); return; }
         if (n.size() > 400) { a.toast("That's as busy as it gets."); return; }
         present(currentPart, current.title, n);
@@ -333,28 +333,38 @@ final class AutoPartsUi {
 
     // ---- Hum it
 
-    volatile boolean humming;
+    volatile boolean humming; AlertDialog hummingDialog;
 
-    void humIt() {
+    /** The phone's own recording delay, measured on a speaker take and reused for headphone takes. */
+    long syncFrames() { return a.getSharedPreferences("hum-sync", 0).getLong("frames", Long.MIN_VALUE); }
+    void saveSync(long frames) { long old = syncFrames(); long v = old == Long.MIN_VALUE ? frames : Math.round(old * .3 + frames * .7); a.getSharedPreferences("hum-sync", 0).edit().putLong("frames", v).apply(); }
+    boolean bluetoothOut() { try { android.media.AudioManager am = (android.media.AudioManager) a.getSystemService(android.content.Context.AUDIO_SERVICE); for (android.media.AudioDeviceInfo d : am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)) { int t = d.getType(); if (t == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || t == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET) return true; } } catch (Throwable ignored) {} return false; }
+
+    void humIt() { humIt(false); }
+
+    /** sync = a short speaker take that only measures this phone's timing, so later headphone takes land exactly on the beat. */
+    void humIt(final boolean sync) {
         if (!a.canEdit()) return; stopPreview(false);
+        if (sync && a.headphonesConnected()) { a.toast("Unplug or disconnect the headphones for the timing check, then try again."); return; }
         if (a.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) { a.requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 77); a.toast("Allow the microphone, then tap Hum it again."); return; }
         readProject(); final AutoParts.Analysis an = analysis; final int bpb = ui.map().beatsPerBar(), bpm = (int) Math.round(a.session.bpm); final Core.Session s = a.session;
-        final boolean phones = a.headphonesConnected(); final long regionStart = startFrame; final int regionFrames = lengthFrames;
+        final boolean phones = !sync && a.headphonesConnected(); final long regionStart = startFrame; final int regionFrames = sync ? (int) Math.min(lengthFrames, Core.beat(a.session.bpm) * bpb * 2L) : lengthFrames; final boolean bt = phones && bluetoothOut(); final long synced = syncFrames();
         if (regionFrames > Core.RATE * 70L) { a.toast("That is too long to hum in one go. Use a faster tempo or fewer bars."); return; }
         final boolean oldLoop = a.engine.loop, oldClick = a.engine.click; final long oldStart = s.loopStart, oldEnd = s.loopEnd; final float oldGain = a.engine.outputGain; final boolean[] restored = {true};
         final Runnable restore = new Runnable() { public void run() { if (restored[0]) return; restored[0] = true; a.engine.pause(); a.engine.click = oldClick; a.engine.loop = oldLoop; s.loopStart = oldStart; s.loopEnd = oldEnd; a.engine.outputGain = oldGain; a.refresh(); } };
         LinearLayout col = a.column(); col.setPadding(a.dp(16), a.dp(10), a.dp(16), a.dp(4)); col.setBackgroundColor(SHEET);
-        col.addView(a.label("Hum your tune", 18, VIOLET, true));
-        TextView help = a.label((phones ? "Your song plays in your headphones after a count." : "Your song plays quietly from the speaker after a count. I remove it from the recording afterwards. Headphones give the best result.") + " Hum or sing \"la la la\" along with it. Don't worry about wrong notes: I move them onto your key and chords.", 12, MUTED, false); help.setPadding(0, a.dp(2), 0, a.dp(10)); col.addView(help);
+        col.addView(a.label(sync ? "Timing check" : "Hum your tune", 18, VIOLET, true));
+        TextView help = a.label(sync ? "Put the phone on a table, keep quiet and press Start. The click plays from the speaker for two bars while I measure your phone's recording delay. Do this once; I remember it." : (phones ? "Your song plays in your headphones after a count." : "Your song plays quietly from the speaker after a count. I remove it from the recording afterwards. Headphones give the best result.") + " Hum or sing \"la la la\" along with it. Your timing is kept exactly as you hum it, and wrong notes move onto your key and chords." + (phones && synced == Long.MIN_VALUE ? " For perfect timing with headphones, run the timing check below once." : "") + (bt ? " Bluetooth headphones add delay; wired headphones or the speaker are more exact." : ""), 12, MUTED, false); help.setPadding(0, a.dp(2), 0, a.dp(10)); col.addView(help);
         final TextView status = a.label("Press Start, listen for the count, then hum.", 14, TXT, true); status.setGravity(Gravity.CENTER);
         final Button go = new Button(a); go.setAllCaps(false); go.setText("🎤  Start"); go.setTextSize(20); go.setTextColor(INK); go.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD)); go.setBackground(pill(COLORS[0], COLORS[0], 22));
         col.addView(go, new LinearLayout.LayoutParams(-1, a.dp(120))); LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.topMargin = a.dp(10); col.addView(status, sp);
-        final AlertDialog d = new AlertDialog.Builder(a).setView(col).setNegativeButton("Cancel", null).create();
+        if (!sync) { Button check = chip(synced == Long.MIN_VALUE ? "⏱  Timing check (do once, no headphones)" : "⏱  Timing check again  ·  delay " + Math.round(synced * 1000.0 / Core.RATE) + " ms", new Runnable() { public void run() { if (hummingDialog != null) hummingDialog.dismiss(); humIt(true); } }); style(check, false); check.setTextSize(12); LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, a.dp(42)); cp.topMargin = a.dp(12); col.addView(check, cp); }
+        final AlertDialog d = new AlertDialog.Builder(a).setView(col).setNegativeButton("Cancel", null).create(); hummingDialog = d;
         d.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() { public void onDismiss(android.content.DialogInterface x) { humming = false; restore.run(); } });
         go.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
             if (humming) { humming = false; go.setEnabled(false); status.setText("Finding your notes…"); return; }
             humming = true; go.setText("■  Done"); status.setText("Count-in…");
-            restored[0] = false; s.loopStart = regionStart; s.loopEnd = regionStart + regionFrames; a.engine.loop = true; a.engine.click = true; a.engine.position = regionStart; a.engine.outputGain = phones ? oldGain : oldGain * .5f;
+            restored[0] = false; s.loopStart = regionStart; s.loopEnd = regionStart + regionFrames; a.engine.loop = true; a.engine.click = true; a.engine.position = regionStart; a.engine.outputGain = phones || sync ? oldGain : oldGain * .5f;
             new Thread(new Runnable() { public void run() {
                 long countFrames = Core.beat(s.bpm) * bpb; final float[] mic = new float[(int) Math.min(Core.RATE * 90L, regionFrames + countFrames + Core.RATE * 4L)]; int n = 0; String problem = null; android.media.AudioRecord rec = null;
                 java.util.ArrayList<Long> stamps = new java.util.ArrayList<>(); long origin = -1;
@@ -376,29 +386,31 @@ final class AutoPartsUi {
                 finally { if (rec != null) try { rec.stop(); } catch (Exception ignored) {} if (rec != null) rec.release(); }
                 final boolean cancelled = !d.isShowing(); humming = false; a.runOnUiThread(restore);
                 a.runOnUiThread(new Runnable() { public void run() { if (d.isShowing()) { go.setEnabled(false); status.setText(phones ? "Finding your notes…" : "Removing the song from your hum, then finding your notes…"); } } });
-                List<AiMidiGenerator.Note> found = new ArrayList<>();
+                List<AiMidiGenerator.Note> found = new ArrayList<>(); final long[] measured = {0};
                 if (problem == null && !cancelled) try {
                     if (origin < 0) problem = "The song did not start. Try again.";
                     else {
                         float[] mono48;
-                        if (phones) { int from = (int) Math.max(0, origin), len = Math.max(0, Math.min(regionFrames, n - from)); mono48 = java.util.Arrays.copyOfRange(mic, from, from + len); }
+                        if (phones) { int from = (int) Math.max(0, origin + (synced == Long.MIN_VALUE ? 0 : synced)), len = Math.max(0, Math.min(regionFrames, n - from)); mono48 = java.util.Arrays.copyOfRange(mic, from, from + len); }
                         else {
                             // Take away the song that leaked from the speaker, and use its measured delay to line the hum up exactly.
                             final int margin = Core.RATE * 15 / 100, total = regionFrames + margin * 2, recorded = n; final long base = origin - margin;
-                            float[] ref = new float[regionFrames * 2], block = new float[1024]; Core.Renderer renderer = new Core.Renderer(s); renderer.meterLoudness = false;
+                            float[] ref = new float[regionFrames * 2], block = new float[1024]; Core.Renderer renderer = new Core.Renderer(s); renderer.meterLoudness = false; renderer.clickLevel = .12f * Math.max(0f, Math.min(2f, a.engine.clickVolume));
                             for (int p = 0; p < regionFrames; p += 512) { int k = Math.min(512, regionFrames - p); renderer.render(regionStart + p, k, block, true); System.arraycopy(block, 0, ref, p * 2, k * 2); }
                             final float[] cleaned = new float[total]; final int[] at = {0};
                             BleedRemover.Reader take = new BleedRemover.Reader() { public void read(long f, float[] out, int k) { for (int i = 0; i < k; i++) { long q = base + f + i; float val = q >= 0 && q < recorded ? mic[(int) q] : 0; out[i * 2] = val; out[i * 2 + 1] = val; } } };
                             BleedRemover.Report rep = BleedRemover.process(take, BleedRemover.of(ref), total, .9, new BleedRemover.Sink() { public void write(float[] sb, int k) { for (int i = 0; i < k && at[0] < total; i++) cleaned[at[0]++] = sb[i * 2]; } });
                             int lag = Math.max(0, Math.min(total - 1, rep.delayFrames)); mono48 = java.util.Arrays.copyOfRange(cleaned, lag, Math.min(total, lag + regionFrames));
+                            if (Math.abs(lag - margin) < Core.RATE / 4) { saveSync(lag - margin); measured[0] = lag - margin; } else if (sync) problem = "I couldn't hear the click. Turn the volume up and try again.";
                         }
                         int step = Core.RATE / 12000; float[] mono12 = new float[mono48.length / step]; for (int i = 0; i < mono12.length; i++) { float sum = 0; for (int k = 0; k < step; k++) sum += mono48[i * step + k]; mono12[i] = sum / step; }
-                        found = AutoParts.fitToChords(AutoParts.fromHum(mono12, bpm, an, bpb, true), an, bpb, false);
+                        if (!sync) found = AutoParts.fitToChords(AutoParts.fromHum(mono12, bpm, an, bpb, true), an, bpb, false);
                     }
                 } catch (Exception ex) { problem = "Something went wrong while finding your notes. Try again."; } catch (OutOfMemoryError ex) { problem = "Not enough memory for a take this long. Try fewer bars."; }
                 final List<AiMidiGenerator.Note> notes = found; final String issue = problem;
                 a.runOnUiThread(new Runnable() { public void run() {
                     if (cancelled || a.dead || !d.isShowing()) return;
+                    if (sync && issue == null) { d.dismiss(); a.toast("Timing checked: your phone's delay is " + Math.round(measured[0] * 1000.0 / Core.RATE) + " ms. Hummed notes will now land exactly where you sing them."); humIt(false); return; }
                     if (issue != null || notes.size() < 2) { go.setEnabled(true); go.setText("🎤  Try again"); status.setText(issue != null ? issue : "I couldn't hear a clear tune. Hum louder and closer to the phone."); return; }
                     d.dismiss(); again = new Runnable() { public void run() { humIt(); } }; present(AutoParts.MELODY, "Melody · Hummed", notes);
                 } });
