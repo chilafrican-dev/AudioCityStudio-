@@ -695,6 +695,26 @@ final class ProUi {
         } catch (Exception e) { throw new IllegalStateException(e); }
     }
 
+    /** The channel strip's Setting menu: factory presets by kind (measured on this track's audio when applied), then the user's own. */
+    void factoryPresets(Core.Track t) {
+        List<String> cats = ChannelPresets.categories(); String[] items = new String[cats.size() + 1];
+        for (int i = 0; i < cats.size(); i++) items[i] = cats.get(i) + "  ▸"; items[cats.size()] = "My presets  ▸  save / load";
+        new AlertDialog.Builder(a).setTitle(t.name + " · channel strip setting").setItems(items, (d, i) -> {
+            if (i == cats.size()) { presets(t); return; }
+            List<ChannelPresets.Preset> list = ChannelPresets.in(cats.get(i)); String[] names = new String[list.size()]; for (int k = 0; k < names.length; k++) names[k] = list.get(k).name;
+            new AlertDialog.Builder(a).setTitle(cats.get(i)).setItems(names, (d2, k) -> applyFactoryPreset(t, list.get(k))).show();
+        }).show();
+    }
+
+    void applyFactoryPreset(Core.Track t, ChannelPresets.Preset preset) {
+        a.engine.pause(); final Core.Source audio = ChannelPresets.trackAudio(t); final int bpm = a.session.bpm;
+        a.busy("Measuring " + t.name + " for " + preset.name + "…", () -> {
+            ChannelPresets.Result r = ChannelPresets.calibrate(preset, audio, bpm);
+            a.runOnUiThread(() -> { if (!a.session.tracks.contains(t)) return; edit("Preset: " + preset.name); t.fx = r.fx; t.bypassFx = false; a.save(false); a.refresh();
+                new AlertDialog.Builder(a).setTitle(preset.name + " applied").setMessage(r.report(preset)).setPositiveButton("OK", null).setNeutralButton("Open effects", (dd, w) -> { a.selected = t; a.screen = "FX"; a.refresh(); }).show(); });
+        });
+    }
+
     void presets(Core.Track t) {
         File[] files = folder("presets").listFiles((d, n) -> n.endsWith(".json")); ArrayList<File> list = new ArrayList<>(); if (files != null) { Arrays.sort(files); list.addAll(Arrays.asList(files)); }
         String[] items = new String[list.size() + 1]; items[0] = "Save " + t.name + "'s channel strip & inserts…"; for (int i = 0; i < list.size(); i++) items[i + 1] = "Load “" + list.get(i).getName().replace(".json", "") + "”";
