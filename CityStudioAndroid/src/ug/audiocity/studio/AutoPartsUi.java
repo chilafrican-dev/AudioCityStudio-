@@ -20,7 +20,7 @@ import java.util.List;
 final class AutoPartsUi {
     static final int SHEET = AiGenerateUi.SHEET, CHIP = AiGenerateUi.CHIP, EDGE = AiGenerateUi.EDGE, TXT = AiGenerateUi.TXT, MUTED = AiGenerateUi.MUTED, VIOLET = AiGenerateUi.VIOLET, INK = AiGenerateUi.INK;
     static final int[] COLORS = {0xffff7aa8, 0xff9d8cff, 0xfff0b34a, 0xff3ec6e0};
-    static final int[] BASS_PATCH = {12, 13, 15, 15, 14, 15, 16, 15, 13};
+    static final int[] BASS_PATCH = {12, 13, 15, 15, 14, 15, 16, 15, 13, 16, 2, 15, 13};
 
     /** Playable sounds per part: {name, sampled id or "", synth patch}. A sampled id falls back to its synth patch when not installed. */
     static final String[][][] SOUNDS = {
@@ -188,10 +188,10 @@ final class AutoPartsUi {
 
     void quickMake(final int partNo) {
         if (!a.canEdit()) return;
-        stopPreview(false); currentPart = partNo; sound = sound < 0 ? 0 : sound + 1; // each press tries the next sound too
+        stopPreview(false); currentPart = partNo; sound = -1; // each style gets the sound that suits it
         again = new Runnable() { public void run() { quickMake(partNo); } };
         readProject(); final AutoParts.Analysis an = analysis; final int md = quickMood, bpb = ui.map().beatsPerBar(); final int styles = AutoParts.STYLES[partNo].length;
-        int st; do { st = random.nextInt(styles); } while (styles > 1 && st == lastStyle); lastStyle = st; final int chosen = st;
+        int[] afro = AutoParts.AFRICAN[partNo]; int st; do { st = afro[random.nextInt(afro.length)]; } while (afro.length > 1 && st == lastStyle); lastStyle = st; final int chosen = st; // African styles by default
         a.busy("Writing your " + AutoParts.PART_NAMES[partNo].toLowerCase(java.util.Locale.US) + "…", new MainActivity.Task() { public void run() throws Exception {
             final long seed = System.nanoTime(); final List<AiMidiGenerator.Note> notes = AutoParts.generate(partNo, chosen, md, an, bpb, kicks, seed);
             instrumentFor(partNo, md, chosen);
@@ -459,7 +459,10 @@ final class AutoPartsUi {
             else if (partNo == AutoParts.MELODY) pick = moodNo == 0 || moodNo == 2 ? 0 : 1;
             else if (partNo == AutoParts.SOLO) pick = styleNo == 1 ? 1 : 0; else pick = 0;
         }
-        String[][] list = SOUNDS[partNo]; String[] choice = list[Math.floorMod(pick, list.length)]; soundName = choice[0]; id = choice[1].isEmpty() ? null : choice[1]; patch = Synth.factory(Integer.parseInt(choice[2]));
+        String[][] list = SOUNDS[partNo]; String[] choice = list[Math.floorMod(pick, list.length)];
+        if (sound < 0 && partNo == AutoParts.RHYTHM && styleNo == 10) choice = SOUNDS[AutoParts.MELODY][1]; // Amapiano keys: electric piano
+        if (sound < 0 && partNo == AutoParts.SOLO && styleNo == 7) choice = SOUNDS[AutoParts.SOLO][3]; /* Afro sax line: singing lead */
+        soundName = choice[0]; id = choice[1].isEmpty() ? null : choice[1]; patch = Synth.factory(Integer.parseInt(choice[2]));
         config = patch;
         if (id != null) try { for (SampledInstruments.Info info : a.instrumentLibrary.list()) if (info.filename.startsWith("factory-" + id + "/")) { SampledInstruments.Pack hit; synchronized (cache) { hit = cache.get(info.filename); } if (hit == null) { hit = a.instrumentLibrary.load(info); synchronized (cache) { cache.put(info.filename, hit); } } pack = hit; packId = info.filename; break; } } catch (Exception ignored) { pack = null; packId = null; }
     }

@@ -15,10 +15,13 @@ public final class AutoParts {
     public static final String[] PART_NAMES = {"Melody", "Bass", "Rhythm guitar", "Solo guitar"};
     public static final String[] MOODS = {"Calm", "Happy", "Sad", "Energetic"};
     public static final String[][] STYLES = {
-        {"Singable", "Catchy hook", "Call & answer", "Flowing", "Afro groove"},
-        {"Steady", "Pumping", "Walking", "Afro bounce", "Octave funk", "Slide groove", "Sub 808", "Fingerstyle", "Lock to kick"},
-        {"Open strum", "Arpeggio", "Palm mute", "Offbeat chop", "Afro pluck", "Funk scratch"},
-        {"Pentatonic lick", "Melodic lead", "Call & answer", "Fast run", "Afro riff"}};
+        {"Singable", "Catchy hook", "Call & answer", "Flowing", "Afro groove", "Afro call & response", "Highlife melody", "Kidandali hook"},
+        {"Steady", "Pumping", "Walking", "Afro bounce", "Octave funk", "Slide groove", "Sub 808", "Fingerstyle", "Lock to kick", "Amapiano log drum", "Afrobeats bass", "Highlife bass", "Kidandali bass"},
+        {"Open strum", "Arpeggio", "Palm mute", "Offbeat chop", "Afro pluck", "Funk scratch", "Highlife guitar", "Soukous sebene", "Kadongo Kamu", "Afrobeats pluck", "Amapiano keys"},
+        {"Pentatonic lick", "Melodic lead", "Call & answer", "Fast run", "Afro riff", "Sebene lead", "Highlife thirds", "Afro sax line"}};
+    /** The African styles of each part. "Surprise me" and the one-tap sheet choose from these first. */
+    public static final int[][] AFRICAN = {{4, 5, 6, 7}, {3, 9, 10, 11, 12}, {4, 6, 7, 8, 9, 10}, {4, 5, 6, 7}};
+    public static boolean african(int part, int style) { for (int s : AFRICAN[part]) if (s == style) return true; return false; }
     public static final int OPTIONS = 5;
 
     static final String[] KEYS = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
@@ -121,7 +124,9 @@ public final class AutoParts {
     /** Five takes. style < 0 means "surprise me": a different style for each option. */
     public static List<Option> options(int part, int style, int mood, Analysis an, int bpb, double[] kickBeats, long seed) {
         String[] names = STYLES[part]; List<Option> out = new ArrayList<>();
-        List<Integer> order = new ArrayList<>(); for (int i = 0; i < names.length; i++) order.add(i); Collections.shuffle(order, new Random(seed * 31 + part));
+        // African styles first (shuffled), then the rest, so "Surprise me" sounds African by default.
+        List<Integer> order = new ArrayList<>(), rest = new ArrayList<>(); for (int i = 0; i < names.length; i++) (african(part, i) ? order : rest).add(i);
+        Random shuffle = new Random(seed * 31 + part); Collections.shuffle(order, shuffle); Collections.shuffle(rest, shuffle); order.addAll(rest);
         for (int i = 0; i < OPTIONS; i++) {
             int s = style >= 0 ? style : order.get(i % order.size());
             long sd = seed * 1000003L + i * 7919L + s;
@@ -132,12 +137,17 @@ public final class AutoParts {
 
     public static List<AiMidiGenerator.Note> generate(int part, int style, int mood, Analysis an, int bpb, double[] kickBeats, long seed) {
         Random rng = new Random(seed); int bars = an.chords.length; Mood m = mood(mood); List<AiMidiGenerator.Note> out = new ArrayList<>();
-        switch (part) {
+        if (part == MELODY && style >= 5) africanMelody(out, rng, an, bpb, m, style);
+        else if (part == SOLO && style >= 5) africanSolo(out, rng, an, bpb, m, style);
+        else if (part == BASS && style >= 9) africanBass(out, rng, an, bpb, m, style);
+        else if (part == RHYTHM && style >= 6) africanRhythm(out, rng, an, bpb, m, style);
+        else switch (part) {
             case MELODY: line(out, rng, an, bpb, m, style, false); break;
             case SOLO: line(out, rng, an, bpb, m, style, true); break;
             case BASS: bass(out, rng, an, bpb, m, style, kickBeats); break;
             default: rhythm(out, rng, an, bpb, m, style); break;
         }
+        if (african(part, style)) out = africanFeel(out, rng);
         // Keep everything inside the clip and inside MIDI range.
         List<AiMidiGenerator.Note> clean = new ArrayList<>(); double end = bars * (double) bpb;
         for (AiMidiGenerator.Note n : out) {
@@ -530,5 +540,135 @@ public final class AutoParts {
             out.add(note(n.pitch, n.velocity, n.startBeat, half * .95)); out.add(note(ladder.pitches[nb], Math.max(1, n.velocity - 10), n.startBeat + half, half * .95));
         }
         return out;
+    }
+
+    // ------------------------------------------------------------------ African playing styles
+
+    /** Afro feel: the off sixteenths sit a little late (swing) and every note breathes slightly, like a live player. */
+    static List<AiMidiGenerator.Note> africanFeel(List<AiMidiGenerator.Note> in, Random rng) {
+        List<AiMidiGenerator.Note> out = new ArrayList<>();
+        for (AiMidiGenerator.Note n : in) {
+            double sixteenth = n.startBeat * 4; boolean onGrid = Math.abs(sixteenth - Math.rint(sixteenth)) < 1e-6; double st = n.startBeat;
+            if (onGrid && ((long) Math.rint(sixteenth)) % 2 == 1) st += .035; // swung off-sixteenth
+            else if (onGrid && Math.abs(n.startBeat - Math.rint(n.startBeat)) > 1e-6) st += .008 * rng.nextDouble(); // laid-back offbeats
+            out.add(note(n.pitch, n.velocity, st, n.lengthBeat));
+        }
+        return out;
+    }
+
+    /** A note a scale step above, sung quickly into the main note: the falling grace note common in African singing. */
+    static void graceFromAbove(List<AiMidiGenerator.Note> out, Ladder l, int idx, int vel, double start) {
+        if (start < .15 || idx + 1 >= l.pitches.length) return; out.add(note(l.pitches[idx + 1], Math.max(30, (int) (vel * .55)), start - .12, .11));
+    }
+
+    static void africanMelody(List<AiMidiGenerator.Note> out, Random rng, Analysis an, int bpb, Mood m, int style) {
+        int bars = an.chords.length; Ladder l = new Ladder(an.key, an.minor, true, m.low, m.high + 2); int top = l.pitches.length - 1;
+        int[][] call = {{0, 3}, {3, 3}, {6, 2}, {8, 2}, {10, 2}}, answer = {{0, 2}, {2, 2}, {4, 4}, {8, 4}, {12, 4}};
+        int[][] highlife = {{0, 2}, {2, 2}, {4, 2}, {6, 2}, {8, 2}, {10, 2}, {12, 4}}, hook = {{0, 2}, {3, 1}, {4, 2}, {6, 2}, {10, 2}, {12, 4}};
+        int[] callShape = {0, 1, 2, 1, 2}, answerShape = {2, 1, 0, -1, -2}, highShape = {0, 0, 1, 2, 2, 1, 0}, hookShape = {0, 1, 2, 1, 0, -1};
+        if (rng.nextBoolean()) { callShape = new int[]{0, 0, 1, 2, 1}; answerShape = new int[]{1, 0, 0, -1, -2}; }
+        int home = l.nearestChordTone(top / 2, an.chords[0], 3);
+        for (int bar = 0; bar < bars; bar++) {
+            Chord c = an.chords[bar]; int[][] rh; int[] shape;
+            if (style == 5) { boolean resp = bar % 2 == 1; rh = resp ? answer : call; shape = resp ? answerShape : callShape; }
+            else if (style == 6) { rh = highlife; shape = highShape; }
+            else { rh = hook; shape = hookShape; }
+            int base = l.nearestChordTone(home + (bar % 4 == 2 ? 1 : 0), c, 2); boolean cadence = bar == bars - 1 || bar % 4 == 3;
+            for (int k = 0; k < rh.length; k++) {
+                if (rh[k][0] >= bpb * 4) continue;
+                int idx = l.clamp(base + shape[k] + (style == 7 && bar % 2 == 1 && k < 2 ? 1 : 0)); boolean strong = rh[k][0] % 8 == 0, last = k == rh.length - 1;
+                if (k == 0 || strong || rh[k][1] >= 4) idx = l.nearestChordTone(idx, c, 2);
+                if (cadence && last) idx = l.rootNear(idx, c);
+                int vel = jitter(rng, m.vel + (strong ? 8 : rh[k][0] % 4 == 3 ? 4 : -2), 4); double start = bar * (double) bpb + rh[k][0] / 4.0, len = Math.min(rh[k][1], bpb * 4 - rh[k][0]) / 4.0 * (rh[k][1] >= 4 ? 1 : m.gate);
+                if (rh[k][1] >= 4 && rng.nextDouble() < .6) graceFromAbove(out, l, idx, vel, start);
+                out.add(note(l.pitches[idx], vel, start, Math.max(.2, len)));
+            }
+        }
+    }
+
+    static void africanSolo(List<AiMidiGenerator.Note> out, Random rng, Analysis an, int bpb, Mood m, int style) {
+        int bars = an.chords.length; boolean pent = style != 6; Ladder l = new Ladder(an.key, an.minor, pent, m.low + 3, m.high + 8);
+        for (int bar = 0; bar < bars; bar++) {
+            Chord c = an.chords[bar]; double t0 = bar * (double) bpb; boolean cadence = bar == bars - 1 || bar % 4 == 3; int steps = bpb * 4;
+            if (style == 5) { // Sebene lead: rolling sixteenths that circle the chord, a riff that answers itself every other bar
+                int idx = l.nearestChordTone(l.pitches.length / 2 + (bar % 2 == 0 ? 1 : -1), c, 3); int[] cell = bar % 2 == 0 ? new int[]{0, 1, 2, 1, 0, -1, 0, 1} : new int[]{2, 1, 0, 1, 2, 3, 2, 1};
+                int stop = cadence ? steps - 4 : steps;
+                for (int st = 0; st < stop; st++) { int i = l.clamp(idx + cell[st % 8]); if (st % 4 == 0) i = l.nearestChordTone(i, c, 1); out.add(note(l.pitches[i], jitter(rng, m.vel - 6 + (st % 4 == 2 ? 10 : st % 2 == 1 ? -8 : 0), 3), t0 + st / 4.0, .22)); }
+                if (cadence) out.add(note(l.pitches[l.rootNear(idx, c)], m.vel + 6, t0 + (steps - 4) / 4.0, 1));
+            } else if (style == 6) { // Highlife thirds: a singing line doubled a third below, the classic highlife guitar sound
+                int[][] rh = {{0, 3}, {3, 3}, {6, 2}, {8, 4}, {12, 4}}; int idx = l.nearestChordTone(l.pitches.length / 2 + 2, c, 3);
+                for (int k = 0; k < rh.length; k++) {
+                    if (rh[k][0] >= steps) continue; idx = l.clamp(idx + (k == 0 ? 0 : (bar % 2 == 0 ? 1 : -1) * (rng.nextDouble() < .75 ? 1 : 2)));
+                    if (rh[k][0] % 8 == 0 || (cadence && k == rh.length - 1)) idx = cadence && k == rh.length - 1 ? l.rootNear(idx, c) : l.nearestChordTone(idx, c, 2);
+                    double st = t0 + rh[k][0] / 4.0, len = Math.min(rh[k][1], steps - rh[k][0]) / 4.0 * .95; int v = jitter(rng, m.vel, 4);
+                    out.add(note(l.pitches[idx], v, st, len)); if (idx >= 2) out.add(note(l.pitches[idx - 2], v - 10, st + .01, len));
+                }
+            } else { // Afro sax line: long singing notes, slides up into the strong ones, tresillo pushes
+                int[][] rh = bar % 2 == 0 ? new int[][]{{0, 6}, {6, 2}, {8, 6}, {14, 2}} : new int[][]{{0, 3}, {3, 3}, {6, 4}, {12, 4}}; int idx = l.nearestChordTone(l.pitches.length / 2, c, 3);
+                for (int k = 0; k < rh.length; k++) {
+                    if (rh[k][0] >= steps) continue; idx = l.clamp(idx + (rng.nextDouble() < .5 ? 1 : -1)); if (rh[k][0] % 8 == 0) idx = l.nearestChordTone(idx, c, 2); if (cadence && k == rh.length - 1) idx = l.rootNear(idx, c);
+                    double st = t0 + rh[k][0] / 4.0; int v = jitter(rng, m.vel + (rh[k][1] >= 6 ? 6 : 0), 4);
+                    if (rh[k][1] >= 4 && st >= .2 && idx >= 1) out.add(note(l.pitches[idx - 1], (int) (v * .6), st - .14, .13));
+                    out.add(note(l.pitches[idx], v, st, Math.min(rh[k][1], steps - rh[k][0]) / 4.0 * .96));
+                }
+            }
+        }
+    }
+
+    static void africanBass(List<AiMidiGenerator.Note> out, Random rng, Analysis an, int bpb, Mood m, int style) {
+        int bars = an.chords.length, vel = m.vel - 4, steps = bpb * 4; int variant = rng.nextInt(2);
+        for (int bar = 0; bar < bars; bar++) {
+            Chord c = an.chords[bar], next = an.chords[Math.min(bars - 1, bar + 1)]; int r = bassRoot(c), fifth = r + c.fifth(), third = r + c.third(), oct = r + 12, nr = bassRoot(next); if (fifth > 45) fifth -= 12;
+            int approach = bar == bars - 1 ? oct : nr + (nr > r ? -1 : 1); double t0 = bar * (double) bpb; int[][] p; // {sixteenth, length in sixteenths, pitch, velocity}
+            switch (style) {
+                case 9: // Amapiano log drum: deep, bouncing, sliding hits around the root
+                    p = variant == 0 ? new int[][]{{0, 3, r, 112}, {3, 2, r, 88}, {6, 2, oct, 96}, {10, 2, fifth, 92}, {12, 2, r, 100}, {14, 2, approach, 84}}
+                                     : new int[][]{{0, 4, r, 112}, {6, 1, r, 70}, {7, 3, oct, 98}, {11, 1, fifth, 80}, {12, 3, r, 96}, {15, 1, approach, 82}};
+                    for (int[] h : p) if (h[0] < steps) { double st = t0 + h[0] / 4.0; if (h[2] != r && h[0] > 0) out.add(note(h[2] - 2, 40, st - .06, .05)); out.add(note(h[2], jitter(rng, h[3] * vel / 92, 3), st, Math.max(.15, Math.min(h[1], steps - h[0]) / 4.0 * .9))); }
+                    break;
+                case 10: // Afrobeats bass: root on one, pushes on the tresillo, octave pop, walks into the next chord
+                    p = new int[][]{{0, 3, r, 108}, {3, 2, r, 70}, {6, 2, oct, 90}, {8, 2, r, 96}, {10, 2, fifth, 86}, {13, 1, r, 64}, {14, 2, approach, 84}};
+                    for (int[] h : p) if (h[0] < steps) out.add(note(h[2], jitter(rng, h[3] * vel / 92, 3), t0 + h[0] / 4.0, Math.min(h[1], steps - h[0]) / 4.0 * .85)); break;
+                case 11: // Highlife bass: a melodic, walking line through the chord
+                    p = new int[][]{{0, 3, r, 104}, {4, 2, third, 88}, {6, 2, fifth, 84}, {8, 3, oct, 96}, {12, 2, fifth, 86}, {14, 2, approach, 82}};
+                    for (int[] h : p) if (h[0] < steps) out.add(note(h[2], jitter(rng, h[3] * vel / 92, 3), t0 + h[0] / 4.0, Math.min(h[1], steps - h[0]) / 4.0 * .9)); break;
+                default: // Kidandali bass: bouncing root on every beat with octave answers in between
+                    for (int b = 0; b < bpb; b++) { out.add(note(r, jitter(rng, vel + (b == 0 ? 14 : 6), 3), t0 + b, .42)); out.add(note(b == bpb - 1 && bar < bars - 1 ? approach : oct, jitter(rng, vel - 8, 3), t0 + b + .5, .3)); }
+            }
+        }
+    }
+
+    /** The diatonic seventh above a chord root (for warm, jazzy Amapiano chords). */
+    static int seventh(Analysis an, Chord c) { int[] sc = an.minor ? MINOR : MAJOR; for (int st : new int[]{10, 11}) { int pc = (c.root + st) % 12; for (int x : sc) if ((an.key + x) % 12 == pc) return st; } return 10; }
+
+    static void africanRhythm(List<AiMidiGenerator.Note> out, Random rng, Analysis an, int bpb, Mood m, int style) {
+        int bars = an.chords.length, steps = bpb * 4, vel = m.vel - 6;
+        for (int bar = 0; bar < bars; bar++) {
+            Chord c = an.chords[bar]; double t0 = bar * (double) bpb; int hi = 64 + ((c.root - 64) % 12 + 12) % 12; // chord root in the guitar's upper register
+            int third = hi + c.third(), fifth = hi + c.fifth(), oct = hi + 12; if (oct > 82) { hi -= 12; third -= 12; fifth -= 12; oct -= 12; }
+            switch (style) {
+                case 6: { // Highlife guitar: bright two-note thirds picked in a lilting pattern
+                    int[] pos = {0, 2, 3, 5, 6, 8, 10, 11, 13, 14}; int[][] pairs = {{third, fifth}, {hi, third}, {fifth, oct}, {third, fifth}};
+                    for (int i = 0; i < pos.length; i++) if (pos[i] < steps) { int[] pr = pairs[i % pairs.length]; int v = jitter(rng, vel + (pos[i] % 4 == 0 ? 8 : pos[i] % 2 == 1 ? 4 : -4), 4); double st = t0 + pos[i] / 4.0; out.add(note(pr[0], v, st, .22)); out.add(note(pr[1], v - 6, st + .008, .22)); }
+                    break; }
+                case 7: { // Soukous sebene: non-stop sparkling sixteenths circling the chord high on the neck
+                    int[] cell = bar % 2 == 0 ? new int[]{fifth, oct, third + 12 > 84 ? third : third + 12, oct, fifth, third, fifth, oct} : new int[]{oct, fifth, third, fifth, oct, fifth, third, hi};
+                    for (int st = 0; st < steps; st++) out.add(note(cell[st % 8], jitter(rng, vel - 8 + (st % 4 == 0 ? 12 : st % 4 == 3 ? 6 : 0), 3), t0 + st / 4.0, .2));
+                    break; }
+                case 8: { // Kadongo Kamu: thumb keeps a root–fifth bass while the fingers pick the chord on the off-beats
+                    int low = 40 + ((c.root - 40) % 12 + 12) % 12, lowFifth = low + c.fifth() > 57 ? low + c.fifth() - 12 : low + c.fifth(); int[] treble = {third, fifth, oct, fifth};
+                    for (int b = 0; b < bpb; b++) { out.add(note(b % 2 == 0 ? low : lowFifth, jitter(rng, vel + 4, 3), t0 + b, .9)); boolean fill = bar % 4 == 3 && b == bpb - 1; if (!fill) out.add(note(treble[b % 4] - 12 < 52 ? treble[b % 4] : treble[b % 4] - 12, jitter(rng, vel - 10, 4), t0 + b + .5, .45)); }
+                    if (bar % 4 == 3) { Ladder l = new Ladder(an.key, an.minor, true, 52, 76); int idx = l.nearestChordTone(l.pitches.length - 3, c, 2); for (int k = 0; k < 4; k++) out.add(note(l.pitches[l.clamp(idx - k)], vel - 4, t0 + bpb - 1 + k * .25, .24)); }
+                    break; }
+                case 9: { // Afrobeats pluck: short muted notes that ride the tresillo
+                    int[] pos = bar % 2 == 0 ? new int[]{0, 3, 6, 10, 12} : new int[]{2, 3, 6, 8, 11, 14}; int[] notes = {oct, fifth, third, fifth, oct, third};
+                    for (int i = 0; i < pos.length; i++) if (pos[i] < steps) out.add(note(notes[i % notes.length], jitter(rng, vel + (i == 0 ? 10 : 0), 4), t0 + pos[i] / 4.0, .14));
+                    break; }
+                default: { // Amapiano keys: warm seventh chords pushed off the beat
+                    int root = 52 + ((c.root - 52) % 12 + 12) % 12; int[] chord = {root, root + c.third(), root + c.fifth(), root + seventh(an, c)}; int[][] stabs = {{0, 3}, {3, 2}, {7, 3}, {10, 2}, {13, 3}};
+                    for (int[] st : stabs) if (st[0] < steps) for (int k = 0; k < chord.length; k++) out.add(note(chord[k], jitter(rng, vel - (k == 0 ? 0 : 6) + (st[0] == 0 ? 8 : 0), 3), t0 + st[0] / 4.0 + k * .004, Math.min(st[1], steps - st[0]) / 4.0 * .85));
+                }
+            }
+        }
     }
 }

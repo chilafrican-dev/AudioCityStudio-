@@ -65,6 +65,13 @@ public final class AutoPartsTests {
         List<AiMidiGenerator.Note> locked = AutoParts.generate(AutoParts.BASS, 8, 1, an, bpb, new double[]{0, 1.5, 2.75}, 3);
         boolean has15 = false; for (AiMidiGenerator.Note n : locked) if (Math.abs(n.startBeat - 1.5) < 1e-6) has15 = true; check(has15, "bass hits where the kick hits");
         easyWays(an, bpb);
+        // African styles: syncopated (notes between the eighth notes) and swung, and "Surprise me" picks them first.
+        for (int part = 0; part < 4; part++) for (int st : AutoParts.AFRICAN[part]) {
+            List<AiMidiGenerator.Note> n = AutoParts.generate(part, st, 1, an, bpb, null, 3); int off = 0, swung = 0;
+            for (AiMidiGenerator.Note x : n) { double q = x.startBeat * 4; if (Math.abs(q - Math.rint(q)) > .1) swung++; else if (((long) Math.rint(q)) % 2 == 1) off++; }
+            check(off + swung > 0, "African style is syncopated: " + AutoParts.STYLES[part][st]);
+        }
+        for (int part = 0; part < 4; part++) { List<AutoParts.Option> ops = AutoParts.options(part, -1, 1, an, bpb, null, 77); int afro = 0; for (AutoParts.Option op : ops) if (AutoParts.african(part, op.style)) afro++; check(afro >= Math.min(5, AutoParts.AFRICAN[part].length), "surprise me is African first: " + afro); }
         System.out.println("AutoPartsTests OK: " + total + " generated parts checked");
     }
 
