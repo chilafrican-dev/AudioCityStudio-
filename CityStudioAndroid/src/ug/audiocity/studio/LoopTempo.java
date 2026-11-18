@@ -137,8 +137,14 @@ public final class LoopTempo {
     }
 
     /** Frames the loop should have at the project tempo. */
+    /**
+     * Length of the loop at the project tempo, rounded to whole beats (and to whole bars when it is within a beat of one),
+     * so a matched loop starts and ends exactly on the grid lines instead of leaking past them.
+     */
     public static int targetFrames(int frames, double sourceBpm, int projectBpm) {
-        return (int) Math.round(frames * sourceBpm / projectBpm);
+        double beats = frames * sourceBpm / (Core.RATE * 60.0); long whole = Math.max(1, Math.round(beats));
+        long bars = Math.round(beats / 4); if (bars >= 1 && Math.abs(beats - bars * 4) <= 1.0) whole = bars * 4;
+        return (int) Math.round(whole * Core.RATE * 60.0 / projectBpm);
     }
 
     public static String describe(Result r) {

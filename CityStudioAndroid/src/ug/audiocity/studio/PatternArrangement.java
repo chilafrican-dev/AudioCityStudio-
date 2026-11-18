@@ -32,9 +32,9 @@ public final class PatternArrangement {
  /** Each drum lane becomes a live MIDI clip playing that lane's sample, so it can be opened in the piano roll and re-voiced. */
  private static Core.Clip[] render(Core.Session s,PatternLibrary.Entry entry,BeatPilotDrumPattern pattern,float[][] samples,List<File> made)throws IOException{
   if(samples==null||samples.length!=8)throw new IllegalArgumentException("Drum kit needs eight sounds");
-  Core.Clip[] lanes=new Core.Clip[8];int length=(int)Math.min(Integer.MAX_VALUE,Math.round(Core.RATE*60.0/pattern.bpm*4*pattern.bars));File dir=new File(s.directory);
+  Core.Clip[] lanes=new Core.Clip[8];int length=(int)Math.min(Integer.MAX_VALUE,Math.round(Core.RATE*60.0/s.bpm*4*pattern.bars));File dir=new File(s.directory);
   for(int lane=0;lane<8;lane++){
-   BeatPilotDrumPattern part=PatternLibrary.lane(pattern,lane);List<Pro.Note> notes=new ArrayList<>();for(Pro.Note n:part.notes())notes.add(new Pro.Note(n.pitch,n.velocity,n.start,Math.max(1,Math.min(n.length,length-n.start)),9));Core.Clip clip;
+   BeatPilotDrumPattern part=PatternLibrary.lane(pattern,lane);List<Pro.Note> notes=new ArrayList<>();double oldStep=Core.RATE*60.0/(part.bpm*4.0),newStep=Core.RATE*60.0/(s.bpm*4.0);for(Pro.Note n:part.notes()){long step=Math.round(n.start/oldStep),start=Math.round(step*newStep),len=Math.max(1,Math.round(newStep*.5));notes.add(new Pro.Note(n.pitch,n.velocity,start,Math.max(1,Math.min(len,length-start)),9));}Core.Clip clip;
    if(PatternLibrary.empty(part))clip=ProMidi.clip(entry.name,notes,Synth.factory(0),0,length);
    else{float[] wave=samples[lane];if(wave==null||wave.length<2||(wave.length&1)!=0)throw new IllegalArgumentException("Missing drum sound for "+BeatPilotDrums.LABELS[lane]);for(float v:wave)if(!Float.isFinite(v))throw new IllegalArgumentException("Invalid drum sample data");
     int pitch=36+lane;SampledInstruments.Region region=new SampledInstruments.Region(pitch,pitch,1,127,pitch,0,0,false,1f,wave,240);SampledInstruments.Pack pack=new SampledInstruments.Pack(BeatPilotDrums.LABELS[lane],"Pattern drum kit",new SampledInstruments.Region[]{region});
@@ -69,7 +69,7 @@ public final class PatternArrangement {
  }
  public static Map<Core.Clip,Core.Clip> save(Core.Session s,String id,String name,BeatPilotDrumPattern pattern,float[][] samples)throws IOException{synchronized(s){return saveLocked(s,id,name,pattern,samples);}}
  private static Map<Core.Clip,Core.Clip> saveLocked(Core.Session s,String id,String name,BeatPilotDrumPattern pattern,float[][] samples)throws IOException{
-  validate(s);PatternLibrary.Entry previous=PatternLibrary.find(s,id);if(previous==null)throw new IllegalArgumentException("Pattern not found");PatternLibrary.Entry next=new PatternLibrary.Entry(id,name,pattern.encode());long length=Math.round(Core.RATE*60.0/pattern.bpm*4*pattern.bars),oldFrames=Math.round(Core.RATE*60.0/s.bpm*4*PatternLibrary.pattern(s,previous).bars);boolean placed=false;
+  validate(s);PatternLibrary.Entry previous=PatternLibrary.find(s,id);if(previous==null)throw new IllegalArgumentException("Pattern not found");PatternLibrary.Entry next=new PatternLibrary.Entry(id,name,pattern.encode());long length=Math.round(Core.RATE*60.0/s.bpm*4*pattern.bars),oldFrames=Math.round(Core.RATE*60.0/s.bpm*4*PatternLibrary.pattern(s,previous).bars);boolean placed=false;
   Map<Core.Clip,Long> starts=startPlan(s,id,oldFrames,length,false),lengths=new IdentityHashMap<>();
   for(Core.Track t:s.tracks)for(Core.Clip c:t.clips)if(id.equals(c.patternId)&&c.patternLane>=0&&c.patternLane<8){placed=true;lengths.put(c,visibleLength(c,oldFrames,length));}
   if(!placed){PatternLibrary.replace(s,id,name,pattern);return Collections.emptyMap();}

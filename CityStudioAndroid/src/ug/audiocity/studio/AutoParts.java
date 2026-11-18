@@ -630,10 +630,10 @@ public final class AutoParts {
                     p = new int[][]{{0, 3, r, 108}, {3, 2, r, 70}, {6, 2, oct, 90}, {8, 2, r, 96}, {10, 2, fifth, 86}, {13, 1, r, 64}, {14, 2, approach, 84}};
                     for (int[] h : p) if (h[0] < steps) out.add(note(h[2], jitter(rng, h[3] * vel / 92, 3), t0 + h[0] / 4.0, Math.min(h[1], steps - h[0]) / 4.0 * .85)); break;
                 case 11: // Highlife bass: a melodic, walking line through the chord
-                    p = new int[][]{{0, 3, r, 104}, {4, 2, third, 88}, {6, 2, fifth, 84}, {8, 3, oct, 96}, {12, 2, fifth, 86}, {14, 2, approach, 82}};
+                    p = new int[][]{{0, 3, r, 104}, {3, 2, third, 84}, {6, 2, fifth, 88}, {8, 3, oct, 96}, {11, 1, fifth, 80}, {12, 2, fifth, 86}, {14, 2, approach, 82}};
                     for (int[] h : p) if (h[0] < steps) out.add(note(h[2], jitter(rng, h[3] * vel / 92, 3), t0 + h[0] / 4.0, Math.min(h[1], steps - h[0]) / 4.0 * .9)); break;
                 default: // Kidandali bass: bouncing root on every beat with octave answers in between
-                    for (int b = 0; b < bpb; b++) { out.add(note(r, jitter(rng, vel + (b == 0 ? 14 : 6), 3), t0 + b, .42)); out.add(note(b == bpb - 1 && bar < bars - 1 ? approach : oct, jitter(rng, vel - 8, 3), t0 + b + .5, .3)); }
+                    for (int b = 0; b < bpb; b++) { out.add(note(r, jitter(rng, vel + (b == 0 ? 14 : 6), 3), t0 + b, .42)); out.add(note(b == bpb - 1 && bar < bars - 1 ? approach : oct, jitter(rng, vel - 8, 3), t0 + b + .5, .3)); if (b % 2 == 1 && b < bpb - 1) out.add(note(r, jitter(rng, vel - 26, 3), t0 + b + .75, .18)); }
             }
         }
     }
