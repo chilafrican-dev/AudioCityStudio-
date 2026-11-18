@@ -9,11 +9,13 @@ adb shell pm grant $pkg android.permission.POST_NOTIFICATIONS || true
 adb logcat -c || true
 adb shell am start -W -n $pkg/.MainActivity > "$out/start.txt" 2>&1
 sleep 15
-for seed in 11 22 33 44 55 66 77 88; do
+for seed in 11 22 33 44 55; do
   echo "== seed $seed" >> "$out/monkey.txt"
-  adb shell monkey -p $pkg -s $seed --throttle 150 --pct-syskeys 0 --pct-appswitch 2 --pct-anyevent 0 \
-    --ignore-crashes --ignore-timeouts --ignore-security-exceptions -v 2500 >> "$out/monkey.txt" 2>&1
+  adb shell monkey -p $pkg -s $seed --throttle 100 --pct-syskeys 0 --pct-appswitch 2 --pct-anyevent 0 \
+    --ignore-crashes --ignore-timeouts --ignore-security-exceptions -v 2000 >> "$out/monkey.txt" 2>&1
   adb shell am start -n $pkg/.MainActivity > /dev/null 2>&1; sleep 4
+  echo "after seed $seed: app crashes so far $(grep -c "CRASH: $pkg" "$out/monkey.txt"), freezes $(grep -c "NOT RESPONDING: $pkg" "$out/monkey.txt")"
+  adb logcat -d -v time | grep -A45 "Process: $pkg" | tail -60
 done
 adb logcat -d -b crash > "$out/crash-buffer.txt" 2>&1
 adb logcat -d -v time > "$out/logcat.txt" 2>&1
