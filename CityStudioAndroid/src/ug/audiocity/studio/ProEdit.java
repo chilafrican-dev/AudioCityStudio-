@@ -182,13 +182,13 @@ final class ProEdit {
      * per beat: 1 = 1/4, 2 = 1/8, 4 = 1/16, 8 = 1/32) by the given strength (1 = fully, 0.5 = halfway, keeping some feel).
      * Lengths are kept. Returns how many notes moved.
      */
-    static int quantizeClip(Core.Session s, Core.Clip c, int division, double strength) {
-        if (c.notes == null || division <= 0) return 0; Pro.TempoMap map = new Pro.TempoMap(s); long origin = c.start - c.offset; int moved = 0;
-        for (Pro.Note n : c.notes) {
-            long abs = origin + n.start, grid = map.snap(abs, division), to = Math.round(abs + (grid - abs) * Math.max(0, Math.min(1, strength)));
-            long start = Math.max(0, to - origin); if (start != n.start) { n.start = start; moved++; }
-        }
-        c.notes.sort((x, y) -> Long.compare(x.start, y.start)); ProMidi.refresh(c); return moved;
+    static int quantizeClip(Core.Session s, Core.Clip c, int division, double strength) { Quantizer.Settings q = Quantizer.Settings.division(division); q.strength = strength * 100; return quantizeClip(s, c, q); }
+    /** Quantizes a MIDI region with the full settings, on the song's tempo map. Returns how many notes changed. */
+    static int quantizeClip(Core.Session s, Core.Clip c, Quantizer.Settings q) {
+        if (c.notes == null || q == null || !q.on()) return 0; long origin = c.start - c.offset; List<Long> before = new ArrayList<>(); for (Pro.Note n : c.notes) before.add(n.start * 1000 + n.velocity);
+        Quantizer.apply(q, c.notes, origin, new Pro.TempoMap(s)); int moved = 0; List<Long> after = new ArrayList<>(); for (Pro.Note n : c.notes) after.add(n.start * 1000 + n.velocity);
+        Collections.sort(before); Collections.sort(after); for (int i = 0; i < before.size(); i++) if (!before.get(i).equals(after.get(i))) moved++;
+        ProMidi.refresh(c); return moved;
     }
 
     static long loopPosition(long heard, long loopStart, long loopEnd) {

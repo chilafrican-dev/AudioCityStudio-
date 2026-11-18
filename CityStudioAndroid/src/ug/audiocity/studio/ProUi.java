@@ -834,6 +834,7 @@ final class ProUi {
         String[] grids = {"Grid 1/4", "Grid 1/8", "Grid 1/16", "Grid 1/32"}; double beat = Core.beat(a.session.bpm);
         p.addView(spinner(grids, 2, i -> { roll.grid = beat / (1 << i); roll.invalidate(); }));
         row(p, button("Quantize", () -> roll.apply(sel -> Pro.quantize(sel, roll.grid, 1, 0, false))), button("Q 50%", () -> roll.apply(sel -> Pro.quantize(sel, roll.grid, .5, 0, false))), button("Swing", () -> roll.apply(sel -> Pro.quantize(sel, roll.grid, 1, .5, false))));
+        row(p, button("Quantize… all settings", () -> { android.content.SharedPreferences sp = a.getPreferences(android.content.Context.MODE_PRIVATE); Quantizer.Settings last = sp.contains("lastQ") ? Quantizer.Settings.parse(sp.getString("lastQ", "")) : new Quantizer.Settings(5); a.quantizeDialog("Quantize " + (roll.selected.isEmpty() ? "all notes" : roll.selected.size() + " selected notes"), last, "Quantize", q -> { sp.edit().putString("lastQ", q.encode()).apply(); roll.apply(sel -> Quantizer.apply(q, sel, c.start - c.offset, map())); }); }));
         row(p, button("Vel −", () -> roll.apply(sel -> Pro.velocity(sel, 1, -10))), button("Vel +", () -> roll.apply(sel -> Pro.velocity(sel, 1, 10))), button("−1", () -> roll.apply(sel -> Pro.transpose(sel, -1))), button("+1", () -> roll.apply(sel -> Pro.transpose(sel, 1))));
         row(p, button("−oct", () -> roll.apply(sel -> Pro.transpose(sel, -12))), button("+oct", () -> roll.apply(sel -> Pro.transpose(sel, 12))), button("Zoom −", () -> { roll.zoom = Math.max(dp(8), roll.zoom / 1.5f); roll.invalidate(); }), button("Zoom +", () -> { roll.zoom = Math.min(dp(400), roll.zoom * 1.5f); roll.invalidate(); }));
         final Button pencilBtn = button("✏ Pencil: OFF", () -> {}); pencilBtn.setOnClickListener(v -> { roll.pencil = !roll.pencil; pencilBtn.setText(roll.pencil ? "✏ Pencil: ON" : "✏ Pencil: OFF"); a.toast(roll.pencil ? "Pencil on: tap or drag in empty space to draw notes. Two fingers scroll." : "Pencil off: fingers only select and move. A stylus always draws."); });
@@ -1445,7 +1446,7 @@ final class ProUi {
                 if (a.session != project) { a.toast("Project changed; performance was not saved."); return; }
                 if (destination != target) project.tracks.add(destination);
                 destination.clips.add(c); a.selected = destination; a.clip = c; a.screen = "ARRANGE"; a.save(false); a.refresh();
-                a.toast(touchPerformance ? "Play It take saved to its own instrument track, "+(a.padQuantize()>0?"quantized to 1/"+(4*a.padQuantize())+" notes.":"timed exactly as you played it.") : "Performance saved as a live MIDI clip: edit notes or change the instrument any time from the clip menu.");
+                a.toast(touchPerformance ? "Play It take saved to its own instrument track · quantize: "+a.padQ().summary()+"." : "Performance saved as a live MIDI clip: edit notes or change the instrument any time from the clip menu.");
             }); });
         return true;
     }

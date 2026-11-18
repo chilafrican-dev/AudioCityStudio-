@@ -203,27 +203,38 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
    }catch(Exception e){refFile.delete();outFile.delete();throw e;}
   });
  }
- /** 0 = off (play exactly as performed), otherwise notes per beat: 1 = 1/4, 2 = 1/8, 4 = 1/16, 8 = 1/32. MIDI keyboards default to off. */
- int recordQuantize(){return getPreferences(MODE_PRIVATE).getInt("recordQuantize",0);}
- /** Play It pads default to 1/16, as before: tapping glass is less exact than a keyboard. */
- int padQuantize(){return getPreferences(MODE_PRIVATE).getInt("padQuantize",4);}
- /** Q on the clip bar: quantize the selected MIDI clip(s) now, with Undo. */
+ /** Quantize settings for new takes. Play It pads default to 1/16 (tapping glass is less exact); MIDI keyboards default to off. */
+ Quantizer.Settings padQ(){android.content.SharedPreferences sp=getPreferences(MODE_PRIVATE);if(sp.contains("padQ"))return Quantizer.Settings.parse(sp.getString("padQ",""));return Quantizer.Settings.division(sp.getInt("padQuantize",4));}
+ Quantizer.Settings keyQ(){android.content.SharedPreferences sp=getPreferences(MODE_PRIVATE);if(sp.contains("keyQ"))return Quantizer.Settings.parse(sp.getString("keyQ",""));return Quantizer.Settings.division(sp.getInt("recordQuantize",0));}
+ int recordQuantize(){return keyQ().grid;}int padQuantize(){return padQ().grid;}
+ /**
+  * The full quantize panel: grid (straight, triplet, mixed and swing grids), strength, swing, range, flam, length and velocity.
+  * onApply receives the chosen settings.
+  */
+ void quantizeDialog(String title,Quantizer.Settings start,String applyLabel,java.util.function.Consumer<Quantizer.Settings> onApply){
+  final Quantizer.Settings q=start.copy();LinearLayout box=column();box.setPadding(dp(18),dp(6),dp(18),dp(6));
+  box.addView(label("GRID",11,DIM,true));Spinner grid=new Spinner(this);ArrayAdapter<String> ad=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,Quantizer.GRIDS);grid.setAdapter(ad);grid.setSelection(q.grid);box.addView(grid,new LinearLayout.LayoutParams(-1,dp(48)));
+  final TextView summary=label(q.summary(),12,ACCENT,true);
+  grid.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> p,View v,int i,long id){q.grid=i;summary.setText(q.summary());}public void onNothingSelected(AdapterView<?> p){}});
+  String[][] rows={{"STRENGTH","How far notes move to the grid","0","100","%"},{"SWING","Delays every second grid step · 50% = straight (straight grids only)","50","75","%"},{"RANGE","0 = all notes · + only notes farther than this · − only notes closer","-100","100","ms"},{"FLAM","Spreads notes that land together · + lowest first · − highest first","-50","50","ms"},{"LENGTH","How far note ends move to the grid","0","100","%"},{"VELOCITY","Evens velocities toward the average","0","100","%"}};
+  double[] values={q.strength,q.swing,q.rangeMs,q.flamMs,q.length,q.velocity};
+  for(int r=0;r<rows.length;r++){final int row=r;final int min=Integer.parseInt(rows[r][2]),max=Integer.parseInt(rows[r][3]);final String unit=rows[r][4];final TextView head=label(rows[r][0]+"  "+Math.round(values[r])+" "+unit,11,TEXT,true);head.setPadding(0,dp(10),0,0);box.addView(head);box.addView(label(rows[r][1],10,DIM,false));
+   SeekBar bar=new SeekBar(this);bar.setMax(max-min);bar.setProgress((int)Math.round(values[r])-min);bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int pr,boolean u){int v=pr+min;switch(row){case 0:q.strength=v;break;case 1:q.swing=v;break;case 2:q.rangeMs=v;break;case 3:q.flamMs=v;break;case 4:q.length=v;break;default:q.velocity=v;}head.setText(rows[row][0]+"  "+v+" "+unit);summary.setText(q.summary());}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});box.addView(bar);}
+  summary.setPadding(0,dp(12),0,0);box.addView(summary);
+  ScrollView sv=new ScrollView(this);sv.addView(box);new AlertDialog.Builder(this).setTitle(title).setView(sv).setPositiveButton(applyLabel,(d,i)->onApply.accept(q)).setNegativeButton("Cancel",null).show();
+ }
+ /** Q on the clip bar: quantize the selected MIDI clip(s) now with the full settings, with Undo. */
  void quantizeSelected(){
   if(!canEdit())return;final ArrayList<Core.Clip> targets=new ArrayList<>();if(!multi.isEmpty()){for(Core.Clip c:multi)if(c.notes!=null)targets.add(c);}else if(clip!=null&&clip.notes!=null)targets.add(clip);
   if(targets.isEmpty()){toast("Select a MIDI clip to quantize. Audio clips snap to the grid when you move them.");return;}
-  final String[] names={"1/4 notes","1/8 notes","1/16 notes","1/32 notes","1/16 at 50% · tighter but keeps the feel","1/8 at 50%"};final int[] div={1,2,4,8,4,2};final double[] str={1,1,1,1,.5,.5};
-  new AlertDialog.Builder(this).setTitle("Quantize "+(targets.size()==1?targets.get(0).name:targets.size()+" MIDI clips")).setItems(names,(d,i)->{checkpoint();int moved=0;for(Core.Clip c:targets)moved+=ProEdit.quantizeClip(session,c,div[i],str[i]);save(false);refresh();toast(moved+" notes quantized to "+names[i]+". Undo puts them back.");}).show();
+  android.content.SharedPreferences sp=getPreferences(MODE_PRIVATE);Quantizer.Settings last=sp.contains("lastQ")?Quantizer.Settings.parse(sp.getString("lastQ","")):new Quantizer.Settings(5);
+  quantizeDialog("Quantize "+(targets.size()==1?targets.get(0).name:targets.size()+" MIDI clips"),last,"Quantize",q->{sp.edit().putString("lastQ",q.encode()).apply();checkpoint();int moved=0;for(Core.Clip c:targets)moved+=ProEdit.quantizeClip(session,c,q);save(false);refresh();toast(moved+" notes changed · "+q.summary()+". Undo puts them back.");});
  }
  void recordingOptions(){
   LinearLayout box=column();box.setPadding(dp(18),dp(8),dp(18),dp(8));android.content.SharedPreferences sp=getPreferences(MODE_PRIVATE);
-  box.addView(label("QUANTIZE PLAY IT PAD TAKES",11,DIM,true));
-  final String[] padNames={"Off · keep my timing","1/4 notes","1/8 notes","1/16 notes (default)","1/32 notes"};final int[] padValues={0,1,2,4,8};
-  RadioGroup pads=new RadioGroup(this);for(int i=0;i<padNames.length;i++){RadioButton b=new RadioButton(this);b.setText(padNames[i]);b.setTextColor(TEXT);b.setId(2000+i);pads.addView(b);if(padValues[i]==padQuantize())pads.check(2000+i);}
-  pads.setOnCheckedChangeListener((g,id)->sp.edit().putInt("padQuantize",padValues[id-2000]).apply());box.addView(pads);
-  box.addView(label("QUANTIZE MIDI KEYBOARD TAKES",11,DIM,true));
-  final String[] names={"Off · keep my timing","1/4 notes","1/8 notes","1/16 notes","1/32 notes"};final int[] values={0,1,2,4,8};int current=0;for(int i=0;i<values.length;i++)if(values[i]==recordQuantize())current=i;
-  RadioGroup group=new RadioGroup(this);for(int i=0;i<names.length;i++){RadioButton b=new RadioButton(this);b.setText(names[i]);b.setTextColor(TEXT);b.setId(1000+i);group.addView(b);}group.check(1000+current);
-  group.setOnCheckedChangeListener((g,id)->sp.edit().putInt("recordQuantize",values[id-1000]).apply());box.addView(group);
+  box.addView(label("QUANTIZE NEW TAKES",11,DIM,true));
+  final Button pads=button("Play It pads: "+padQ().summary(),()->{});pads.setAllCaps(false);pads.setOnClickListener(v->quantizeDialog("Quantize Play It pad takes",padQ(),"Save",q->{sp.edit().putString("padQ",q.encode()).apply();pads.setText("Play It pads: "+q.summary());}));box.addView(pads,new LinearLayout.LayoutParams(-1,dp(48)));
+  final Button keys=button("MIDI keyboard: "+keyQ().summary(),()->{});keys.setAllCaps(false);keys.setOnClickListener(v->quantizeDialog("Quantize MIDI keyboard takes",keyQ(),"Save",q->{sp.edit().putString("keyQ",q.encode()).apply();keys.setText("MIDI keyboard: "+q.summary());}));box.addView(keys,new LinearLayout.LayoutParams(-1,dp(48)));
   box.addView(label("Off records exactly what you play. You can quantize any MIDI clip later with Q on the clip bar.",11,DIM,false));
   CheckBox extend=new CheckBox(this);extend.setText("End MIDI regions on the next bar line");extend.setTextColor(TEXT);extend.setChecked(sp.getBoolean("extendToBar",true));extend.setOnCheckedChangeListener((v,on)->sp.edit().putBoolean("extendToBar",on).apply());box.addView(extend);
   box.addView(label("Only the region's edge moves; recorded notes are never moved or stretched.",11,DIM,false));
@@ -423,7 +434,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
   if(cancelled){engine.recording=false;engine.pause();toast("Count-in cancelled; no take added.");return;}
   final Core.Track target=midiTrack;final long start=midiStart;final Core.Session project=session;final String takeName=performanceName;
   final boolean touchPerformance="Touch performance".equals(takeName);
-  final MidiTake take=TakeBounds.fit(recorded,start,project,touchPerformance?padQuantize():recordQuantize(),getPreferences(MODE_PRIVATE).getBoolean("extendToBar",true));
+  final MidiTake take=TakeBounds.fit(recorded,start,project,touchPerformance?padQ():keyQ(),getPreferences(MODE_PRIVATE).getBoolean("extendToBar",true));
   if(pro.liveMidiTake(take,target,start,takeName))return;
   final long clipStart=start;final Core.Track destination=performanceTrack(take,takeName,target);
   busy("Printing your performance and saving its MIDI source…",()->{
@@ -439,7 +450,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
      if(session!=project){audio.delete();notes.delete();toast("Project changed; performance was not saved.");return;}
      if(destination!=target)project.tracks.add(destination);
      destination.clips.add(printed);selected=destination;clip=printed;screen="ARRANGE";save(false);refresh();
-     toast(touchPerformance?"Play It take saved to its own instrument track, "+(padQuantize()>0?"quantized to 1/"+(4*padQuantize())+" notes.":"timed exactly as you played it."):"Performance saved on its track. Undo is available; the original notes can be exported from the project menu.");
+     toast(touchPerformance?"Play It take saved to its own instrument track · quantize: "+padQ().summary()+".":"Performance saved on its track. Undo is available; the original notes can be exported from the project menu.");
     });
    }finally{if(!success){audio.delete();notes.delete();}}
   });

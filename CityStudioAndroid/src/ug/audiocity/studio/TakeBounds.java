@@ -20,13 +20,13 @@ public final class TakeBounds {
   * division: 0 keeps the performance exactly as played; 1, 2, 4, 8 quantize to 1/4, 1/8, 1/16, 1/32 notes on the tempo map.
   * extendToBar: the region ends on the next bar line (notes are never moved or stretched); otherwise it ends where recording stopped.
   */
- public static MidiTake fit(MidiTake source,long start,Core.Session session,int division,boolean extendToBar){boolean quantize=division>0;
+ public static MidiTake fit(MidiTake source,long start,Core.Session session,int division,boolean extendToBar){return fit(source,start,session,Quantizer.Settings.division(division),extendToBar);}
+ /** Full quantize settings (grid, strength, swing, range, flam, length, velocity); Off keeps the performance exactly. */
+ public static MidiTake fit(MidiTake source,long start,Core.Session session,Quantizer.Settings quantize,boolean extendToBar){
   ArrayList<MidiTake.Event> other=new ArrayList<>();List<Pro.Note> notes=Pro.notes(source.events,other);Pro.TempoMap map=new Pro.TempoMap(session);
   long required=1;
-  for(Pro.Note note:notes){
-   if(quantize){long a=map.snap(start+note.start,division),b=map.snap(start+note.end(),division);b=Math.max(b,map.frameAt(map.beatAt(a)+1.0/division));note.start=Math.max(0,a-start);note.length=Math.max(1,b-start-note.start);}
-   required=Math.max(required,note.end());
-  }
+  Quantizer.apply(quantize,notes,start,map);
+  for(Pro.Note note:notes)required=Math.max(required,note.end());
   // A captured loop end is an upper bound, not the length of a manually stopped take.
   long end;
   if(source.projectStop>=0&&start+(long)source.frames>=source.projectStop)end=source.projectStop;
