@@ -12,7 +12,7 @@ public final class SyncTests {
     static long ns(double seconds) { return Math.round(seconds * 1e9); }
 
     public static void main(String[] a) throws Exception {
-        clock(); placement(); midi(); tempoMap(); loops();
+        clock(); placement(); midi(); tempoMap(); loops(); regionQuantize();
         System.out.println("SyncTests OK: " + checks + " checks");
     }
 
@@ -114,5 +114,16 @@ public final class SyncTests {
         Core.Session drumsOnly = new Core.Session(); drumsOnly.bpm = 104; drumsOnly.tracks.add(s.tracks.get(0));
         float[] d = new float[cycle * 2], b2 = new float[1024]; Core.Renderer dr = new Core.Renderer(drumsOnly); for (int at = 0; at < cycle; at += 512) { int n = Math.min(512, cycle - at); dr.render(at, n, b2, false); System.arraycopy(b2, 0, d, at * 2, n * 2); }
         for (Pro.Note n : drums) { int at = (int) n.start; int onset = -1; for (int i = Math.max(0, at - 480); i < Math.min(cycle, at + 480); i++) if (Math.abs(d[i * 2]) > .02) { onset = i; break; } check(onset >= at && onset - at <= Core.RATE / 1000, "kick at sixteenth " + Math.round(n.start / (beat / 4.0)) + " sounds on time (" + (onset - at) + " frames)"); }
+    }
+
+    /** Q on the clip bar: notes move onto the grid of the song (not of the clip), lengths kept; 50% keeps half the feel. */
+    static void regionQuantize() {
+        Core.Session s = new Core.Session(); s.bpm = 100; long beat = Core.beat(100), st = beat / 4; List<Pro.Note> notes = new ArrayList<>();
+        long[] played = {37, st + 410, 2 * st - 300, 5 * st + 120}; for (long p : played) notes.add(new Pro.Note(60, 100, p + beat / 2 - 1000, beat / 8, 0)); // clip starts mid-beat
+        Core.Clip c = ProMidi.clip("Keys", notes, Synth.factory(0), beat + 1000, (int) (beat * 4));
+        ProEdit.quantizeClip(s, c, 4, 1); long origin = c.start - c.offset;
+        for (Pro.Note n : c.notes) { long abs = origin + n.start; check(abs % st == 0, "on the song's sixteenth grid: " + abs % st); check(n.length == beat / 8, "length kept"); }
+        Core.Clip h = ProMidi.clip("Keys", Collections.singletonList(new Pro.Note(60, 100, 600, beat / 8, 0)), Synth.factory(0), 0, (int) beat);
+        ProEdit.quantizeClip(s, h, 4, .5); check(h.notes.get(0).start == 300, "50% moves halfway: " + h.notes.get(0).start);
     }
 }

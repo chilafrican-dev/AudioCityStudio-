@@ -1445,7 +1445,7 @@ final class ProUi {
                 if (a.session != project) { a.toast("Project changed; performance was not saved."); return; }
                 if (destination != target) project.tracks.add(destination);
                 destination.clips.add(c); a.selected = destination; a.clip = c; a.screen = "ARRANGE"; a.save(false); a.refresh();
-                a.toast(touchPerformance ? "Play It take saved to its own instrument track, "+(a.recordQuantize()>0?"quantized to 1/"+(4*a.recordQuantize())+" notes.":"timed exactly as you played it.") : "Performance saved as a live MIDI clip: edit notes or change the instrument any time from the clip menu.");
+                a.toast(touchPerformance ? "Play It take saved to its own instrument track, "+(a.padQuantize()>0?"quantized to 1/"+(4*a.padQuantize())+" notes.":"timed exactly as you played it.") : "Performance saved as a live MIDI clip: edit notes or change the instrument any time from the clip menu.");
             }); });
         return true;
     }

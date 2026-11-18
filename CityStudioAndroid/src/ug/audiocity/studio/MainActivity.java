@@ -43,7 +43,7 @@ int trackHeightDp=88;final java.util.Set<Core.Clip> multi=java.util.Collections.
  addTool("＋ Track",()->addTrack());addTool("♪ Auto",()->{if(canEdit())pro.autoParts();});addTool("Import",()->importAudio());selectTool=addTool("Select",()->setArrangeTool(0));moveTool=addTool("Move",()->setArrangeTool(1));trimTool=addTool("Trim",()->setArrangeTool(2));snapKey=addTool("Snap",()->snapDialog());click=addTool("Click",()->{engine.click=!engine.click;refresh();});addTool("All",()->selectAllClips());addTool("Copy",()->copyClips());addTool("Paste",()->pasteClips());addTool("Fit",()->fitTimeline());addTool("−",()->zoomTimeline(1/1.3f));addTool("＋",()->zoomTimeline(1.3f));addTool("↕−",()->trackHeight(-16));addTool("↕＋",()->trackHeight(16));setArrangeTool(0);selectTool.setContentDescription("Select clips and scroll safely");moveTool.setContentDescription("Move: hold a clip still, then drag");trimTool.setContentDescription("Trim: hold near an edge, then drag");
  content=new SafeFrame();root.addView(content,new LinearLayout.LayoutParams(-1,0,1));
  inspector=new LinearLayout(this);inspector.setGravity(Gravity.CENTER_VERTICAL);inspector.setPadding(dp(12),dp(6),dp(6),dp(6));inspector.setBackground(round(0xff12151a,14));LinearLayout.LayoutParams ip=new LinearLayout.LayoutParams(-1,dp(56));ip.topMargin=dp(6);root.addView(inspector,ip);LinearLayout info=column();inspector.addView(info,new LinearLayout.LayoutParams(0,-2,1));selectionName=label("SELECT A CHANNEL",13,0xffff7aa8,true);selectionName.setSingleLine();selectionName.setEllipsize(android.text.TextUtils.TruncateAt.END);info.addView(selectionName);selectionDetail=label("",9,DIM,false);selectionDetail.setSingleLine();selectionDetail.setEllipsize(android.text.TextUtils.TruncateAt.END);info.addView(selectionDetail);
- Button edit=barKey("✎",()->{if(!canEdit())return;if(!multi.isEmpty()){moveSelection();return;}if(clip!=null&&selected!=null)clipMenu(selected,clip);else trackSettings();});edit.setContentDescription("Edit selected clip or track");inspector.addView(edit,barLayout());Button roll=barKey("🎹",()->{if(!canEdit())return;if(clip!=null&&selected!=null&&ProUi.isMidi(clip))pro.pianoRoll(selected,clip);else if(selected!=null&&ProUi.hasMidi(selected)){for(Core.Clip c:selected.clips)if(ProUi.isMidi(c)){clip=c;pro.pianoRoll(selected,c);break;}}else toast("Select a MIDI clip to open the piano roll.");});roll.setContentDescription("Piano roll for the selected MIDI clip");inspector.addView(roll,barLayout());Button scissors=barKey("✂",()->split());scissors.setContentDescription("Scissors: split selected clip at cursor");inspector.addView(scissors,barLayout());Button copy=barKey("⧉",()->duplicateSelectedClip());copy.setContentDescription("Duplicate selected clip");inspector.addView(copy,barLayout());Button delete=barKey("🗑",()->deleteSelectedClip());delete.setTextColor(0xffff5a5f);delete.setContentDescription("Delete selected clip; Undo available");inspector.addView(delete,barLayout());
+ Button edit=barKey("✎",()->{if(!canEdit())return;if(!multi.isEmpty()){moveSelection();return;}if(clip!=null&&selected!=null)clipMenu(selected,clip);else trackSettings();});edit.setContentDescription("Edit selected clip or track");inspector.addView(edit,barLayout());Button roll=barKey("🎹",()->{if(!canEdit())return;if(clip!=null&&selected!=null&&ProUi.isMidi(clip))pro.pianoRoll(selected,clip);else if(selected!=null&&ProUi.hasMidi(selected)){for(Core.Clip c:selected.clips)if(ProUi.isMidi(c)){clip=c;pro.pianoRoll(selected,c);break;}}else toast("Select a MIDI clip to open the piano roll.");});roll.setContentDescription("Piano roll for the selected MIDI clip");inspector.addView(roll,barLayout());Button quant=barKey("Q",()->quantizeSelected());quant.setContentDescription("Quantize the selected MIDI clip");inspector.addView(quant,barLayout());Button scissors=barKey("✂",()->split());scissors.setContentDescription("Scissors: split selected clip at cursor");inspector.addView(scissors,barLayout());Button copy=barKey("⧉",()->duplicateSelectedClip());copy.setContentDescription("Duplicate selected clip");inspector.addView(copy,barLayout());Button delete=barKey("🗑",()->deleteSelectedClip());delete.setTextColor(0xffff5a5f);delete.setContentDescription("Delete selected clip; Undo available");inspector.addView(delete,barLayout());
  navigation=new LinearLayout(this);navigation.setPadding(0,dp(4),0,dp(4));root.addView(navigation,new LinearLayout.LayoutParams(-1,dp(62)));String[] names={"ARRANGE","MIXER","FX","INSTRUMENT"},labels={"Arrange","Mixer","Effects","Sounds"};for(int i=0;i<names.length;i++){final String name=names[i];TabKey tab=new TabKey(labels[i],()->{screen=name;refresh();});tab.icon=i;tab.setTag(name);navigation.addView(tab,new LinearLayout.LayoutParams(0,-1,1));}TabKey patternTab=new TabKey("Pattern",()->{if(canEdit())new BeatPilotDrumScreen(this).open();});patternTab.icon=4;patternTab.setContentDescription("Pattern rack");navigation.addView(patternTab,new LinearLayout.LayoutParams(0,-1,1));TabKey aiTab=new TabKey("AI",()->{if(canEdit())pro.aiGenerate();});aiTab.icon=5;aiTab.setTextColor(0xff9d8cff);aiTab.setContentDescription("AI MIDI generator");navigation.addView(aiTab,new LinearLayout.LayoutParams(0,-1,1));}
  LinearLayout.LayoutParams squareKey(){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.rightMargin=dp(5);return p;}
  LinearLayout.LayoutParams barLayout(){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(42),dp(44));p.leftMargin=dp(5);return p;}
@@ -203,15 +203,28 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
    }catch(Exception e){refFile.delete();outFile.delete();throw e;}
   });
  }
- /** 0 = off (play exactly as performed), otherwise notes per beat: 1 = 1/4, 2 = 1/8, 4 = 1/16, 8 = 1/32. */
+ /** 0 = off (play exactly as performed), otherwise notes per beat: 1 = 1/4, 2 = 1/8, 4 = 1/16, 8 = 1/32. MIDI keyboards default to off. */
  int recordQuantize(){return getPreferences(MODE_PRIVATE).getInt("recordQuantize",0);}
+ /** Play It pads default to 1/16, as before: tapping glass is less exact than a keyboard. */
+ int padQuantize(){return getPreferences(MODE_PRIVATE).getInt("padQuantize",4);}
+ /** Q on the clip bar: quantize the selected MIDI clip(s) now, with Undo. */
+ void quantizeSelected(){
+  if(!canEdit())return;final ArrayList<Core.Clip> targets=new ArrayList<>();if(!multi.isEmpty()){for(Core.Clip c:multi)if(c.notes!=null)targets.add(c);}else if(clip!=null&&clip.notes!=null)targets.add(clip);
+  if(targets.isEmpty()){toast("Select a MIDI clip to quantize. Audio clips snap to the grid when you move them.");return;}
+  final String[] names={"1/4 notes","1/8 notes","1/16 notes","1/32 notes","1/16 at 50% · tighter but keeps the feel","1/8 at 50%"};final int[] div={1,2,4,8,4,2};final double[] str={1,1,1,1,.5,.5};
+  new AlertDialog.Builder(this).setTitle("Quantize "+(targets.size()==1?targets.get(0).name:targets.size()+" MIDI clips")).setItems(names,(d,i)->{checkpoint();int moved=0;for(Core.Clip c:targets)moved+=ProEdit.quantizeClip(session,c,div[i],str[i]);save(false);refresh();toast(moved+" notes quantized to "+names[i]+". Undo puts them back.");}).show();
+ }
  void recordingOptions(){
   LinearLayout box=column();box.setPadding(dp(18),dp(8),dp(18),dp(8));android.content.SharedPreferences sp=getPreferences(MODE_PRIVATE);
-  box.addView(label("QUANTIZE NEW MIDI AND PAD TAKES",11,DIM,true));
+  box.addView(label("QUANTIZE PLAY IT PAD TAKES",11,DIM,true));
+  final String[] padNames={"Off · keep my timing","1/4 notes","1/8 notes","1/16 notes (default)","1/32 notes"};final int[] padValues={0,1,2,4,8};
+  RadioGroup pads=new RadioGroup(this);for(int i=0;i<padNames.length;i++){RadioButton b=new RadioButton(this);b.setText(padNames[i]);b.setTextColor(TEXT);b.setId(2000+i);pads.addView(b);if(padValues[i]==padQuantize())pads.check(2000+i);}
+  pads.setOnCheckedChangeListener((g,id)->sp.edit().putInt("padQuantize",padValues[id-2000]).apply());box.addView(pads);
+  box.addView(label("QUANTIZE MIDI KEYBOARD TAKES",11,DIM,true));
   final String[] names={"Off · keep my timing","1/4 notes","1/8 notes","1/16 notes","1/32 notes"};final int[] values={0,1,2,4,8};int current=0;for(int i=0;i<values.length;i++)if(values[i]==recordQuantize())current=i;
   RadioGroup group=new RadioGroup(this);for(int i=0;i<names.length;i++){RadioButton b=new RadioButton(this);b.setText(names[i]);b.setTextColor(TEXT);b.setId(1000+i);group.addView(b);}group.check(1000+current);
   group.setOnCheckedChangeListener((g,id)->sp.edit().putInt("recordQuantize",values[id-1000]).apply());box.addView(group);
-  box.addView(label("Off records exactly what you play. Quantize later from the piano roll if you change your mind.",11,DIM,false));
+  box.addView(label("Off records exactly what you play. You can quantize any MIDI clip later with Q on the clip bar.",11,DIM,false));
   CheckBox extend=new CheckBox(this);extend.setText("End MIDI regions on the next bar line");extend.setTextColor(TEXT);extend.setChecked(sp.getBoolean("extendToBar",true));extend.setOnCheckedChangeListener((v,on)->sp.edit().putBoolean("extendToBar",on).apply());box.addView(extend);
   box.addView(label("Only the region's edge moves; recorded notes are never moved or stretched.",11,DIM,false));
   box.addView(label("RECORDING LATENCY",11,DIM,true));
@@ -410,7 +423,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
   if(cancelled){engine.recording=false;engine.pause();toast("Count-in cancelled; no take added.");return;}
   final Core.Track target=midiTrack;final long start=midiStart;final Core.Session project=session;final String takeName=performanceName;
   final boolean touchPerformance="Touch performance".equals(takeName);
-  final MidiTake take=TakeBounds.fit(recorded,start,project,recordQuantize(),getPreferences(MODE_PRIVATE).getBoolean("extendToBar",true));
+  final MidiTake take=TakeBounds.fit(recorded,start,project,touchPerformance?padQuantize():recordQuantize(),getPreferences(MODE_PRIVATE).getBoolean("extendToBar",true));
   if(pro.liveMidiTake(take,target,start,takeName))return;
   final long clipStart=start;final Core.Track destination=performanceTrack(take,takeName,target);
   busy("Printing your performance and saving its MIDI source…",()->{
@@ -426,7 +439,7 @@ new AlertDialog.Builder(this).setTitle("Record onto "+selected.name+"?").setView
      if(session!=project){audio.delete();notes.delete();toast("Project changed; performance was not saved.");return;}
      if(destination!=target)project.tracks.add(destination);
      destination.clips.add(printed);selected=destination;clip=printed;screen="ARRANGE";save(false);refresh();
-     toast(touchPerformance?"Play It take saved to its own instrument track, "+(recordQuantize()>0?"quantized to 1/"+(4*recordQuantize())+" notes.":"timed exactly as you played it."):"Performance saved on its track. Undo is available; the original notes can be exported from the project menu.");
+     toast(touchPerformance?"Play It take saved to its own instrument track, "+(padQuantize()>0?"quantized to 1/"+(4*padQuantize())+" notes.":"timed exactly as you played it."):"Performance saved on its track. Undo is available; the original notes can be exported from the project menu.");
     });
    }finally{if(!success){audio.delete();notes.delete();}}
   });

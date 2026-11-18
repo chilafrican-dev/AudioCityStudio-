@@ -177,6 +177,20 @@ final class ProEdit {
         for (Pro.Marker m : s.markers) m.frame = Math.max(0, after.frameAt(before.beatAt(m.frame)));
     }
 
+    /**
+     * Quantizes a MIDI region on the song's tempo map: every note start moves toward the nearest grid line (division notes
+     * per beat: 1 = 1/4, 2 = 1/8, 4 = 1/16, 8 = 1/32) by the given strength (1 = fully, 0.5 = halfway, keeping some feel).
+     * Lengths are kept. Returns how many notes moved.
+     */
+    static int quantizeClip(Core.Session s, Core.Clip c, int division, double strength) {
+        if (c.notes == null || division <= 0) return 0; Pro.TempoMap map = new Pro.TempoMap(s); long origin = c.start - c.offset; int moved = 0;
+        for (Pro.Note n : c.notes) {
+            long abs = origin + n.start, grid = map.snap(abs, division), to = Math.round(abs + (grid - abs) * Math.max(0, Math.min(1, strength)));
+            long start = Math.max(0, to - origin); if (start != n.start) { n.start = start; moved++; }
+        }
+        c.notes.sort((x, y) -> Long.compare(x.start, y.start)); ProMidi.refresh(c); return moved;
+    }
+
     static long loopPosition(long heard, long loopStart, long loopEnd) {
         if (loopEnd <= loopStart || heard < loopEnd) return heard; return loopStart + (heard - loopEnd) % (loopEnd - loopStart);
     }
