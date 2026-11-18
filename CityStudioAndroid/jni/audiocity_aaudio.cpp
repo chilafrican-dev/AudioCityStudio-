@@ -1,6 +1,7 @@
 // Native AAudio output for Audio City Studio. Built by build.sh when ANDROID_NDK_ROOT is set (API 30+).
 // The Java engine renders blocks and writes them here; AAudio gives the lowest-latency path Android offers
 // (exclusive MMAP streams on supported devices). Any failure returns an error so Java can fall back to AudioTrack.
+#include <time.h>
 #include <jni.h>
 #include <aaudio/AAudio.h>
 #include <android/log.h>
@@ -72,6 +73,16 @@ JNIEXPORT jint JNICALL Java_ug_audiocity_studio_NativeAudio_write(JNIEnv* env, j
 JNIEXPORT jlong JNICALL Java_ug_audiocity_studio_NativeAudio_framesRead(JNIEnv*, jclass, jlong h) {
     Stream* s = from(h);
     return s && s->stream ? static_cast<jlong>(AAudioStream_getFramesRead(s->stream)) : 0;
+}
+// Hardware timestamp: which frame of the stream reached the speaker at which CLOCK_MONOTONIC time (same clock as System.nanoTime()).
+JNIEXPORT jboolean JNICALL Java_ug_audiocity_studio_NativeAudio_timestamp(JNIEnv* env, jclass, jlong h, jlongArray out) {
+    Stream* s = from(h);
+    if (!s || !s->stream || env->GetArrayLength(out) < 2) return JNI_FALSE;
+    int64_t frame = 0, nanos = 0;
+    if (AAudioStream_getTimestamp(s->stream, CLOCK_MONOTONIC, &frame, &nanos) != AAUDIO_OK) return JNI_FALSE;
+    jlong values[2] = {static_cast<jlong>(frame), static_cast<jlong>(nanos)};
+    env->SetLongArrayRegion(out, 0, 2, values);
+    return JNI_TRUE;
 }
 JNIEXPORT jint JNICALL Java_ug_audiocity_studio_NativeAudio_framesPerBurst(JNIEnv*, jclass, jlong h) {
     Stream* s = from(h);

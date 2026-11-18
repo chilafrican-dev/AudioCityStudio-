@@ -154,6 +154,29 @@ final class ProEdit {
     }
 
     /** Playhead position for a loop range when heard frames have been played starting from start (looping at end). */
+    /**
+     * Keeps everything at the same bar and beat when the tempo map or time signature changes. MIDI regions follow the
+     * tempo: every note keeps its beat position and musical length. Audio regions are time-based: they move to stay on
+     * their bar and beat but their audio keeps its recorded speed. The loop range and markers follow too.
+     */
+    static void followTempoMap(Core.Session s, Pro.TempoMap before, Pro.TempoMap after) {
+        for (Core.Track t : s.tracks) for (Core.Clip c : t.clips) {
+            long newStart = Math.max(0, after.frameAt(before.beatAt(c.start)));
+            if (c.notes != null) {
+                long origin = c.start - c.offset, newOrigin = after.frameAt(before.beatAt(origin));
+                for (Pro.Note n : c.notes) {
+                    long a = after.frameAt(before.beatAt(origin + n.start)), b = after.frameAt(before.beatAt(origin + n.end()));
+                    n.start = Math.max(0, a - newOrigin); n.length = Math.max(1, b - a);
+                }
+                long end = after.frameAt(before.beatAt(c.start + c.length));
+                c.offset = (int) Math.max(0, newStart - newOrigin); c.envelopeOffset = c.offset; c.length = (int) Math.max(1, Math.min(Core.MAX_FRAMES - newStart, end - newStart));
+                c.start = newStart; ProMidi.refresh(c);
+            } else c.start = Math.min(newStart, Core.MAX_FRAMES - c.length);
+        }
+        if (s.loopEnd > s.loopStart) { s.loopStart = Math.max(0, after.frameAt(before.beatAt(s.loopStart))); s.loopEnd = Math.max(s.loopStart + 1, after.frameAt(before.beatAt(s.loopEnd))); }
+        for (Pro.Marker m : s.markers) m.frame = Math.max(0, after.frameAt(before.beatAt(m.frame)));
+    }
+
     static long loopPosition(long heard, long loopStart, long loopEnd) {
         if (loopEnd <= loopStart || heard < loopEnd) return heard; return loopStart + (heard - loopEnd) % (loopEnd - loopStart);
     }

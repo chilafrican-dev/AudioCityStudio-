@@ -435,13 +435,13 @@ final class ProUi {
         LinearLayout p = page(); Core.Session s = a.session;
         p.addView(label("TIME SIGNATURE (beats per bar)", 11, MainActivity.DIM, true));
         String[] sigs = {"2 beats", "3 beats", "4 beats", "5 beats", "6 beats", "7 beats", "9 beats", "12 beats"}; int[] values = {2, 3, 4, 5, 6, 7, 9, 12}; int sel = 2; for (int i = 0; i < values.length; i++) if (values[i] == s.timeSignature) sel = i;
-        p.addView(spinner(sigs, sel, i -> { edit("Time signature"); s.timeSignature = values[i]; a.save(false); a.refresh(); }));
+        p.addView(spinner(sigs, sel, i -> { edit("Time signature"); Pro.TempoMap before = new Pro.TempoMap(s); s.timeSignature = values[i]; if (!s.tempoChanges.isEmpty()) ProEdit.followTempoMap(s, before, new Pro.TempoMap(s)); a.save(false); a.refresh(); }));
         p.addView(label("The click accents the first beat of each bar; bar numbers on the ruler follow the time signature.", 10, MainActivity.DIM, false));
         p.addView(label("TEMPO CHANGES (base tempo " + s.bpm + " BPM)", 11, MainActivity.DIM, true));
         ArrayList<Pro.TempoChange> sorted = new ArrayList<>(s.tempoChanges); sorted.sort(Comparator.comparingInt(c -> c.bar));
-        for (Pro.TempoChange c : sorted) p.addView(button("Bar " + (c.bar + 1) + " → " + c.bpm + " BPM   ✕", () -> { edit("Remove tempo change"); s.tempoChanges.remove(c); a.save(false); reopen(this::tempo); }), new LinearLayout.LayoutParams(-1, dp(40)));
-        p.addView(button("+ Add tempo change", () -> a.input("Bar where the new tempo starts (2 or later)", "5", true, bar -> { int b = (int) Double.parseDouble(bar); if (b < 2) throw new IllegalArgumentException("Use bar 2 or later; the base tempo covers bar 1."); a.input("Tempo from bar " + b + " (40–240 BPM)", String.valueOf(s.bpm), true, bpm -> { int v = (int) Double.parseDouble(bpm); if (v < 40 || v > 240) throw new IllegalArgumentException("Use 40–240 BPM."); edit("Tempo change"); s.tempoChanges.removeIf(c -> c.bar == b - 1); s.tempoChanges.add(new Pro.TempoChange(b - 1, v)); a.save(false); reopen(this::tempo); }); })));
-        p.addView(label("Tempo changes drive the click, the transport's bar display and snapping in Pro edits. Audio clips stay at their recorded speed.", 10, MainActivity.DIM, false));
+        for (Pro.TempoChange c : sorted) p.addView(button("Bar " + (c.bar + 1) + " → " + c.bpm + " BPM   ✕", () -> { edit("Remove tempo change"); Pro.TempoMap before = new Pro.TempoMap(s); s.tempoChanges.remove(c); ProEdit.followTempoMap(s, before, new Pro.TempoMap(s)); a.save(false); a.refresh(); reopen(this::tempo); }), new LinearLayout.LayoutParams(-1, dp(40)));
+        p.addView(button("+ Add tempo change", () -> a.input("Bar where the new tempo starts (2 or later)", "5", true, bar -> { int b = (int) Double.parseDouble(bar); if (b < 2) throw new IllegalArgumentException("Use bar 2 or later; the base tempo covers bar 1."); a.input("Tempo from bar " + b + " (40–240 BPM)", String.valueOf(s.bpm), true, bpm -> { int v = (int) Double.parseDouble(bpm); if (v < 40 || v > 240) throw new IllegalArgumentException("Use 40–240 BPM."); edit("Tempo change"); Pro.TempoMap before = new Pro.TempoMap(s); s.tempoChanges.removeIf(c -> c.bar == b - 1); s.tempoChanges.add(new Pro.TempoChange(b - 1, v)); ProEdit.followTempoMap(s, before, new Pro.TempoMap(s)); a.save(false); a.refresh(); reopen(this::tempo); }); })));
+        p.addView(label("Tempo changes drive the click, the bar display and snapping. MIDI regions follow the tempo note by note; audio regions stay on their bar and beat and keep their recorded speed.", 10, MainActivity.DIM, false));
         p.addView(label("MARKERS", 11, MainActivity.DIM, true));
         ArrayList<Pro.Marker> ms = new ArrayList<>(s.markers); ms.sort(Comparator.comparingLong(m -> m.frame));
         for (Pro.Marker m : ms) p.addView(button(m.name + "   ·   " + position(m.frame), () -> marker(m)), new LinearLayout.LayoutParams(-1, dp(40)));
@@ -1409,7 +1409,7 @@ final class ProUi {
                 if (a.session != project) { a.toast("Project changed; performance was not saved."); return; }
                 if (destination != target) project.tracks.add(destination);
                 destination.clips.add(c); a.selected = destination; a.clip = c; a.screen = "ARRANGE"; a.save(false); a.refresh();
-                a.toast(touchPerformance ? "Play It take saved to its own instrument track and quantized to 1/16 notes." : "Performance saved as a live MIDI clip: edit notes or change the instrument any time from the clip menu.");
+                a.toast(touchPerformance ? "Play It take saved to its own instrument track, "+(a.recordQuantize()>0?"quantized to 1/"+(4*a.recordQuantize())+" notes.":"timed exactly as you played it.") : "Performance saved as a live MIDI clip: edit notes or change the instrument any time from the clip menu.");
             }); });
         return true;
     }

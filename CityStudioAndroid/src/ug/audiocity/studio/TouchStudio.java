@@ -201,8 +201,10 @@ final class TouchStudio {
   final Paint paint=new Paint(3);
   final TouchNotes fingers=new TouchNotes((status,note,velocity)->{
    a.liveMidi.voices.message(status,note,velocity);
-   MidiTake take=a.midiTake;if(take!=null)take.add(status,note,velocity);
+   MidiTake take=a.midiTake;if(take!=null)take.add(status,note,velocity,PadGrid.this.touchNanos);
   });
+  /** When the finger actually touched the glass (not when Android got round to handling it), on the audio clock's time base. */
+  long touchNanos=System.nanoTime();
   PadGrid(Spinner r,Spinner s,Spinner m,Spinner o,Spinner p,Spinner l){
    super(a);root=r;scale=s;mode=m;octave=o;progression=p;layout=l;
    setMinimumHeight(a.dp(210));setContentDescription("Playable chord and melody pads. Multitouch enabled.");
@@ -221,19 +223,25 @@ final class TouchStudio {
   final java.util.HashMap<Integer,Integer> phraseCells=new java.util.HashMap<>();final java.util.ArrayList<Runnable> pending=new java.util.ArrayList<>();final int[] sounding=new int[128];final long[] phraseUntil=new long[8];
   void emit(int status,int note,int velocity){a.liveMidi.voices.message(status,note,velocity);MidiTake take=a.midiTake;if(take!=null)take.add(status,note,velocity);}
   /** Easy melody: one tap plays a whole in-key phrase, started on the next eighth note when the beat is running. */
+  /** Easy melody: one tap plays a whole in-key phrase, timed by the audio engine's clock (no UI timers), from the next eighth note. */
   void playPhrase(int cell){
    int r=root.getSelectedItemPosition(),oct=octave.getSelectedItemPosition()+2;boolean minor=scale.getSelectedItemPosition()==1;
-   long sixteenth=Math.max(40,Math.round(60000.0/Math.max(40,a.session.bpm)/4));long delay=0;
-   if(a.engine.playing){long eighth=Core.beat(a.session.bpm)/2;if(eighth>0){long into=a.engine.position%eighth;delay=Math.round((eighth-into)%eighth*1000.0/Core.RATE);}}
+   double sixteenth=Core.RATE*60.0/Math.max(40,a.session.bpm)/4;long now=System.nanoTime(),delay=0,lead=0;
+   if(a.engine.playing&&a.engine.clockRunning()){
+    long heard=a.engine.heardAt(now),song=a.engine.songAt(now),eighth=Math.max(1,Core.beat(a.session.bpm)/2);
+    long target=heard+Math.floorMod(eighth-Math.floorMod(song,eighth),eighth); // next eighth note the listener will hear
+    lead=target-heard;delay=target-a.engine.transportFrames;while(delay<0){delay+=eighth;lead+=eighth;} // frames the synth renders ahead of the speaker
+   }
    long last=0;
    for(int[] n:PhraseBank.phrase(cell)){
-    final int midi=PhraseBank.note(r,minor,n[0],oct);final int vel=n[1]==0?100:84;long on=delay+n[1]*sixteenth,off=delay+(n[1]+n[2])*sixteenth-18;last=Math.max(last,off);
-    Runnable start=()->{sounding[midi]++;emit(144,midi,vel);},stop=()->{if(sounding[midi]>0){sounding[midi]--;emit(128,midi,0);}};
-    pending.add(start);pending.add(stop);a.handler.postDelayed(start,on);a.handler.postDelayed(stop,off);
+    int midi=PhraseBank.note(r,minor,n[0],oct),vel=n[1]==0?100:84;long on=Math.round(n[1]*sixteenth),off=Math.round((n[1]+n[2])*sixteenth)-Core.RATE/60;
+    a.liveMidi.voices.scheduleMessage(delay+on,144,midi,vel);a.liveMidi.voices.scheduleMessage(delay+off,128,midi,0);
+    MidiTake take=a.midiTake;if(take!=null){take.add(144,midi,vel,now+Math.round((lead+on)*1e9/Core.RATE));take.add(128,midi,0,now+Math.round((lead+off)*1e9/Core.RATE));}
+    last=Math.max(last,lead+off);
    }
-   phraseUntil[cell]=android.os.SystemClock.uptimeMillis()+last;
+   phraseUntil[cell]=android.os.SystemClock.uptimeMillis()+last*1000/Core.RATE;
   }
-  void stopPhrases(){for(Runnable r:pending)a.handler.removeCallbacks(r);pending.clear();for(int n=0;n<128;n++)while(sounding[n]>0){sounding[n]--;emit(128,n,0);}java.util.Arrays.fill(phraseUntil,0);}
+  void stopPhrases(){a.liveMidi.voices.cancelScheduled(0);for(int n=0;n<128;n++)a.liveMidi.voices.message(128,n,0);java.util.Arrays.fill(phraseUntil,0);}
   void change(int pointer,int cell){
    if(mode.getSelectedItemPosition()==2){Integer prev=phraseCells.get(pointer);if(cell<0)phraseCells.remove(pointer);else{phraseCells.put(pointer,cell);if(prev==null||prev!=cell)playPhrase(cell);}invalidate();return;}
    fingers.change(pointer,cell,cell<0?new int[0]:voice(cell));invalidate();}
@@ -251,6 +259,7 @@ final class TouchStudio {
    }
   }
   public boolean onTouchEvent(MotionEvent e){
+   touchNanos=android.os.Build.VERSION.SDK_INT>=34?e.getEventTimeNanos():e.getEventTime()*1_000_000L;if(touchNanos<=0||touchNanos>System.nanoTime())touchNanos=System.nanoTime();
    if(a.working||a.dead||!a.midiForeground||(a.midiTake!=null&&a.midiTake.pending())){releaseAll();return true;}
    int action=e.getActionMasked(),index=e.getActionIndex();
    if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN){

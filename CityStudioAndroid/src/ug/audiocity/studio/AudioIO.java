@@ -58,6 +58,8 @@ public final class AudioIO {
  static void drainAac(MediaCodec codec,MediaMuxer mux,MediaCodec.BufferInfo info,int[] track,boolean end)throws IOException{int idle=0;while(true){int out=codec.dequeueOutputBuffer(info,end?10000:0);if(out==MediaCodec.INFO_TRY_AGAIN_LATER){if(!end)return;if(++idle>500)throw new IOException("The AAC encoder did not finish.");continue;}if(out==MediaCodec.INFO_OUTPUT_FORMAT_CHANGED){if(track[0]>=0)throw new IOException("The AAC encoder changed format twice.");track[0]=mux.addTrack(codec.getOutputFormat());mux.start();continue;}if(out<0)continue;ByteBuffer data=codec.getOutputBuffer(out);if((info.flags&MediaCodec.BUFFER_FLAG_CODEC_CONFIG)!=0)info.size=0;if(info.size>0&&track[0]>=0&&data!=null){data.position(info.offset);data.limit(info.offset+info.size);mux.writeSampleData(track[0],data,info);}codec.releaseOutputBuffer(out,false);if((info.flags&MediaCodec.BUFFER_FLAG_END_OF_STREAM)!=0)return;}}
  /** Audio output stream used by the engine: AAudio (native, exclusive/MMAP when the device allows) or AudioTrack. */
  abstract static class Output{
+  /** Fills {stream frame, System.nanoTime()} for the frame now leaving the speaker. Returns true when the hardware reported it. */
+  boolean timestamp(long[] out){out[0]=heard();out[1]=System.nanoTime();return false;}
   abstract void start()throws IOException;abstract int write(float[] data,int offset,int samples)throws IOException;abstract long heard();abstract int burst();abstract int bufferFrames();abstract String describe();abstract void interrupt();abstract void close();
   /** When set, playback goes to this output (used for the top earpiece during speaker takes). */
   static volatile android.media.AudioDeviceInfo preferred;
@@ -67,16 +69,29 @@ public final class AudioIO {
  }
  static final class TrackOutput extends Output{final AudioTrack t;final int burst;
   TrackOutput(boolean lowLatency,int burstHint){int min=AudioTrack.getMinBufferSize(Core.RATE,AudioFormat.CHANNEL_OUT_STEREO,AudioFormat.ENCODING_PCM_FLOAT);t=new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()).setAudioFormat(new AudioFormat.Builder().setSampleRate(Core.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_FLOAT).build()).setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(Math.max(min,4096)).setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY).build();burst=Math.max(32,Math.min(512,burstHint));if(lowLatency)try{t.setBufferSizeInFrames(burst*2);}catch(Exception ignored){}android.media.AudioDeviceInfo want=Output.preferred;if(want!=null)try{t.setPreferredDevice(want);}catch(Exception ignored){}}
-  void start(){t.play();}int write(float[] d,int o,int n){return t.write(d,o,n,AudioTrack.WRITE_BLOCKING);}long heard(){return t.getPlaybackHeadPosition()&0xffffffffL;}int burst(){return burst;}int bufferFrames(){return t.getBufferSizeInFrames();}String describe(){return "AudioTrack (Java)";}
+  void start(){t.play();}int write(float[] d,int o,int n){return t.write(d,o,n,AudioTrack.WRITE_BLOCKING);}long heard(){return t.getPlaybackHeadPosition()&0xffffffffL;}final android.media.AudioTimestamp ts=new android.media.AudioTimestamp();boolean timestamp(long[] out){try{if(t.getTimestamp(ts)){out[0]=ts.framePosition;out[1]=ts.nanoTime;return true;}}catch(Exception ignored){}return super.timestamp(out);}int burst(){return burst;}int bufferFrames(){return t.getBufferSizeInFrames();}String describe(){return "AudioTrack (Java)";}
   void interrupt(){try{t.pause();}catch(Exception ignored){}}void close(){try{t.pause();t.flush();t.release();}catch(Exception ignored){}}}
  static final class NativeOutput extends Output{final long h;volatile boolean closed;NativeOutput(long handle){h=handle;}
   void start()throws IOException{int r=NativeAudio.start(h);if(r<0)throw new IOException("AAudio could not start ("+r+").");}
   int write(float[] d,int o,int n){if(closed)return -1;int frames=NativeAudio.write(h,d,o,n/2,200000000L);return frames<0?frames:frames*2;}
-  long heard(){return NativeAudio.framesRead(h);}int burst(){return NativeAudio.framesPerBurst(h);}int bufferFrames(){return NativeAudio.bufferFrames(h);}
+  long heard(){return NativeAudio.framesRead(h);}boolean timestamp(long[] out){try{if(NativeAudio.timestamp(h,out))return true;}catch(Throwable ignored){}return super.timestamp(out);}int burst(){return NativeAudio.framesPerBurst(h);}int bufferFrames(){return NativeAudio.bufferFrames(h);}
   String describe(){return NativeAudio.exclusive(h)?"AAudio · exclusive (MMAP)":"AAudio · shared";}
   void interrupt(){NativeAudio.stop(h);}synchronized void close(){if(closed)return;closed=true;NativeAudio.stop(h);NativeAudio.close(h);}}
  public static final class Engine {
   volatile boolean playing,loop,click,recording;
+  // ---- The master clock. Everything that needs to know "where in the song are we" (MIDI recording, audio recording,
+  // pads) asks the audio clock, never a UI timer: which output frame reached the speaker at which System.nanoTime().
+  public final TransportClock clock=new TransportClock();
+  /** True when the time came from the audio hardware itself (exact); false when estimated from the play head. */
+  public volatile boolean clockFromHardware;
+  /** Measured recording delay correction in frames (from the recording timing test); added to recorded audio. */
+  public volatile long latencyTrim;
+  /** Output-stream frame at the speaker at a System.nanoTime() moment, or -1 before the first block. */
+  /** Song frame (straight on, not loop-wrapped) the listener heard at that System.nanoTime() moment. */
+  public long heardAt(long nanos){return clock.heardAt(nanos,transportFrames-latencyFrames);}
+  /** Song position the listener heard at that moment, wrapped into the cycle when looping. */
+  public long songAt(long nanos){return clock.songAt(nanos,position);}
+  public boolean clockRunning(){return clock.running();}
   /** Low-latency mode uses the device burst size for blocks and a two-burst output buffer. */
   public volatile boolean lowLatency;
   public volatile int burstFrames=192,latencyFrames;
@@ -126,7 +141,7 @@ public final class AudioIO {
      latencyFrames=track.bufferFrames();track.start();
      float[] data=new float[Math.max(1024,block*2)],midiData=new float[Math.max(1024,block*2)],mon=new float[Math.max(1024,block*2)];
      Core.Processor monitorFx=null;Core.Fx monitorSource=null;
-     long cursor=start,heardBase=start-countInTotal;
+     long cursor=start,heardBase=start-countInTotal;clock.start(heardBase);long[] stamp=new long[2];
      long preRoll=countInTotal;
      while(playing){
       long end=recording?Core.MAX_FRAMES:Math.min(Core.MAX_FRAMES,Math.max(Core.beat(session.bpm)*4,session.end()+tailFrames(session)));
@@ -171,6 +186,7 @@ public final class AudioIO {
       }
       if(preparing){preRoll-=written/2;countInRemaining=preRoll;}else cursor+=written/2;
       transportFrames+=written/2;
+      boolean hw=track.timestamp(stamp);if(stamp[0]>=0){clock.update(stamp[0],stamp[1],hw,loop,loopStart,loopEnd);clockFromHardware=hw;}
       long heard=heardBase+track.heard();
       position=heard<start?start:loop?ProEdit.loopPosition(heard,loopStart,loopEnd):Math.min(heard,cursor);
       peakLeft=midi==null?renderer.peakLeft:midiPeakL;peakRight=midi==null?renderer.peakRight:midiPeakR;
@@ -196,6 +212,8 @@ public final class AudioIO {
   public volatile AudioDeviceInfo device;public volatile boolean echoCancel,cameraMic;public volatile int channel=0;public volatile boolean stereo=false;
   /** When set, every recorded frame is also pushed here for input monitoring. */
   public volatile Pro.Ring monitor;
+  /** System.nanoTime() at which the first recorded frame entered the microphone, and whether the hardware reported it exactly. */
+  public volatile long firstFrameNanos;public volatile boolean firstFrameExact;
   private Thread thread;private AudioRecord recorder;
   static AudioRecord open(int source,AudioDeviceInfo device,int channel,boolean stereo,int[] channelsOut){
    int positional=stereo?AudioFormat.CHANNEL_IN_STEREO:AudioFormat.CHANNEL_IN_MONO;
@@ -212,8 +230,11 @@ public final class AudioIO {
    if(r!=null&&echoCancel){try{if(android.media.audiofx.AcousticEchoCanceler.isAvailable()){android.media.audiofx.AcousticEchoCanceler aec=android.media.audiofx.AcousticEchoCanceler.create(r.getAudioSessionId());if(aec!=null)aec.setEnabled(true);}}catch(Exception ignored){}}
    if(r==null&&wanted!=null){r=open(MediaRecorder.AudioSource.MIC,null,0,false,channels);if(r!=null)route="The selected input could not be opened, so the phone microphone was used.";}
    if(r==null)throw new IOException("Microphone could not be opened.");
-   recorder=r;r.startRecording();int width=channels[0];short[] samples=new short[1024*width];
-   try(Writer w=new Writer(file)){while(running&&w.frames<Core.MAX_FRAMES){int count=r.read(samples,0,samples.length);if(count<0){if(!running)break;throw new IOException("Microphone read error "+count);}float max=0;Pro.Ring ring=monitor;for(int i=0;i+width-1<count;i+=width){float left=samples[i]/32768f,right=width>1?samples[i+1]/32768f:left;w.sample(left,right);if(ring!=null)ring.push(left,right);max=Math.max(max,Math.max(Math.abs(left),Math.abs(right)));}meter=max;}}
+   recorder=r;firstFrameNanos=0;firstFrameExact=false;r.startRecording();int width=channels[0];short[] samples=new short[1024*width];android.media.AudioTimestamp stamp=new android.media.AudioTimestamp();long readFrames=0;
+   try(Writer w=new Writer(file)){while(running&&w.frames<Core.MAX_FRAMES){int count=r.read(samples,0,samples.length);if(count<0){if(!running)break;throw new IOException("Microphone read error "+count);}long readAt=System.nanoTime();readFrames+=count/width;
+    if(!firstFrameExact){boolean ok=false;try{ok=r.getTimestamp(stamp,android.media.AudioTimestamp.TIMEBASE_MONOTONIC)==AudioRecord.SUCCESS&&stamp.nanoTime>0;}catch(Exception ignored){}
+     if(ok){firstFrameNanos=stamp.nanoTime-Math.round(stamp.framePosition*1e9/Core.RATE);firstFrameExact=true;}
+     else if(firstFrameNanos==0)firstFrameNanos=readAt-Math.round(readFrames*1e9/Core.RATE);} /* estimate: the frames just read ended about now */float max=0;Pro.Ring ring=monitor;for(int i=0;i+width-1<count;i+=width){float left=samples[i]/32768f,right=width>1?samples[i+1]/32768f:left;w.sample(left,right);if(ring!=null)ring.push(left,right);max=Math.max(max,Math.max(Math.abs(left),Math.abs(right)));}meter=max;}}
   }catch(Exception e){error=e.getMessage();}finally{running=false;if(r!=null){try{r.stop();}catch(Exception ignored){}r.release();}recorder=null;finished.run();}},"CityStudio-Record");thread.start();}
   public void stop(){running=false;AudioRecord r=recorder;if(r!=null)try{r.stop();}catch(Exception ignored){}}
  }
