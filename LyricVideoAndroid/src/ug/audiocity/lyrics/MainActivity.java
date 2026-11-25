@@ -34,7 +34,7 @@ import java.util.concurrent.Executors;
 /** Pearl Lyrics Video Maker, by Nico Pan Beats: make lyric videos on the phone. Song → lyrics → sync → style → MP4. */
 public class MainActivity extends Activity {
     static final int BG = 0xff111116, PANEL = 0xff1d1d26, PANEL2 = 0xff272733, LINE = 0xff3a3a48, TEXT = 0xfff2f2f5, DIM = 0xff9b9bab, ACCENT = 0xffffd166;
-    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7, REQ_BACKUP = 8, REQ_RESTORE = 9;
+    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7, REQ_BACKUP = 8, REQ_RESTORE = 9, REQ_SONG_VIDEO = 10;
     /** Tab numbers stay fixed (0 Song, 1 Lyrics, 2 Sync, 3 Style, 4 Timeline); TAB_ORDER is how they are shown. */
     static final String[] TABS = {"Song", "Lyrics", "Sync", "Style", "Timeline"};
     static final int[] TAB_ORDER = {0, 1, 2, 4, 3};
@@ -582,6 +582,8 @@ public class MainActivity extends Activity {
         song.addView(label(project.hasAudio() ? project.audioName + "  ·  " + clock(project.durationMs) : "No song chosen yet", 17, TEXT, true));
         song.addView(label("MP3, M4A/AAC, WAV, FLAC, OGG and Opus work. The file is copied into the project, so it keeps working if the original moves.", 12, DIM, false));
         song.addView(row(button(project.hasAudio() ? "Replace song…" : "Choose song…", () -> pick("audio/*", REQ_AUDIO), project.hasAudio() ? PANEL2 : ACCENT, project.hasAudio() ? TEXT : 0xff1a1a1a)));
+        song.addView(row(button("🎬  Use a video (its sound + picture)", () -> pick("video/*", REQ_SONG_VIDEO))));
+        song.addView(label("Add lyrics to your own music video: its sound becomes the song and its picture the background, always in sync.", 11, DIM, false));
         addCard(page, song);
 
         LinearLayout info = card();
@@ -641,7 +643,9 @@ public class MainActivity extends Activity {
                 vid.addView(iv, vp);
             }
             vid.addView(row(button("Change video…", () -> pick("video/*", REQ_VIDEO)), button("Remove", () -> {
-                File v = project.video(); if (v != null) v.delete(); if (project.style.background == 4) project.style.background = 0; changed(); tab(0);
+                File v = project.video();
+                if (v != null && v.getName().equals(project.audioFile)) { toast("This video is also the song. Choose another song first, or start a new project."); return; }
+                if (v != null) v.delete(); if (project.style.background == 4) project.style.background = 0; changed(); tab(0);
             })));
         } else vid.addView(row(button("Choose video…", () -> pick("video/*", REQ_VIDEO))));
         addCard(page, vid);
@@ -817,7 +821,53 @@ public class MainActivity extends Activity {
                 Bitmap out = side > 1600 ? Bitmap.createScaledBitmap(sq, 1600, 1600, true) : sq;
                 try (OutputStream o = new FileOutputStream(p.cover())) { out.compress(Bitmap.CompressFormat.JPEG, 93, o); }
             }, () -> { p.style.cover = true; loadAssets(); changed(); tab(tab); toast("Cover added. Choose its place and shape in Style → Cover photo."); });
+        } else if (request == REQ_SONG_VIDEO) {
+            // A music video: one copy serves as both the song (its sound) and the background (its picture).
+            String name = displayName(uri);
+            String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "") : "";
+            if (ext.isEmpty() || ext.length() > 5) ext = "mp4";
+            final String file = "background-video." + ext;
+            releasePlayer();
+            if (backdrop != null) backdrop.setVideo(null, 0);
+            final long[] dur = {0};
+            final float[][] env = {null};
+            work("Copying the video and reading its sound…", () -> {
+                File tmp = new File(p.dir, "incoming-video");
+                copy(getContentResolver().openInputStream(uri), tmp);
+                boolean picture = false, sound = false;
+                android.media.MediaExtractor ex = new android.media.MediaExtractor();
+                try {
+                    ex.setDataSource(tmp.getAbsolutePath());
+                    for (int i = 0; i < ex.getTrackCount(); i++) {
+                        String m = ex.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME);
+                        if (m != null && m.startsWith("video/")) picture = true;
+                        if (m != null && m.startsWith("audio/")) sound = true;
+                    }
+                } catch (Exception e) { picture = false; } finally { ex.release(); }
+                if (!picture) { tmp.delete(); throw new IOException("That file has no video picture."); }
+                if (!sound) { tmp.delete(); throw new IOException("That video has no sound, so it cannot be the song. Use it as a background instead (Song tab → Background video)."); }
+                env[0] = PcmDecoder.envelope(tmp, dur, null);
+                if (dur[0] <= 0) dur[0] = PcmDecoder.duration(tmp);
+                File old = p.video();
+                if (old != null) old.delete();
+                if (p.audioFile != null && !p.audioFile.equals(file)) new File(p.dir, p.audioFile).delete();
+                if (!tmp.renameTo(new File(p.dir, file))) throw new IOException("Cannot store the video.");
+            }, () -> {
+                p.audioFile = file; p.audioName = name; p.durationMs = dur[0];
+                if (p.title.equals("Untitled song")) p.title = name.replaceAll("\\.[A-Za-z0-9]{1,5}$", "").replace('_', ' ').trim();
+                // A music video speaks for itself: show it clearly, without the visualizer.
+                p.style.background = 4; p.style.videoFit = 0; p.style.dim = Math.min(p.style.dim, .25f); p.style.visualizer = false;
+                try { p.saveEnvelope(env[0]); p.save(); } catch (IOException e) { toast(e.getMessage()); }
+                scrub = 0;
+                renderer.bind(p);
+                buildEditor();
+                loadPlayer();
+                tab(p.lyrics.lines.isEmpty() ? 1 : 0);
+                toast("Video ready (" + clock(p.durationMs) + "). Its sound is the song and its picture the background. Now add the lyrics.");
+            }, () -> { if (project == p) loadPlayer(); });
         } else if (request == REQ_VIDEO) {
+            File current = p.video();
+            if (current != null && current.getName().equals(p.audioFile)) { toast("This project uses a music video as its song, and its picture is the background. Start a new project to use a different video."); return; }
             String name = displayName(uri);
             String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "") : "";
             if (ext.isEmpty() || ext.length() > 5) ext = "mp4";

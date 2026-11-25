@@ -6,7 +6,7 @@ It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and in
 
 ## How it works
 
-1. **Song tab.** Choose an audio file (MP3, M4A/AAC, WAV, FLAC, OGG or Opus). The app copies it into the project and analyses its loudness, which drives the visualizer. Set the title and artist for the opening title card. Add background photos here too: pick one or many at once (up to 20), then tap a thumbnail to move or remove it.
+1. **Song tab.** **🎬 Use a video:** start from your own music video. Its sound becomes the song and its picture the background, always in sync, and the export keeps them with the lyrics added on top. Choose an audio file (MP3, M4A/AAC, WAV, FLAC, OGG or Opus). The app copies it into the project and analyses its loudness, which drives the visualizer. Set the title and artist for the opening title card. Add background photos here too: pick one or many at once (up to 20), then tap a thumbnail to move or remove it.
 2. **Lyrics tab.**
    - **Paste** puts copied lyrics straight in, replacing or adding to what's there.
    - **Clean up** removes labels such as `[Chorus]` and `Verse 2:`, stray symbols and timestamps, and splits rows that are too long for the screen at a natural break. The app offers to do this when pasted text needs it.
