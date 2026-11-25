@@ -27,6 +27,14 @@ It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and in
    - Tap a line to select it. Drag it to move it, words and all, or drag its edges to set where it starts and ends.
    - Tap the selected line again to drag single words.
    - Tap an empty spot to drop the next unplaced line there.
+   - **Clip tools** (for the selected clip):
+     - **✂ Split** at the playhead, between words; both parts keep their timing.
+     - **⇆ Join next** merges the clip with the next line.
+     - **⧉ Copy here** copies the line to the playhead, for repeated choruses.
+     - **◀ / ▶ 0.1 s** moves the clip; **− Shorter / + Longer** changes where it ends.
+     - **✎ Edit**, **Remove time** and **🗑 Delete**.
+     - **✂ Split long lines** splits every line too long for the screen, keeping its timing.
+     - **↶ Undo** and **↷ Redo** cover every change, including splits, joins and deletes.
    - Pinch or use the buttons to zoom, or press *Whole song* to fit it all. *Undo* reverses any change, and *Remove time* takes a line off the timeline.
 5. **Style tab.**
    - **One-tap looks:** Clean pop, Neon night, Cinematic, Karaoke classic, Minimal, Social captions, Handwritten, Bold poster.

@@ -34,7 +34,8 @@ final class SongTimeline extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG), text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF r = new RectF();
     private final ScaleGestureDetector zoom;
-    private final ArrayDeque<long[][]> undo = new ArrayDeque<>();
+    private final ArrayDeque<java.util.ArrayList<Lyrics.Line>> undo = new ArrayDeque<>(), redo = new ArrayDeque<>();
+    private java.util.ArrayList<Lyrics.Line> pending;
 
     int selected = -1;
     /** Snap a dragged clip's start to the nearest place where the singing starts (a rise in loudness). */
@@ -178,12 +179,15 @@ final class SongTimeline extends View {
                 if (Math.abs(ex - x0) < grab) mode = LEFT;
                 else if (Math.abs(ex - x1) < grab) mode = RIGHT;
                 else if (ex > x0 && ex < x1) mode = MOVE;
-                if (mode != SCRUB) { touchLine = selected; grabStart = startOf(selected); grabEnd = endOf(selected); snapshot(); }
+                if (mode != SCRUB) { touchLine = selected; grabStart = startOf(selected); grabEnd = endOf(selected); pending = lyrics.snapshot(); }
             }
             return true;
         }
         if (a == MotionEvent.ACTION_MOVE) {
-            if (Math.abs(ex - downX) > 6 * d) moved = true;
+            if (Math.abs(ex - downX) > 6 * d) {
+                if (!moved && pending != null) { remember(pending); pending = null; } // a real drag: it can be undone
+                moved = true;
+            }
             if (!moved) return true;
             long dt = Math.round((ex - downX) / pxPerSec * 1000);
             if (mode == SCRUB) { viewCentre = Math.max(0, Math.min(duration, downTime - dt)); }
@@ -195,7 +199,7 @@ final class SongTimeline extends View {
             if (mode == SCRUB && moved) host.seek(viewCentre);
             else if (!moved && a == MotionEvent.ACTION_UP) tapAt(ex, ey);
             else if (touchLine >= 0 && moved) { if (snap && (mode == MOVE || mode == LEFT)) snapStart(touchLine); host.changed(); }
-            if (mode != SCRUB || !moved) { if (touchLine >= 0 && !moved && !undo.isEmpty()) undo.pop(); }
+            pending = null;
             viewCentre = -1; mode = NONE; touchLine = -1;
             invalidate();
             return true;
@@ -273,32 +277,32 @@ final class SongTimeline extends View {
         }
     }
 
-    /** Remembers every line's timing before a change. */
-    void snapshot() {
-        long[][] s = new long[lyrics.lines.size()][];
-        for (int i = 0; i < s.length; i++) {
-            Lyrics.Line l = lyrics.lines.get(i);
-            long[] w = l.wordTimes == null ? new long[0] : l.wordTimes;
-            s[i] = new long[2 + w.length + 1];
-            s[i][0] = l.start; s[i][1] = l.end; s[i][2] = l.wordTimes == null ? -1 : w.length;
-            System.arraycopy(w, 0, s[i], 3, w.length);
-        }
-        undo.push(s);
-        while (undo.size() > 50) undo.removeLast();
+    /** Remembers all lines (text and timing) before a change, so it can be undone. */
+    void snapshot() { remember(lyrics.snapshot()); }
+
+    private void remember(java.util.ArrayList<Lyrics.Line> state) {
+        undo.push(state);
+        while (undo.size() > 60) undo.removeLast();
+        redo.clear();
     }
 
     boolean canUndo() { return !undo.isEmpty(); }
+    boolean canRedo() { return !redo.isEmpty(); }
 
     void undo() {
         if (undo.isEmpty()) return;
-        long[][] s = undo.pop();
-        if (s.length != lyrics.lines.size()) return; // lines were added or removed since
-        for (int i = 0; i < s.length; i++) {
-            Lyrics.Line l = lyrics.lines.get(i);
-            l.start = s[i][0]; l.end = s[i][1];
-            int n = (int) s[i][2];
-            l.wordTimes = n < 0 ? null : java.util.Arrays.copyOfRange(s[i], 3, 3 + n);
-        }
+        redo.push(lyrics.snapshot());
+        lyrics.restore(undo.pop());
+        if (selected >= lyrics.lines.size()) selected = -1;
+        host.changed();
+        invalidate();
+    }
+
+    void redo() {
+        if (redo.isEmpty()) return;
+        undo.push(lyrics.snapshot());
+        lyrics.restore(redo.pop());
+        if (selected >= lyrics.lines.size()) selected = -1;
         host.changed();
         invalidate();
     }

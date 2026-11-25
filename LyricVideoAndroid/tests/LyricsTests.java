@@ -7,7 +7,7 @@ public final class LyricsTests {
     static void eq(Object a, Object b, String what) { check(a == null ? b == null : a.equals(b), what + ": expected " + b + ", got " + a); }
 
     public static void main(String[] args) {
-        plainText(); words(); wordTapping(); lineEnds(); stamps2(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
+        plainText(); words(); wordTapping(); lineEnds(); stamps2(); clipTools(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
         System.out.println("LyricsTests: " + checks + " checks passed");
     }
 
@@ -53,6 +53,44 @@ public final class LyricsTests {
         Lyrics keep = Lyrics.parseLrc(lrc, null);
         keep.setText("Nkwagala nnyo mukwano\nA new line\nLine without word tags");
         check(keep.lines.get(0).wordTimed(), "editing other lines keeps word times");
+    }
+
+    static void clipTools() {
+        Lyrics l = Lyrics.parse("Nakuba omukwano nnyo nze ndi wuwo\nTuli wamu", null);
+        l.lines.get(0).start = 10000; l.lines.get(0).end = 16000; l.lines.get(0).wordTimes = new long[]{10000, 10800, 11800, 13500, 14200, 15000};
+        l.lines.get(1).start = 20000; l.lines.get(1).end = 22000;
+        java.util.ArrayList<Lyrics.Line> before = l.snapshot();
+        check(l.splitAt(0, 13400, 60000), "split at the playhead");
+        eq(l.lines.get(0).text, "Nakuba omukwano nnyo", "first part");
+        eq(l.lines.get(1).text, "nze ndi wuwo", "second part");
+        eq(l.lines.get(1).start, 13500L, "second part starts at its first word");
+        check(l.lines.get(0).wordTimed() && l.lines.get(1).wordTimed() && l.lines.get(1).wordTimes[2] == 15000, "word times kept on both parts");
+        check(l.lines.get(0).end > 11800 && l.lines.get(0).end < 13500, "first part ends before the second starts");
+        eq(l.lines.get(1).end, 16000L, "second part keeps the old end");
+        check(l.joinWithNext(0, 60000), "join back");
+        eq(l.lines.get(0).text, "Nakuba omukwano nnyo nze ndi wuwo", "joined text");
+        check(l.lines.get(0).wordTimed() && l.lines.get(0).wordTimes[3] == 13500, "joined word times");
+        l.changeEnd(0, -500, 60000);
+        eq(l.lines.get(0).end, 15500L, "shorter");
+        l.changeEnd(0, 99999, 60000);
+        eq(l.lines.get(0).end, 19950L, "longer stops before the next line");
+        l.changeEnd(0, -99999, 60000);
+        eq(l.lines.get(0).end, 15100L, "never shorter than its last word");
+        l.nudge(1, -100);
+        eq(l.lines.get(1).start, 19900L, "nudge earlier");
+        int c = l.copyTo(1, 40000);
+        eq(c, 2, "copy inserted in time order");
+        check(l.lines.get(2).text.equals("Tuli wamu") && l.lines.get(2).start == 40000 && l.lines.get(2).end == 42000, "copy keeps length (2.0 s after the nudge moved both ends)");
+        l.restore(before);
+        eq(l.lines.size(), 2, "undo restores everything");
+        eq(l.lines.get(0).end, 16000L, "undo restores times");
+        Lyrics u = Lyrics.parse("one two three four", null);
+        check(u.splitAt(0, 0, 0) && u.lines.get(0).text.equals("one two") && u.lines.get(1).start == -1, "unplaced line splits in the middle");
+        Lyrics lo = Lyrics.parse("We were dancing through the night until the morning comes, and we never stopped", null);
+        lo.lines.get(0).start = 5000; lo.lines.get(0).end = 12000;
+        eq(lo.splitLongLines(Lyrics.LONG_LINE, 60000), 1, "one long line split");
+        check(lo.lines.size() == 2 && lo.lines.get(1).start > 5000 && lo.lines.get(1).start < 12000, "split parts keep timing");
+        for (Lyrics.Line x : lo.lines) check(x.text.length() <= Lyrics.LONG_LINE, "fits: " + x.text);
     }
 
     static void stamps2() {

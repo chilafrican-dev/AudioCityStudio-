@@ -1646,21 +1646,50 @@ public class MainActivity extends Activity {
         timelineNote.setPadding(0, dp(6), 0, dp(2));
         page.addView(timelineNote);
         updateTimelineNote();
-        page.addView(row(button("↶ Undo", () -> { if (tl.canUndo()) { tl.undo(); updateTimelineNote(); } else toast("Nothing to undo."); }),
-                button("−", () -> tl.zoomBy(.6f)), button("+", () -> tl.zoomBy(1.6f)), button("Whole song", tl::zoomToFit)));
+        // Clip tools: act on the selected clip (tap one first).
         page.addView(row(button("▶ / ❚❚", this::togglePlay, ACCENT, 0xff1a1a1a),
-                button("Edit words", () -> { if (tl.selected >= 0) editLine(tl.selected); else toast("Tap a line on the timeline first."); }),
-                button("Remove time", () -> {
-                    if (tl.selected < 0) { toast("Tap a line on the timeline first."); return; }
+                button("↶ Undo", () -> { if (tl.canUndo()) { tl.undo(); updateTimelineNote(); } else toast("Nothing to undo."); }),
+                button("↷ Redo", () -> { if (tl.canRedo()) { tl.redo(); updateTimelineNote(); } else toast("Nothing to redo."); })));
+        page.addView(row(clipTool("✂ Split", tl, i -> {
+                    if (!project.lyrics.splitAt(i, now(), project.durationMs)) { toast("A line needs two or more words to split."); return; }
+                    tl.selected = i + 1; toast("Split at the playhead. The second part is selected.");
+                }),
+                clipTool("⇆ Join next", tl, i -> { if (!project.lyrics.joinWithNext(i, project.durationMs)) toast("There is no next line to join."); }),
+                clipTool("⧉ Copy here", tl, i -> { tl.selected = project.lyrics.copyTo(i, now()); toast("Copied to the playhead (great for a repeated chorus)."); })));
+        page.addView(row(clipTool("◀ 0.1 s", tl, i -> project.lyrics.nudge(i, -100)),
+                clipTool("0.1 s ▶", tl, i -> project.lyrics.nudge(i, 100)),
+                clipTool("− Shorter", tl, i -> project.lyrics.changeEnd(i, -100, project.durationMs)),
+                clipTool("+ Longer", tl, i -> project.lyrics.changeEnd(i, 100, project.durationMs))));
+        page.addView(row(button("✎ Edit", () -> { if (tl.selected >= 0) editLine(tl.selected); else toast("Tap a clip on the timeline first."); }),
+                clipTool("Remove time", tl, i -> { Lyrics.Line l = project.lyrics.lines.get(i); l.start = -1; l.end = -1; l.wordTimes = null; tl.selected = -1; }),
+                clipTool("🗑 Delete", tl, i -> { project.lyrics.lines.remove(i); tl.selected = -1; })));
+        page.addView(row(button("✂ Split long lines", () -> {
                     tl.snapshot();
-                    Lyrics.Line l = project.lyrics.lines.get(tl.selected);
-                    l.start = -1; l.end = -1; l.wordTimes = null;
-                    tl.selected = -1; changed(); updateTimelineNote();
-                })));
+                    int n = project.lyrics.splitLongLines(Lyrics.LONG_LINE, project.durationMs);
+                    changed(); updateTimelineNote();
+                    toast(n == 0 ? "No line is too long ✓" : n + " long line(s) split into readable parts (↶ Undo to take it back).");
+                }), button("−", () -> tl.zoomBy(.6f)), button("+", () -> tl.zoomBy(1.6f)), button("Whole song", tl::zoomToFit)));
         if (project.lyrics.nextUnsynced() >= 0) page.addView(row(button("🧩 Lay out all lines as clips", () -> { tl.snapshot(); layOutClips(); }, ACCENT, 0xff1a1a1a)));
         Switch snap = toggle("🧲 Snap clips to where singing starts", tl.snap, b -> tl.snap = b);
         page.addView(snap);
         page.addView(label("Blue/teal blocks are lines (teal = every word timed); the gold block is the one you selected. White marks inside a block are where words start.", 11, DIM, false));
+    }
+
+    interface ClipAction { void run(int line); }
+
+    /** A timeline tool that works on the selected clip, with undo. */
+    Button clipTool(String name, SongTimeline tl, ClipAction action) {
+        Button b = button(name, () -> {
+            if (tl.selected < 0 || tl.selected >= project.lyrics.lines.size()) { toast("Tap a clip on the timeline first."); return; }
+            tl.snapshot();
+            action.run(tl.selected);
+            changed();
+            updateTimelineNote();
+            tl.invalidate();
+        });
+        b.setTextSize(12.5f);
+        b.setPadding(dp(4), 0, dp(4), 0);
+        return b;
     }
 
     void updateTimelineNote() {

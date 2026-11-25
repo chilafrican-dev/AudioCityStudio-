@@ -457,6 +457,136 @@ public final class Lyrics {
         l.start = start;
     }
 
+    // ------------------------------------------------------------------ clip tools (timeline)
+
+    /** Word start times for a placed line: its own word times, or an estimate spread by syllables. */
+    long[] wordStarts(int i, long songEnd) {
+        Line l = lines.get(i);
+        if (l.wordTimed()) return l.wordTimes.clone();
+        long end = l.end > l.start ? l.end : l.start + singFor(l.text, Math.max(1, endOf(i, songEnd) - l.start));
+        return estimateWords(l.words(), l.start, end);
+    }
+
+    /** Splits line i before word k (1 ≤ k < words); both parts keep their timing. Returns false if it cannot split. */
+    public boolean splitAtWord(int i, int k, long songEnd) {
+        Line l = lines.get(i);
+        String[] w = l.words();
+        if (k < 1 || k >= w.length) return false;
+        Line a = new Line(join(w, 0, k), l.start), b = new Line(join(w, k, w.length), -1);
+        if (l.start >= 0) {
+            long[] st = wordStarts(i, songEnd);
+            b.start = st[k];
+            a.end = Math.max(st[k - 1] + 150, st[k] - 40);
+            b.end = l.end;
+            if (l.wordTimed()) { a.wordTimes = java.util.Arrays.copyOfRange(st, 0, k); b.wordTimes = java.util.Arrays.copyOfRange(st, k, w.length); }
+        }
+        lines.set(i, a);
+        lines.add(i + 1, b);
+        return true;
+    }
+
+    /** Splits line i at time t (between the words around t), or at its middle word when t is outside it. */
+    public boolean splitAt(int i, long t, long songEnd) {
+        Line l = lines.get(i);
+        String[] w = l.words();
+        if (w.length < 2) return false;
+        int k = w.length / 2;
+        if (l.start >= 0 && t > l.start) {
+            long[] st = wordStarts(i, songEnd);
+            int best = -1;
+            for (int j = 1; j < st.length; j++) if (best < 0 || Math.abs(st[j] - t) < Math.abs(st[best] - t)) best = j;
+            if (best > 0 && t < endOf(i, songEnd)) k = best;
+        }
+        return splitAtWord(i, k, songEnd);
+    }
+
+    /** Joins line i with the next line into one line. */
+    public boolean joinWithNext(int i, long songEnd) {
+        if (i < 0 || i + 1 >= lines.size()) return false;
+        Line a = lines.get(i), b = lines.get(i + 1);
+        Line j = new Line(a.text + " " + b.text, a.start >= 0 ? a.start : b.start);
+        if (a.start >= 0 && b.start >= 0) {
+            long[] sa = wordStarts(i, songEnd), sb = wordStarts(i + 1, songEnd);
+            if (a.wordTimed() || b.wordTimed()) {
+                j.wordTimes = new long[sa.length + sb.length];
+                System.arraycopy(sa, 0, j.wordTimes, 0, sa.length);
+                System.arraycopy(sb, 0, j.wordTimes, sa.length, sb.length);
+            }
+            j.end = b.end > b.start ? b.end : -1;
+        } else if (b.start >= 0) j.end = b.end;
+        lines.set(i, j);
+        lines.remove(i + 1);
+        repairOrder();
+        return true;
+    }
+
+    /** Changes where line i ends by delta ms (at least 0.3 s long, not past the next line's start). */
+    public void changeEnd(int i, long delta, long songEnd) {
+        Line l = lines.get(i);
+        if (l.start < 0) return;
+        long cur = l.end > l.start ? l.end : endOf(i, songEnd);
+        long limit = nextStart(i) >= 0 ? nextStart(i) - 50 : (songEnd > 0 ? songEnd : Long.MAX_VALUE);
+        long e = Math.max(l.start + 300, Math.min(limit, cur + delta));
+        if (l.wordTimed()) {
+            long last = l.wordTimes[l.wordTimes.length - 1];
+            if (e <= last + 100) e = last + 100;
+        }
+        l.end = e;
+    }
+
+    /** Moves line i by delta ms, staying between its neighbours. */
+    public void nudge(int i, long delta) {
+        Line l = lines.get(i);
+        if (l.start < 0) return;
+        long prev = -1, next = -1;
+        for (int k = i - 1; k >= 0; k--) if (lines.get(k).start >= 0) { prev = lines.get(k).start; break; }
+        next = nextStart(i);
+        long s = l.start + delta;
+        if (prev >= 0) s = Math.max(prev + 100, s);
+        if (next >= 0) s = Math.min(next - 100 - Math.max(0, (l.end > l.start ? l.end : l.start) - l.start), s);
+        s = Math.max(0, s);
+        moveLine(l, s);
+    }
+
+    /** Copies line i to time t (e.g. a repeated chorus line), inserted where it belongs in time. Returns its index. */
+    public int copyTo(int i, long t) {
+        Line src = lines.get(i), c = src.copy();
+        long len = src.start >= 0 && src.end > src.start ? src.end - src.start : -1;
+        if (src.start >= 0) moveLine(c, t); else c.start = t;
+        if (len > 0) c.end = t + len;
+        int at = lines.size();
+        for (int k = 0; k < lines.size(); k++) if (lines.get(k).start > t) { at = k; break; }
+        // Keep unplaced lines that come before the insertion point in their place.
+        lines.add(at, c);
+        repairOrder();
+        return at;
+    }
+
+    /** Splits every line longer than maxChars into readable parts, keeping their timing. Returns how many lines were split. */
+    public int splitLongLines(int maxChars, long songEnd) {
+        int count = 0;
+        for (int i = 0; i < lines.size(); i++) {
+            Line l = lines.get(i);
+            if (l.text.length() <= maxChars || l.words().length < 2) continue;
+            ArrayList<String> parts = splitLong(l.text, maxChars);
+            if (parts.size() < 2) continue;
+            int k = parts.get(0).split(" ").length;
+            if (splitAtWord(i, k, songEnd)) count++;
+            i--; // the second part may still be long
+        }
+        return count;
+    }
+
+    static String join(String[] w, int from, int to) {
+        StringBuilder b = new StringBuilder();
+        for (int k = from; k < to; k++) { if (k > from) b.append(' '); b.append(w[k]); }
+        return b.toString();
+    }
+
+    /** Deep copy of all lines (for undo/redo). */
+    public ArrayList<Line> snapshot() { ArrayList<Line> c = new ArrayList<>(); for (Line l : lines) c.add(l.copy()); return c; }
+    public void restore(ArrayList<Line> s) { lines.clear(); for (Line l : s) lines.add(l.copy()); }
+
     // ------------------------------------------------------------------ Luganda syllables
 
     /**
