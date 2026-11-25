@@ -13,6 +13,7 @@ A new project starts by asking *What are you making?*
 - **📣 Promo / event:** fill in the headline, when, where and contact. *Make the video text* turns them into slides. Add a poster, photos or video; music is optional.
 - **🖼 Photo slideshow:** photos with cross-fades, a title for the first seconds and optional captions. Music is optional.
 - **✨ Quote / message:** scripture, a quote, a greeting or an announcement, typed one line per row and spread across the video. Music is optional.
+- **🎬 Video edit:** join videos and photos into one video on the **Clips** tab. Tap a clip to jump to it; play to the right moment, then **Split**, **Trim start** or **Trim end**. Move clips earlier or later, copy, delete and undo. Photos show for a set time (2–10 s) with a slow zoom. Without music the video is as long as the clips. Any project can use clips: Style → Background → *Clips*.
 
 Without music, choose any video length (quick choices from 15 s to 10 min, or type any length). The preview plays on a silent clock and the export has no sound track. For promos, quotes and slideshows, the text is spread evenly across the video automatically, and it can be fine-tuned on the Timeline.
 
@@ -138,6 +139,7 @@ Requires Android 10 (API 29) or later, with OpenGL ES 2.0 (every Android 10 phon
 | `AutoTiming.java` | Applies alignment results to lines and words, fills unplaceable words, and splits a transcript into screen lines at pauses. Plain Java, tested. |
 | `SpeechModel.java`, `ModelStore.java`, `AutoSync.java` | Run the ONNX model in chunks; download and store the model; tie decoding, listening, timing and writing together. |
 | `Sunbird.java` | Sunbird AI speech-to-text upload (Luganda, `lug`). |
+| `Sequence.java` | The video edit: clips in order, which clip plays at any time, split, trim, move. Plain Java, tested in `tests/SequenceTests.java`. |
 | `VideoLayer.java`, `VideoBackdrop.java` | Background video: decoded to an OpenGL texture for the export (looping, centre-cropped, colour filter and blur shader), and a muted TextureView player that follows the song in the preview. |
 | `SongTimeline.java`, `WordTimeline.java` | Whole-song timeline editor (move, resize and drop lines, scrub, zoom, undo) and the per-line drag-and-drop word editor. |
 | `WordTapper.java` | Word-by-word tap syncing logic. Plain Java, tested. |

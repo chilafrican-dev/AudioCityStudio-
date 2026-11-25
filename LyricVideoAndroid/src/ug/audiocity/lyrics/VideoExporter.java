@@ -39,11 +39,14 @@ final class VideoExporter {
     }
 
     /** Returns the size actually used (encoders differ in what they accept). */
-    static int[] export(LyricRenderer r, File song, File out, Listener l, File backgroundVideo) throws IOException {
+    static int[] export(LyricRenderer r, File song, File out, Listener l, File backgroundVideo) throws IOException { return export(r, song, out, l, backgroundVideo, null); }
+
+    /** clipsDir: the project folder when the background is the clip edit (renderer.seq), else null. */
+    static int[] export(LyricRenderer r, File song, File out, Listener l, File backgroundVideo, File clipsDir) throws IOException {
         Audio audio = null;
         if (song != null && song.isFile()) { l.progress(0, "Encoding the song…"); audio = encodeAudio(song, r.duration, l); }
         int[] size = pickSize(r.style.width(), r.style.height());
-        encodeVideo(r, size[0], size[1], audio, out, l, r.style.background == 4 ? backgroundVideo : null);
+        encodeVideo(r, size[0], size[1], audio, out, l, r.style.background == 4 ? backgroundVideo : null, r.style.background == Style.BG_CLIPS ? clipsDir : null);
         return size;
     }
 
@@ -153,7 +156,7 @@ final class VideoExporter {
     static final String VERTEX = "attribute vec4 aPos; attribute vec2 aTex; varying vec2 vTex; void main(){ gl_Position = aPos; vTex = aTex; }";
     static final String FRAGMENT = "precision mediump float; varying vec2 vTex; uniform sampler2D uTex; void main(){ gl_FragColor = texture2D(uTex, vTex); }";
 
-    static void encodeVideo(LyricRenderer r, int w, int h, Audio audio, File out, Listener l, File backgroundVideo) throws IOException {
+    static void encodeVideo(LyricRenderer r, int w, int h, Audio audio, File out, Listener l, File backgroundVideo, File clipsDir) throws IOException {
         int fps = r.style.fps;
         long durationMs = Math.max(r.duration, audio == null || audio.samples.isEmpty() ? 0 : audio.samples.get(audio.samples.size() - 1)[2] / 1000);
         long frames = Math.max(1, (durationMs * fps + 999) / 1000);
@@ -172,6 +175,7 @@ final class VideoExporter {
         EGLSurface egl = EGL14.EGL_NO_SURFACE;
         Bitmap frame = null;
         VideoLayer video = null;
+        String clipLayerFile = null; // which clip file the video layer is decoding (Clips background)
         boolean started = false;
         try {
             enc.configure(vf, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -210,6 +214,7 @@ final class VideoExporter {
             Canvas canvas = new Canvas(frame);
             FloatBuffer videoQuad = null;
             android.graphics.ColorMatrix videoFilter = null;
+            if (clipsDir != null) { videoQuad = VideoLayer.quad(); videoFilter = LyricRenderer.colorMatrix(r.style.photoFilter); }
             if (backgroundVideo != null && backgroundVideo.isFile()) {
                 // Background video: decoded into a GL texture, drawn first; everything else is drawn over it.
                 video = new VideoLayer(backgroundVideo);
@@ -224,13 +229,27 @@ final class VideoExporter {
             for (long i = 0; i < frames; i++) {
                 if (l.cancelled()) throw new CancellationException();
                 long t = i * 1000 / fps;
+                long sourceUs = -1;
+                if (clipsDir != null) {
+                    // The clip edit: open the decoder for the clip that is on screen now (one at a time).
+                    Sequence.At at = r.seq.at(t);
+                    boolean isVideo = at.clip != null && !at.clip.photo;
+                    if (isVideo && !at.clip.file.equals(clipLayerFile)) {
+                        if (video != null) video.close();
+                        video = new VideoLayer(new File(clipsDir, at.clip.file));
+                        clipLayerFile = at.clip.file;
+                    }
+                    if (!isVideo && video != null) { video.close(); video = null; clipLayerFile = null; }
+                    sourceUs = isVideo ? at.source * 1000 : -1;
+                    r.videoUnder = isVideo;
+                }
                 frame.eraseColor(video != null ? 0 : 0xff000000);
                 r.draw(canvas, w, h, t);
                 GLES20.glViewport(0, 0, w, h);
                 if (video != null) {
                     GLES20.glClearColor(0, 0, 0, 1);
                     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-                    video.advanceTo(t);
+                    if (sourceUs >= 0) video.advanceToUs(sourceUs); else video.advanceTo(t);
                     video.draw(w, h, videoQuad, videoFilter, r.style.videoBlur, r.style.videoFit);
                     GLES20.glEnable(GLES20.GL_BLEND);
                     GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA); // the overlay is premultiplied

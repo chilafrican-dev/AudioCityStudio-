@@ -33,7 +33,8 @@ public final class Style {
     /** Mapping for projects saved by version 0.1, which stored a font index into a shorter list. */
     static final int[] OLD_FONTS = {0, 2, 5, 9, 8, 16, FONT_IMPORTED};
 
-    public static final String[] BACKGROUNDS = {"Animated gradient", "Solid colour", "Photos", "Cover, blurred", "Video"};
+    public static final String[] BACKGROUNDS = {"Animated gradient", "Solid colour", "Photos", "Cover, blurred", "Video", "Clips"};
+    public static final int BG_CLIPS = 5;
     public static final String[] COVER_POSITIONS = {"Left", "Centre", "Right", "Top"};
     public static final String[] WATERMARK_POSITIONS = {"Top right", "Top left", "Bottom right", "Bottom left"};
     public static final String APP_NAME = "Pearl Lyrics Video Maker", APP_BY = "by Nico Pan Beats";

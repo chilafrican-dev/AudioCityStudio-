@@ -81,6 +81,7 @@ public class ExportService extends Service {
             PhotoSet set = new PhotoSet(p.style.background == 2 ? p.photos() : null, Math.max(p.style.width(), p.style.height()));
             Bitmap cover = p.style.cover || p.style.background == 3 ? PhotoSet.decode(p.cover(), 1600) : null;
             LyricRenderer r = LyricRenderer.snapshot(p, set, LyricRenderer.loadFont(p.font()), cover);
+            if (p.style.background == Style.BG_CLIPS) { Sequence seq = new Sequence(); seq.restore(p.edit.snapshot()); r.setClips(seq, p.dir, Math.max(p.style.width(), p.style.height())); }
             final long[] lastNote = {0};
             VideoExporter.export(r, p.audio(), out, new VideoExporter.Listener() {
                 public void progress(float f, String text) {
@@ -90,7 +91,7 @@ public class ExportService extends Service {
                     Listener l = listener; if (l != null) l.changed(s);
                 }
                 public boolean cancelled() { return s.cancelled; }
-            }, p.video());
+            }, p.video(), p.dir);
             s.stage = "Saving to your gallery…";
             Listener l0 = listener; if (l0 != null) l0.changed(s);
             s.result = publish(out, MainActivity.safeName(p.title) + (p.artist.isEmpty() ? "" : " - " + MainActivity.safeName(p.artist)) + " (lyric video).mp4");

@@ -20,6 +20,22 @@ final class LyricRenderer {
     Typeface custom;
     /** True when a background video is drawn underneath (preview TextureView or exporter GL layer). */
     boolean videoUnder;
+    /** The clip edit (Clips background): photo clips are drawn here, video clips come from the layer underneath. */
+    Sequence seq = new Sequence();
+    PhotoSet clipPhotos = new PhotoSet(null, 1080);
+    final java.util.HashMap<String, Integer> clipPhotoIndex = new java.util.HashMap<>();
+
+    /** Points the renderer at a clip edit; photo clips are loaded a few at a time. */
+    void setClips(Sequence s, File dir, int maxSide) {
+        seq = s;
+        java.util.ArrayList<File> files = new java.util.ArrayList<>();
+        clipPhotoIndex.clear();
+        for (Sequence.Clip c : s.clips) if (c.photo && !clipPhotoIndex.containsKey(c.file)) { clipPhotoIndex.put(c.file, files.size()); files.add(new File(dir, c.file)); }
+        clipPhotos = new PhotoSet(files.toArray(new File[0]), maxSide);
+    }
+
+    /** Whether the clip at time t is a video (drawn underneath by the video layer). */
+    boolean clipIsVideo(long t) { Sequence.At a = seq.at(t); return a.clip != null && !a.clip.photo; }
     /** Square cover photo (may be null). */
     Bitmap cover;
     private Bitmap coverSoft, coverSoftFrom;
@@ -315,7 +331,8 @@ final class LyricRenderer {
 
     void background(Canvas c, int w, int h, long t) {
         int[] p = Style.PALETTES[style.palette];
-        if (style.background == 4 && videoUnder) c.drawColor(Color.argb(Math.round(style.dim * 255), 0, 0, 0)); // video is underneath: only darken
+        if (style.background == Style.BG_CLIPS) clipBackground(c, w, h, t);
+        else if (style.background == 4 && videoUnder) c.drawColor(Color.argb(Math.round(style.dim * 255), 0, 0, 0)); // video is underneath: only darken
         else if (style.background == 1) c.drawColor(style.solid);
         else if (style.background == 2 && photos.size() > 0 && photoBackground(c, w, h, t)) { /* drawn */ }
         else if (style.background == 3 && coverBackground(c, w, h, t)) { /* drawn */ }
@@ -341,6 +358,28 @@ final class LyricRenderer {
         fill.setShader(new RadialGradient(w / 2f, h / 2f, r, new int[]{0x00000000, 0x00000000, 0x8c000000}, new float[]{0, .55f, 1}, Shader.TileMode.CLAMP));
         c.drawRect(0, 0, w, h, fill);
         fill.setShader(null);
+    }
+
+    /** Clips background: a photo clip is drawn here (with a slow zoom); a video clip is underneath, only darkened. */
+    void clipBackground(Canvas c, int w, int h, long t) {
+        Sequence.At a = seq.at(t);
+        if (a.clip == null) { c.drawColor(0xff000000); return; }
+        if (!a.clip.photo) { if (videoUnder) c.drawColor(Color.argb(Math.round(style.dim * 255), 0, 0, 0)); else c.drawColor(0xff000000); return; }
+        c.drawColor(0xff000000);
+        Integer idx = clipPhotoIndex.get(a.clip.file);
+        Bitmap b = idx == null ? null : style.photoBlur > .01f ? clipPhotos.blurredBy(idx, style.photoBlur) : clipPhotos.photo(idx);
+        if (b != null) {
+            float p = Math.min(1, a.local / (float) Math.max(1, a.clip.length()));
+            boolean in = (a.index & 1) == 0;
+            float zoom = style.kenBurns ? (in ? 1.03f + .08f * p : 1.11f - .08f * p) : 1f;
+            float s = (style.photoFit == 1 ? Math.min(w / (float) b.getWidth(), h / (float) b.getHeight()) : Math.max(w / (float) b.getWidth(), h / (float) b.getHeight())) * zoom;
+            place(b.getWidth(), b.getHeight(), s, w / 2f, h / 2f);
+            image.setColorFilter(filter(style.photoFilter));
+            image.setAlpha(255);
+            c.drawBitmap(b, matrix, image);
+            image.setColorFilter(null);
+        }
+        c.drawColor(Color.argb(Math.round(style.dim * 255), 0, 0, 0));
     }
 
     /** One photo, or a slideshow with cross-fades; each photo drifts and zooms a little (Ken Burns). */

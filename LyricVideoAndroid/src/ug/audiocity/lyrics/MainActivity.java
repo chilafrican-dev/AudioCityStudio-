@@ -34,11 +34,11 @@ import java.util.concurrent.Executors;
 /** Pearl Lyrics Video Maker, by Nico Pan Beats: make lyric videos on the phone. Song → lyrics → sync → style → MP4. */
 public class MainActivity extends Activity {
     static final int BG = 0xff111116, PANEL = 0xff1d1d26, PANEL2 = 0xff272733, LINE = 0xff3a3a48, TEXT = 0xfff2f2f5, DIM = 0xff9b9bab, ACCENT = 0xffffd166;
-    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7, REQ_BACKUP = 8, REQ_RESTORE = 9, REQ_SONG_VIDEO = 10;
+    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7, REQ_BACKUP = 8, REQ_RESTORE = 9, REQ_SONG_VIDEO = 10, REQ_CLIPS = 11;
     /** Tab numbers stay fixed (0 Song, 1 Lyrics, 2 Sync, 3 Style, 4 Timeline); TAB_ORDER is how they are shown. */
-    static final String[] TABS = {"Song", "Lyrics", "Sync", "Style", "Timeline"};
-    static final int[] TAB_ORDER = {0, 1, 2, 4, 3};
-    static final int TIMELINE = 4;
+    static final String[] TABS = {"Song", "Lyrics", "Sync", "Style", "Timeline", "Clips"};
+    static final int[] TAB_ORDER = {0, 5, 1, 2, 4, 3};
+    static final int TIMELINE = 4, CLIPS = 5;
 
     final Handler handler = new Handler(Looper.getMainLooper());
     final ExecutorService jobs = Executors.newSingleThreadExecutor();
@@ -326,7 +326,7 @@ public class MainActivity extends Activity {
 
     void newProject() {
         String[] items = {"🎵  Lyric video — a song with its lyrics", "💬  Subtitles — captions for a talking video", "📣  Promo / event — show, concert, product advert",
-                "🖼  Photo slideshow — photos and music", "✨  Quote / message — scripture, quote, greeting"};
+                "🖼  Photo slideshow — photos and music", "✨  Quote / message — scripture, quote, greeting", "🎬  Video edit — join your videos and photos"};
         new AlertDialog.Builder(this).setTitle("What are you making?").setItems(items, (d, k) -> createProject(k)).show();
     }
 
@@ -350,6 +350,10 @@ public class MainActivity extends Activity {
                     p.title = "My slideshow"; p.durationMs = 60000;
                     s.background = 2; s.animation = 1; s.font = 9; s.titleCard = true; s.titleHold = 5000; s.visualizer = false; s.progressBar = false; s.kenBurns = true; s.position = 1; s.textSize = .9f;
                     break;
+                case Project.VIDEO_EDIT:
+                    p.title = "My video";
+                    s.background = Style.BG_CLIPS; s.dim = 0; s.titleCard = false; s.visualizer = false; s.progressBar = false; s.kenBurns = true; s.position = 1; s.textSize = .9f;
+                    break;
                 case Project.QUOTE:
                     p.title = "My message"; p.durationMs = 20000;
                     s.font = 9; s.animation = 1; s.textSize = 1.1f; s.titleCard = false; s.visualizer = false; s.progressBar = false; s.palette = 6;
@@ -358,12 +362,13 @@ public class MainActivity extends Activity {
             }
             p.save();
             open(p);
-            tab(kind == Project.QUOTE ? 1 : 0);
+            tab(kind == Project.QUOTE ? 1 : kind == Project.VIDEO_EDIT ? CLIPS : 0);
             switch (kind) {
                 case Project.SUBTITLES: toast("Choose the talking video."); pick("video/*", REQ_SONG_VIDEO); break;
                 case Project.PROMO: toast("Fill in the event details, then add a photo or music."); break;
                 case Project.SLIDESHOW: toast("Add your photos, then music."); pickPhotos(); break;
                 case Project.QUOTE: toast("Type your message — one line per row."); break;
+                case Project.VIDEO_EDIT: toast("Add your videos and photos."); pickClips(); break;
                 default: toast("Start by choosing the song."); break;
             }
         }
@@ -401,6 +406,8 @@ public class MainActivity extends Activity {
         if (project != null && project != p) saveNow();
         releasePlayer();
         project = p;
+        clipUndo.clear();
+        p.cleanClipFiles();
         prefs().edit().putString("open", p.dir.getAbsolutePath()).apply();
         scrub = Math.max(0, Math.min(p.durationMs, prefs().getLong("pos:" + p.dir.getName(), 0)));
         loadAssets();
@@ -414,7 +421,10 @@ public class MainActivity extends Activity {
         renderer.cover = PhotoSet.decode(project.cover(), 900);
         renderer.custom = projectFont;
         renderer.bind(project);
+        renderer.setClips(project.edit, project.dir, 1080);
     }
+
+    boolean showClipsTab() { return project != null && (project.kind == Project.VIDEO_EDIT || project.style.background == Style.BG_CLIPS || !project.edit.clips.isEmpty()); }
 
     void buildEditor() {
         LinearLayout root = column();
@@ -469,11 +479,12 @@ public class MainActivity extends Activity {
         tabButtons = new Button[TABS.length];
         for (int n = 0; n < TAB_ORDER.length; n++) {
             final int k = TAB_ORDER[n];
+            if (k == CLIPS && !showClipsTab()) continue;
             tabButtons[k] = button(TABS[k], () -> tab(k));
             tabButtons[k].setTextSize(12.5f);
             tabButtons[k].setPadding(dp(2), 0, dp(2), 0);
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(42), k == TIMELINE ? 1.25f : 1);
-            if (n > 0) p.leftMargin = dp(4);
+            if (tabs.getChildCount() > 0) p.leftMargin = dp(4);
             tabs.addView(tabButtons[k], p);
         }
         root.addView(tabs);
@@ -510,7 +521,8 @@ public class MainActivity extends Activity {
         setContentView(root);
         // Carry on where the user stopped: the same tab and the same point in the song.
         int lastTab = prefs().getInt("tab:" + project.dir.getName(), -1);
-        tab(lastTab >= 0 && lastTab < TABS.length ? lastTab : project.ready() ? (project.lyrics.lines.isEmpty() ? 1 : project.lyrics.fullySynced() ? 3 : 2) : 0);
+        if (lastTab == CLIPS && !showClipsTab()) lastTab = -1;
+        tab(lastTab >= 0 && lastTab < TABS.length ? lastTab : project.kind == Project.VIDEO_EDIT && project.edit.clips.isEmpty() ? CLIPS : project.ready() ? (project.lyrics.lines.isEmpty() ? 1 : project.lyrics.fullySynced() ? 3 : 2) : 0);
         updateTransport();
     }
 
@@ -574,6 +586,7 @@ public class MainActivity extends Activity {
         tab = k;
         if (project != null) prefs().edit().putInt("tab:" + project.dir.getName(), k).apply();
         for (int i = 0; i < tabButtons.length; i++) {
+            if (tabButtons[i] == null) continue;
             tabButtons[i].setBackground(round(i == k ? ACCENT : PANEL2, 12));
             tabButtons[i].setTextColor(i == k ? 0xff1a1a1a : TEXT);
         }
@@ -589,18 +602,39 @@ public class MainActivity extends Activity {
             case 1: lyricsTab(page); break;
             case 2: syncTab(page); break;
             case TIMELINE: timelineTab(page); break;
+            case CLIPS: clipsTab(page); break;
             default: styleTab(page); break;
         }
     }
 
-    boolean videoMode() { return project != null && project.style.background == 4 && project.hasVideo(); }
+    boolean videoMode() {
+        if (project == null) return false;
+        if (project.style.background == Style.BG_CLIPS) return renderer.clipIsVideo(now());
+        return project.style.background == 4 && project.hasVideo();
+    }
 
     /** Shows or hides the preview's background video and applies its filter and blur. */
     void syncBackdrop() {
         if (backdrop == null || project == null) return;
+        if (project.style.background == Style.BG_CLIPS) { backdrop.look(LyricRenderer.colorMatrix(project.style.photoFilter), project.style.videoBlur); lastClip = -2; followBackdrop(now(), false, true); return; }
         backdrop.setVideo(videoMode() ? project.video() : null, project.style.videoFit);
         backdrop.look(LyricRenderer.colorMatrix(project.style.photoFilter), project.style.videoBlur);
         backdrop.seek(now());
+    }
+
+    int lastClip = -2;
+
+    /** Keeps the preview video in step: with clips, the clip on screen now at its own time in its file. */
+    void followBackdrop(long t, boolean playing, boolean jump) {
+        if (backdrop == null || project == null) return;
+        if (project.style.background != Style.BG_CLIPS) { if (jump) backdrop.seek(t); else backdrop.follow(t, playing); return; }
+        Sequence.At a = project.edit.at(t);
+        boolean video = a.clip != null && !a.clip.photo;
+        backdrop.setVideo(video ? project.clipFile(a.clip) : null, project.style.videoFit);
+        if (!video) { lastClip = a.index; return; }
+        if (jump || a.index != lastClip) backdrop.seek(a.source);
+        lastClip = a.index;
+        backdrop.follow(a.source, playing);
     }
 
     void changed() {
@@ -749,6 +783,7 @@ public class MainActivity extends Activity {
         LinearLayout c = card();
         c.addView(label("Video length", 13, DIM, true));
         if (project.hasAudio()) { c.addView(label("Set by the music: " + clock(project.durationMs) + ".", 12, DIM, false)); addCard(page, c); return; }
+        if (!project.edit.clips.isEmpty()) { c.addView(label("Set by the clips: " + clock(project.durationMs) + ". Change it in the Clips tab.", 12, DIM, false)); addCard(page, c); return; }
         int[] secs = {15, 30, 60, 120, 180, 300, 600};
         String[] names = new String[secs.length];
         int sel = -1;
@@ -889,6 +924,7 @@ public class MainActivity extends Activity {
         if (project == null) return;
         final Project p = project;
         if (request == REQ_IMAGE) { addPhotos(p, data); return; }
+        if (request == REQ_CLIPS) { addClips(p, data); return; }
         if (data.getData() == null) return;
         Uri uri = data.getData();
         if (request == REQ_AUDIO) {
@@ -1045,6 +1081,201 @@ public class MainActivity extends Activity {
         }, () -> {
             p.style.background = 2; loadAssets(); changed(); tab(tab);
             toast(added[0] + (added[0] == 1 ? " photo added." : " photos added.") + (added[0] < uris.size() ? " Some were skipped (limit " + Project.MAX_PHOTOS + " or unreadable)." : ""));
+        });
+    }
+
+    // ------------------------------------------------------------------ Clips tab (the video edit)
+
+    final ArrayList<ArrayList<Sequence.Clip>> clipUndo = new ArrayList<>();
+    final java.util.HashMap<String, Bitmap> clipThumbs = new java.util.HashMap<>();
+
+    void pickClips() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"video/*", "image/*"});
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        try { startActivityForResult(i, REQ_CLIPS); } catch (Exception e) { error("Add clips", "No file picker is available: " + e.getMessage()); }
+    }
+
+    /** Copies the chosen videos and photos into the project and puts them at the end of the edit, in the order chosen. */
+    void addClips(Project p, Intent data) {
+        final ArrayList<Uri> uris = new ArrayList<>();
+        if (data.getClipData() != null) for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
+        else if (data.getData() != null) uris.add(data.getData());
+        if (uris.isEmpty()) return;
+        final ArrayList<Sequence.Clip> added = new ArrayList<>();
+        work("Adding " + uris.size() + (uris.size() == 1 ? " clip…" : " clips…"), () -> {
+            for (Uri uri : uris) {
+                String type = getContentResolver().getType(uri), name = displayName(uri);
+                boolean image = type != null ? type.startsWith("image/") : name.toLowerCase(Locale.ROOT).matches(".*\\.(jpe?g|png|webp|heic|gif|bmp)$");
+                String id = "clip_" + java.util.UUID.randomUUID().toString().substring(0, 12);
+                if (image) {
+                    File tmp = new File(p.dir, "incoming-image");
+                    copy(getContentResolver().openInputStream(uri), tmp);
+                    Bitmap b = PhotoSet.decode(tmp, 2560);
+                    tmp.delete();
+                    if (b == null) continue;
+                    try (OutputStream o = new FileOutputStream(new File(p.dir, id + ".jpg"))) { b.compress(Bitmap.CompressFormat.JPEG, 92, o); }
+                    b.recycle();
+                    added.add(Sequence.Clip.image(id + ".jpg", 4000));
+                } else {
+                    String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "") : "";
+                    if (ext.isEmpty() || ext.length() > 5) ext = "mp4";
+                    File f = new File(p.dir, id + "." + ext);
+                    copy(getContentResolver().openInputStream(uri), f);
+                    long len = videoLength(f);
+                    if (len <= 0) { f.delete(); continue; }
+                    added.add(Sequence.Clip.video(f.getName(), len));
+                }
+            }
+            if (added.isEmpty()) throw new IOException("Those files could not be opened.");
+        }, () -> {
+            pushClipUndo();
+            p.edit.clips.addAll(added);
+            if (p.style.background != Style.BG_CLIPS) p.style.background = Style.BG_CLIPS;
+            clipsChanged();
+            buildEditor(); tab(CLIPS);
+            toast(added.size() + (added.size() == 1 ? " clip added." : " clips added.") + (added.size() < uris.size() ? " Some files could not be opened." : ""));
+        });
+    }
+
+    static long videoLength(File f) {
+        android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+        try {
+            r.setDataSource(f.getAbsolutePath());
+            if (r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) == null) return 0;
+            return VideoBackdrop.parse(r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION), 0);
+        } catch (Exception e) { return 0; }
+        finally { try { r.release(); } catch (Exception ignored) {} }
+    }
+
+    void pushClipUndo() { clipUndo.add(project.edit.snapshot()); if (clipUndo.size() > 40) clipUndo.remove(0); }
+
+    /** After any change to the edit: without music the video is exactly as long as the clips. */
+    void clipsChanged() {
+        if (!project.hasAudio()) project.durationMs = project.edit.clips.isEmpty() ? 0 : Math.max(1000, project.edit.total());
+        renderer.setClips(project.edit, project.dir, 1080);
+        scrub = Math.min(scrub, Math.max(0, project.durationMs));
+        changed(); saveNow(); updateTransport();
+    }
+
+    Bitmap clipThumb(Sequence.Clip c) {
+        String key = c.file + "@" + (c.photo ? 0 : c.in / 500);
+        Bitmap b = clipThumbs.get(key);
+        if (b != null || clipThumbs.containsKey(key)) return b;
+        if (c.photo) b = PhotoSet.decode(project.clipFile(c), 200);
+        else {
+            android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+            try {
+                r.setDataSource(project.clipFile(c).getAbsolutePath());
+                Bitmap f = r.getFrameAtTime(c.in * 1000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                if (f != null) { float sc = 200f / Math.max(f.getWidth(), f.getHeight()); b = Bitmap.createScaledBitmap(f, Math.max(1, Math.round(f.getWidth() * sc)), Math.max(1, Math.round(f.getHeight() * sc)), true); if (b != f) f.recycle(); }
+            } catch (Exception ignored) {
+            } finally { try { r.release(); } catch (Exception ignored) {} }
+        }
+        clipThumbs.put(key, b);
+        return b;
+    }
+
+    void clipsTab(LinearLayout page) {
+        Sequence e = project.edit;
+        LinearLayout c = card();
+        c.addView(label(e.clips.isEmpty() ? "Your video edit" : e.clips.size() + (e.clips.size() == 1 ? " clip" : " clips") + "  ·  " + clock(e.total()), 17, TEXT, true));
+        c.addView(label(e.clips.isEmpty() ? "Add videos and photos. They play one after another, in order. Lyrics, captions and text show on top."
+                : "Tap a clip to jump to it. Play to the right moment, then use Split or Trim." + (project.hasAudio() ? " The music sets the video length." : ""), 12, DIM, false));
+        c.addView(row(button("＋  Add videos & photos", this::pickClips, ACCENT, 0xff1a1a1a)));
+        if (!e.clips.isEmpty()) {
+            final int cur = Math.max(0, e.at(now()).index >= 0 ? e.at(now()).index : e.clips.size() - 1);
+            HorizontalScrollView strip = new HorizontalScrollView(this);
+            strip.setHorizontalScrollBarEnabled(false);
+            LinearLayout thumbs = new LinearLayout(this);
+            strip.addView(thumbs);
+            for (int i = 0; i < e.clips.size(); i++) {
+                final int k = i;
+                Sequence.Clip clip = e.clips.get(i);
+                FrameLayout box = new FrameLayout(this);
+                box.setBackground(round(i == cur ? ACCENT : PANEL2, 10));
+                box.setPadding(dp(3), dp(3), dp(3), dp(3));
+                ImageView v = new ImageView(this);
+                v.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                v.setBackground(round(0xff000000, 8));
+                v.setClipToOutline(true);
+                Bitmap t = clipThumb(clip);
+                if (t != null) v.setImageBitmap(t);
+                box.addView(v, new FrameLayout.LayoutParams(-1, -1));
+                TextView tag = label((clip.photo ? "🖼 " : "🎬 ") + String.format(Locale.ROOT, "%.1f s", clip.length() / 1000f), 10, 0xffffffff, true);
+                tag.setBackground(round(0x99000000, 6));
+                tag.setPadding(dp(4), dp(1), dp(4), dp(1));
+                FrameLayout.LayoutParams tp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
+                tp.leftMargin = dp(3); tp.bottomMargin = dp(3);
+                box.addView(tag, tp);
+                box.setOnClickListener(x -> { seekTo((int) e.startOf(k)); tab(CLIPS); });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(clip.photo ? 74 : 96), dp(74)); lp.rightMargin = dp(6);
+                thumbs.addView(box, lp);
+            }
+            strip.setPadding(0, dp(10), 0, dp(4));
+            c.addView(strip);
+            final int curFinal = cur;
+            strip.post(() -> { View v = thumbs.getChildAt(curFinal); if (v != null) strip.scrollTo(Math.max(0, v.getLeft() - dp(40)), 0); });
+        }
+        addCard(page, c);
+        if (e.clips.isEmpty()) return;
+
+        final Sequence.At at = e.at(now());
+        final int i = at.index >= 0 ? at.index : e.clips.size() - 1;
+        Sequence.Clip clip = e.clips.get(i);
+        LinearLayout tools = card();
+        tools.addView(label("Clip " + (i + 1) + " of " + e.clips.size() + (clip.photo ? " · photo" : " · video") + "  ·  " + clock(e.startOf(i)) + " – " + clock(e.startOf(i) + clip.length()), 13, DIM, true));
+        tools.addView(row(
+                clipTool("✂ Split", () -> e.split(i, now()), "Play to a point inside the clip, then split."),
+                clipTool("⇤ Trim start", () -> e.trimStartTo(i, now()), "Play to where the clip should start."),
+                clipTool("⇥ Trim end", () -> e.trimEndTo(i, now()), "Play to where the clip should end.")));
+        tools.addView(row(
+                clipTool("◀ Move", () -> { if (i == 0) return false; e.move(i, i - 1); seekTo((int) e.startOf(i - 1)); return true; }, "It is already first."),
+                clipTool("Move ▶", () -> { if (i >= e.clips.size() - 1) return false; e.move(i, i + 1); seekTo((int) e.startOf(i + 1)); return true; }, "It is already last."),
+                clipTool("⧉ Copy", () -> { e.clips.add(i + 1, e.clips.get(i).copy()); return true; }, "")));
+        tools.addView(row(
+                clipTool("🗑 Delete", () -> { e.clips.remove(i); return true; }, ""),
+                button("↶ Undo", () -> {
+                    if (clipUndo.isEmpty()) { toast("Nothing to undo."); return; }
+                    e.restore(clipUndo.remove(clipUndo.size() - 1));
+                    clipsChanged(); tab(CLIPS);
+                })));
+        if (clip.photo) {
+            tools.addView(label("Show this photo for", 12, DIM, false));
+            final long[] ms = {2000, 3000, 4000, 5000, 8000, 10000};
+            String[] names = new String[ms.length];
+            int sel = -1;
+            for (int k = 0; k < ms.length; k++) { names[k] = ms[k] / 1000 + " s"; if (clip.photoMs == ms[k]) sel = k; }
+            tools.addView(chips(names, sel, 6, k -> { pushClipUndo(); clip.photoMs = ms[k]; clipsChanged(); tab(CLIPS); }));
+            tools.addView(row(button("All photos this long", () -> { pushClipUndo(); for (Sequence.Clip x : e.clips) if (x.photo) x.photoMs = clip.photoMs; clipsChanged(); tab(CLIPS); })));
+        } else {
+            tools.addView(label("Uses " + clock(clip.in) + " – " + clock(clip.out) + " of a " + clock(clip.sourceLength) + " video.", 11, DIM, false));
+            tools.addView(row(button("Use the whole video again", () -> { pushClipUndo(); clip.in = 0; clip.out = Math.max(100, clip.sourceLength); clipsChanged(); tab(CLIPS); })));
+        }
+        addCard(page, tools);
+
+        LinearLayout look = card();
+        look.addView(label("Look", 13, DIM, true));
+        look.addView(label("Layout", 12, DIM, false));
+        look.addView(chips(Style.VIDEO_FITS, project.style.videoFit, 2, k -> { project.style.videoFit = k; project.style.photoFit = k == 1 ? 1 : 0; changed(); tab(CLIPS); }));
+        look.addView(label("Darken (for readable text)", 12, DIM, false));
+        look.addView(slider(0, .85f, project.style.dim, v -> { project.style.dim = v; changed(); }));
+        look.addView(label("Colour filter", 12, DIM, false));
+        look.addView(chips(Style.PHOTO_FILTERS, project.style.photoFilter, 3, k -> { project.style.photoFilter = k; changed(); tab(CLIPS); }));
+        addCard(page, look);
+    }
+
+    interface ClipEdit { boolean apply(); }
+
+    /** A tool button: saves an undo step, changes the edit, and refreshes (or explains why nothing changed). */
+    Button clipTool(String name, ClipEdit edit, String why) {
+        return button(name, () -> {
+            ArrayList<Sequence.Clip> before = project.edit.snapshot();
+            if (!edit.apply()) { if (!why.isEmpty()) toast(why); return; }
+            clipUndo.add(before); if (clipUndo.size() > 40) clipUndo.remove(0);
+            clipsChanged(); tab(CLIPS);
         });
     }
 
@@ -2171,6 +2402,7 @@ public class MainActivity extends Activity {
             if (i == 2 && !project.hasPhotos()) { pickPhotos(); return; }
             if (i == 3 && !project.hasCover()) { pick("image/*", REQ_COVER); return; }
             if (i == 4 && !project.hasVideo()) { pick("video/*", REQ_VIDEO); return; }
+            if (i == Style.BG_CLIPS) { s.background = i; changed(); buildEditor(); tab(CLIPS); if (project.edit.clips.isEmpty()) pickClips(); return; }
             if (i == 3 && s.photoBlur < .1f) s.photoBlur = .6f;
             s.background = i; changed(); tab(3);
         }));
@@ -2291,7 +2523,7 @@ public class MainActivity extends Activity {
         if (player != null && prepared && playing) { player.pause(); scrub = player.getCurrentPosition(); }
         if (silentStart >= 0) { scrub = now(); silentStart = -1; }
         playing = false;
-        if (backdrop != null) backdrop.follow(scrub, false);
+        followBackdrop(scrub, false, false);
         if (!busy) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         updateTransport();
     }
@@ -2302,14 +2534,14 @@ public class MainActivity extends Activity {
         scrub = Math.max(0, Math.min(ms, project == null ? 0 : project.durationMs));
         if (player != null && prepared) player.seekTo((int) scrub, MediaPlayer.SEEK_CLOSEST);
         if (silentStart >= 0) { silentBase = scrub; silentStart = android.os.SystemClock.uptimeMillis(); }
-        if (backdrop != null) backdrop.seek(scrub);
+        followBackdrop(scrub, false, true);
         highlightedRow = -2;
         updateTransport();
     }
 
     final Runnable ticker = new Runnable() { public void run() { if (dead) return;
         if (playing && silentStart >= 0 && project != null && now() >= project.durationMs) { pause(); scrub = 0; updateTransport(); }
-        updateClock(); tickSync(); if (backdrop != null) backdrop.follow(now(), playing); if (playing) handler.postDelayed(this, 60); } };
+        updateClock(); tickSync(); followBackdrop(now(), playing, false); if (preview != null && project != null && project.style.background == Style.BG_CLIPS) preview.invalidate(); if (playing) handler.postDelayed(this, 60); } };
 
     void updateTransport() {
         if (playButton == null || project == null) return;

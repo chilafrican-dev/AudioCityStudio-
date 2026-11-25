@@ -101,22 +101,57 @@ final class VideoLayer implements AutoCloseable {
 
     /** Shows the video frame for song time t (ms), looping the video. */
     void advanceTo(long tMs) throws IOException {
-        long target = durationUs == Long.MAX_VALUE ? tMs * 1000 : (tMs * 1000) % durationUs;
-        if (target < shownPts) restart();
+        advanceToUs(durationUs == Long.MAX_VALUE ? tMs * 1000 : (tMs * 1000) % durationUs);
+    }
+
+    /**
+     * Shows the last frame at or before file time target (µs). Jumps (seeks) when the target is behind or far ahead,
+     * and skips frames that would only be replaced before being seen, so any point of a clip comes up quickly.
+     */
+    void advanceToUs(long target) throws IOException {
+        if (target < shownPts || (shownPts < 0 && target > 1_000_000) || target > shownPts + 2_000_000) seekTo(target);
+        boolean rendered = false;
         int idle = 0;
         while (true) {
-            if (held >= 0) {
-                if (heldPts <= target || shownPts < 0) { render(held); shownPts = heldPts; held = -1; continue; }
-                break;
+            if (held < 0) {
+                if (outputDone) break;
+                feed();
+                int id = codec.dequeueOutputBuffer(info, 10_000);
+                if (id >= 0) {
+                    if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0 && info.size == 0) { outputDone = true; codec.releaseOutputBuffer(id, false); break; }
+                    if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true;
+                    held = id; heldPts = info.presentationTimeUs; idle = 0;
+                } else if (id == MediaCodec.INFO_TRY_AGAIN_LATER && ++idle > 300) throw new IOException("The video decoder stopped responding.");
+                continue;
             }
-            if (outputDone) break;
-            feed();
-            int id = codec.dequeueOutputBuffer(info, 10_000);
-            if (id >= 0) {
-                if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) { outputDone = true; codec.releaseOutputBuffer(id, false); break; }
-                held = id; heldPts = info.presentationTimeUs; idle = 0;
-            } else if (id == MediaCodec.INFO_TRY_AGAIN_LATER && ++idle > 300) throw new IOException("The background video decoder stopped responding.");
+            if (heldPts > target && (shownPts >= 0 || rendered)) break; // the next frame is for later
+            // Is there another frame also due now? Then this one would never be seen.
+            int next = -1;
+            long nextPts = 0;
+            if (heldPts <= target && !outputDone) {
+                for (int tries = 0; tries < 200 && next < 0; tries++) {
+                    feed();
+                    int id = codec.dequeueOutputBuffer(info, 5_000);
+                    if (id >= 0) {
+                        if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0 && info.size == 0) { outputDone = true; codec.releaseOutputBuffer(id, false); break; }
+                        if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true;
+                        next = id; nextPts = info.presentationTimeUs;
+                    } else if (id == MediaCodec.INFO_TRY_AGAIN_LATER && inputDone && tries > 100) break;
+                }
+            }
+            if (next >= 0 && nextPts <= target) { codec.releaseOutputBuffer(held, false); held = next; heldPts = nextPts; continue; }
+            render(held); shownPts = heldPts; rendered = true;
+            held = next; heldPts = nextPts;
+            if (held < 0 || heldPts > target) break;
         }
+    }
+
+    /** Jumps to the key frame at or before file time us. */
+    void seekTo(long us) {
+        if (held >= 0) { codec.releaseOutputBuffer(held, false); held = -1; }
+        codec.flush();
+        extractor.seekTo(Math.max(0, us), MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+        inputDone = false; outputDone = false; shownPts = -1;
     }
 
     private void feed() {
@@ -142,13 +177,6 @@ final class VideoLayer implements AutoCloseable {
         }
         texture.updateTexImage();
         texture.getTransformMatrix(st);
-    }
-
-    private void restart() {
-        if (held >= 0) { codec.releaseOutputBuffer(held, false); held = -1; }
-        codec.flush();
-        extractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
-        inputDone = false; outputDone = false; shownPts = -1;
     }
 
     /**

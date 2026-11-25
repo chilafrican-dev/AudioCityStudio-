@@ -24,7 +24,10 @@ final class Project {
     /** What kind of video this is (see KINDS); the engine is the same, defaults and wording differ. */
     int kind = 0;
     static final int LYRICS = 0, SUBTITLES = 1, PROMO = 2, SLIDESHOW = 3, QUOTE = 4;
-    static final String[] KINDS = {"🎵 Lyric video", "💬 Subtitles", "📣 Promo / event", "🖼 Photo slideshow", "✨ Quote / message"};
+    static final String[] KINDS = {"🎵 Lyric video", "💬 Subtitles", "📣 Promo / event", "🖼 Photo slideshow", "✨ Quote / message", "🎬 Video edit"};
+    /** The video edit: clips (videos and photos) played one after another behind the text. */
+    final Sequence edit = new Sequence();
+    static final int VIDEO_EDIT = 5;
     /** Promo form: headline, when, where, contact, extra line. */
     String[] promo = {"", "", "", "", ""};
     long durationMs;
@@ -105,7 +108,8 @@ final class Project {
         try {
             JSONObject o = new JSONObject();
             o.put("version", 2).put("title", title).put("artist", artist).put("editor", editor).put("kind", kind)
-                    .put("promo", new JSONArray(java.util.Arrays.asList(promo))).put("durationMs", durationMs).put("updated", updated);
+                    .put("promo", new JSONArray(java.util.Arrays.asList(promo)))
+                    .put("clips", clipsJson()).put("durationMs", durationMs).put("updated", updated);
             if (audioFile != null) o.put("audioFile", audioFile);
             if (audioName != null) o.put("audioName", audioName);
             JSONArray ls = new JSONArray();
@@ -140,6 +144,16 @@ final class Project {
             JSONObject o = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
             p.title = o.optString("title", p.title); p.artist = o.optString("artist", ""); p.editor = o.optString("editor", "");
             p.kind = Math.max(0, Math.min(KINDS.length - 1, o.optInt("kind", 0)));
+            JSONArray cl = o.optJSONArray("clips");
+            if (cl != null) for (int i = 0; i < cl.length(); i++) {
+                JSONObject j = cl.getJSONObject(i);
+                Sequence.Clip c = new Sequence.Clip();
+                c.file = j.optString("file", ""); c.photo = j.optBoolean("photo", false);
+                c.in = j.optLong("in", 0); c.out = j.optLong("out", 0); c.sourceLength = j.optLong("length", c.out); c.photoMs = j.optLong("photoMs", 4000);
+                c.volume = (float) j.optDouble("volume", 1); c.speed = (float) j.optDouble("speed", 1);
+                c.transition = j.optInt("transition", 0); c.transitionMs = j.optLong("transitionMs", 600);
+                if (!c.file.isEmpty() && new File(dir, c.file).isFile()) p.edit.clips.add(c);
+            }
             JSONArray pr = o.optJSONArray("promo");
             if (pr != null) for (int i = 0; i < Math.min(pr.length(), p.promo.length); i++) p.promo[i] = pr.optString(i, "");
             p.audioFile = o.has("audioFile") ? o.getString("audioFile") : null; p.audioName = o.has("audioName") ? o.getString("audioName") : null;
@@ -184,6 +198,24 @@ final class Project {
         File old = new File(dir, "background.jpg");
         if (old.isFile() && !p.hasPhotos()) old.renameTo(new File(dir, "photo_000.jpg"));
         return p;
+    }
+
+    JSONArray clipsJson() throws org.json.JSONException {
+        JSONArray a = new JSONArray();
+        for (Sequence.Clip c : edit.clips) a.put(new JSONObject().put("file", c.file).put("photo", c.photo).put("in", c.in).put("out", c.out).put("length", c.sourceLength)
+                .put("photoMs", c.photoMs).put("volume", (double) c.volume).put("speed", (double) c.speed).put("transition", c.transition).put("transitionMs", c.transitionMs));
+        return a;
+    }
+
+    File clipFile(Sequence.Clip c) { return new File(dir, c.file); }
+
+    /** Removes clip files no clip uses any more (deleted clips; kept until now so Undo could bring them back). */
+    void cleanClipFiles() {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        java.util.HashSet<String> used = new java.util.HashSet<>();
+        for (Sequence.Clip c : edit.clips) used.add(c.file);
+        for (File f : files) if (f.getName().startsWith("clip_") && !used.contains(f.getName())) f.delete();
     }
 
     void saveEnvelope(float[] env) throws IOException {
