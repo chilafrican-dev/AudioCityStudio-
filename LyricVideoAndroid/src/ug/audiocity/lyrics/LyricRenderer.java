@@ -18,6 +18,8 @@ final class LyricRenderer {
     long duration;
     PhotoSet photos = new PhotoSet(null, 1080);
     Typeface custom;
+    /** True when a background video is drawn underneath (preview TextureView or exporter GL layer). */
+    boolean videoUnder;
     /** Square cover photo (may be null). */
     Bitmap cover;
     private Bitmap coverSoft, coverSoftFrom;
@@ -272,7 +274,8 @@ final class LyricRenderer {
 
     void background(Canvas c, int w, int h, long t) {
         int[] p = Style.PALETTES[style.palette];
-        if (style.background == 1) c.drawColor(style.solid);
+        if (style.background == 4 && videoUnder) c.drawColor(Color.argb(Math.round(style.dim * 255), 0, 0, 0)); // video is underneath: only darken
+        else if (style.background == 1) c.drawColor(style.solid);
         else if (style.background == 2 && photos.size() > 0 && photoBackground(c, w, h, t)) { /* drawn */ }
         else if (style.background == 3 && coverBackground(c, w, h, t)) { /* drawn */ }
         else {
@@ -358,7 +361,13 @@ final class LyricRenderer {
 
     ColorFilter filter(int i) {
         if (i <= 0) return null;
-        if (filters[i] != null) return filters[i];
+        if (filters[i] == null) filters[i] = new ColorMatrixColorFilter(colorMatrix(i));
+        return filters[i];
+    }
+
+    /** The colour matrix of a photo/video filter (null for natural). */
+    static ColorMatrix colorMatrix(int i) {
+        if (i <= 0) return null;
         ColorMatrix m = new ColorMatrix();
         switch (i) {
             case 1: m.setSaturation(0); m.postConcat(contrast(1.12f)); break;
@@ -367,7 +376,7 @@ final class LyricRenderer {
             case 4: m.setSaturation(.45f); m.postConcat(new ColorMatrix(new float[]{1.05f, .1f, 0, 0, 18, .05f, .95f, .05f, 0, 12, 0, .1f, .8f, 0, 10, 0, 0, 0, 1, 0})); m.postConcat(contrast(.9f)); break;
             default: m.setSaturation(1.18f); m.postConcat(contrast(1.35f)); break;
         }
-        return filters[i] = new ColorMatrixColorFilter(m);
+        return m;
     }
 
     static ColorMatrix contrast(float k) { float o = 128 * (1 - k); return new ColorMatrix(new float[]{k, 0, 0, 0, o, 0, k, 0, 0, o, 0, 0, k, 0, o, 0, 0, 0, 1, 0}); }

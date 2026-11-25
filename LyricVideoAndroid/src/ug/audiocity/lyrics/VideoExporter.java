@@ -39,11 +39,11 @@ final class VideoExporter {
     }
 
     /** Returns the size actually used (encoders differ in what they accept). */
-    static int[] export(LyricRenderer r, File song, File out, Listener l) throws IOException {
+    static int[] export(LyricRenderer r, File song, File out, Listener l, File backgroundVideo) throws IOException {
         l.progress(0, "Encoding the song…");
         Audio audio = encodeAudio(song, r.duration, l);
         int[] size = pickSize(r.style.width(), r.style.height());
-        encodeVideo(r, size[0], size[1], audio, out, l);
+        encodeVideo(r, size[0], size[1], audio, out, l, r.style.background == 4 ? backgroundVideo : null);
         return size;
     }
 
@@ -153,7 +153,7 @@ final class VideoExporter {
     static final String VERTEX = "attribute vec4 aPos; attribute vec2 aTex; varying vec2 vTex; void main(){ gl_Position = aPos; vTex = aTex; }";
     static final String FRAGMENT = "precision mediump float; varying vec2 vTex; uniform sampler2D uTex; void main(){ gl_FragColor = texture2D(uTex, vTex); }";
 
-    static void encodeVideo(LyricRenderer r, int w, int h, Audio audio, File out, Listener l) throws IOException {
+    static void encodeVideo(LyricRenderer r, int w, int h, Audio audio, File out, Listener l, File backgroundVideo) throws IOException {
         int fps = r.style.fps;
         long durationMs = Math.max(r.duration, audio.samples.isEmpty() ? 0 : audio.samples.get(audio.samples.size() - 1)[2] / 1000);
         long frames = Math.max(1, (durationMs * fps + 999) / 1000);
@@ -171,6 +171,7 @@ final class VideoExporter {
         EGLContext ctx = EGL14.EGL_NO_CONTEXT;
         EGLSurface egl = EGL14.EGL_NO_SURFACE;
         Bitmap frame = null;
+        VideoLayer video = null;
         boolean started = false;
         try {
             enc.configure(vf, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -207,6 +208,15 @@ final class VideoExporter {
 
             frame = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
             Canvas canvas = new Canvas(frame);
+            FloatBuffer videoQuad = null;
+            android.graphics.ColorMatrix videoFilter = null;
+            if (backgroundVideo != null && backgroundVideo.isFile()) {
+                // Background video: decoded into a GL texture, drawn first; everything else is drawn over it.
+                video = new VideoLayer(backgroundVideo);
+                videoQuad = VideoLayer.quad();
+                videoFilter = LyricRenderer.colorMatrix(r.style.photoFilter);
+                r.videoUnder = true;
+            }
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo(), audioInfo = new MediaCodec.BufferInfo();
             int[] tracks = {-1, -1};
             boolean[] muxing = {false};
@@ -214,14 +224,25 @@ final class VideoExporter {
             for (long i = 0; i < frames; i++) {
                 if (l.cancelled()) throw new CancellationException();
                 long t = i * 1000 / fps;
-                frame.eraseColor(0xff000000);
+                frame.eraseColor(video != null ? 0 : 0xff000000);
                 r.draw(canvas, w, h, t);
-                if (i == 0) GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, frame, 0); else GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, frame);
                 GLES20.glViewport(0, 0, w, h);
+                if (video != null) {
+                    GLES20.glClearColor(0, 0, 0, 1);
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+                    video.advanceTo(t);
+                    video.draw(w, h, videoQuad, videoFilter, r.style.videoBlur);
+                    GLES20.glEnable(GLES20.GL_BLEND);
+                    GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA); // the overlay is premultiplied
+                }
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex[0]);
+                if (i == 0) GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, frame, 0); else GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, frame);
                 GLES20.glUseProgram(program);
                 quad.position(0); GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, quad); GLES20.glEnableVertexAttribArray(aPos);
                 quad.position(2); GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 16, quad); GLES20.glEnableVertexAttribArray(aTex);
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+                if (video != null) GLES20.glDisable(GLES20.GL_BLEND);
                 EGLExt.eglPresentationTimeANDROID(dpy, egl, i * 1_000_000_000L / fps);
                 if (!EGL14.eglSwapBuffers(dpy, egl)) throw new IOException("The video encoder rejected a frame.");
                 drainVideo(enc, info, mux, tracks, muxing, audio, audioInfo, false);
@@ -234,6 +255,7 @@ final class VideoExporter {
             mux.stop();
             l.progress(1, "Finishing…");
         } finally {
+            if (video != null) video.close();
             if (dpy != EGL14.EGL_NO_DISPLAY) {
                 EGL14.eglMakeCurrent(dpy, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
                 if (egl != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(dpy, egl);
@@ -286,8 +308,10 @@ final class VideoExporter {
         }
     }
 
-    static int program() throws IOException {
-        int vs = shader(GLES20.GL_VERTEX_SHADER, VERTEX), fs = shader(GLES20.GL_FRAGMENT_SHADER, FRAGMENT);
+    static int program() throws IOException { return program(VERTEX, FRAGMENT); }
+
+    static int program(String vertex, String fragment) throws IOException {
+        int vs = shader(GLES20.GL_VERTEX_SHADER, vertex), fs = shader(GLES20.GL_FRAGMENT_SHADER, fragment);
         int p = GLES20.glCreateProgram();
         GLES20.glAttachShader(p, vs); GLES20.glAttachShader(p, fs);
         GLES20.glLinkProgram(p);

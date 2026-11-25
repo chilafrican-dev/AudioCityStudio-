@@ -34,7 +34,7 @@ import java.util.concurrent.Executors;
 /** Audio City Lyrics: make lyric videos on the phone. Song → lyrics → tap-to-sync → style → MP4. */
 public class MainActivity extends Activity {
     static final int BG = 0xff111116, PANEL = 0xff1d1d26, PANEL2 = 0xff272733, LINE = 0xff3a3a48, TEXT = 0xfff2f2f5, DIM = 0xff9b9bab, ACCENT = 0xffffd166;
-    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6;
+    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7;
     static final String[] TABS = {"Song", "Lyrics", "Sync", "Style"};
 
     final Handler handler = new Handler(Looper.getMainLooper());
@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
 
     FrameLayout content;
     PreviewView preview;
+    VideoBackdrop backdrop;
     SeekBar seek;
     TextView clock;
     Button playButton;
@@ -239,6 +240,7 @@ public class MainActivity extends Activity {
 
     void home() {
         releasePlayer();
+        if (backdrop != null) { backdrop.release(); backdrop = null; }
         project = null;
         prefs().edit().remove("open").apply();
         LinearLayout root = column();
@@ -345,7 +347,13 @@ public class MainActivity extends Activity {
 
         preview = new PreviewView();
         int h = Math.round(getResources().getDisplayMetrics().heightPixels * .36f);
-        root.addView(preview, new LinearLayout.LayoutParams(-1, h));
+        FrameLayout previewBox = new FrameLayout(this);
+        if (backdrop != null) backdrop.release();
+        backdrop = new VideoBackdrop(this);
+        previewBox.addView(backdrop.view, new FrameLayout.LayoutParams(1, 1));
+        previewBox.addView(preview, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(previewBox, new LinearLayout.LayoutParams(-1, h));
+        syncBackdrop();
 
         LinearLayout transport = new LinearLayout(this);
         transport.setGravity(Gravity.CENTER_VERTICAL);
@@ -406,7 +414,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    boolean videoMode() { return project != null && project.style.background == 4 && project.hasVideo(); }
+
+    /** Shows or hides the preview's background video and applies its filter and blur. */
+    void syncBackdrop() {
+        if (backdrop == null || project == null) return;
+        backdrop.setVideo(videoMode() ? project.video() : null);
+        backdrop.look(LyricRenderer.colorMatrix(project.style.photoFilter), project.style.videoBlur);
+        backdrop.seek(now());
+    }
+
     void changed() {
+        syncBackdrop();
         renderer.bind(project);
         if (preview != null) preview.invalidate();
         handler.removeCallbacks(saveLater);
@@ -456,6 +475,27 @@ public class MainActivity extends Activity {
         } else cov.addView(row(button("Choose cover photo…", () -> pick("image/*", REQ_COVER))));
         addCard(page, cov);
 
+        LinearLayout vid = card();
+        vid.addView(label("Background video", 13, DIM, true));
+        vid.addView(label(project.hasVideo() ? "Plays silently behind the lyrics, looping if it is shorter than the song (your song is the only sound). Darkening, blur and colour filter are in Style → Background."
+                : "Optional: a music-video clip, dance or performance footage, or any video from your phone, played silently behind the lyrics.", 12, DIM, false));
+        if (project.hasVideo()) {
+            Bitmap thumb = videoThumb(project.video());
+            if (thumb != null) {
+                ImageView iv = new ImageView(this);
+                iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                iv.setImageBitmap(thumb);
+                iv.setClipToOutline(true);
+                iv.setBackground(round(PANEL2, 10));
+                LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(dp(150), dp(86)); vp.topMargin = dp(8);
+                vid.addView(iv, vp);
+            }
+            vid.addView(row(button("Change video…", () -> pick("video/*", REQ_VIDEO)), button("Remove", () -> {
+                File v = project.video(); if (v != null) v.delete(); if (project.style.background == 4) project.style.background = 0; changed(); tab(0);
+            })));
+        } else vid.addView(row(button("Choose video…", () -> pick("video/*", REQ_VIDEO))));
+        addCard(page, vid);
+
         LinearLayout photo = card();
         File[] photos = project.photos();
         photo.addView(label("Background photos", 13, DIM, true));
@@ -487,6 +527,12 @@ public class MainActivity extends Activity {
                 weighted());
         photo.addView(photoButtons);
         addCard(page, photo);
+    }
+
+    static Bitmap videoThumb(File f) {
+        android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+        try { r.setDataSource(f.getAbsolutePath()); Bitmap b = r.getFrameAtTime(1_000_000); return b == null ? null : Bitmap.createScaledBitmap(b, 300, Math.max(1, 300 * b.getHeight() / b.getWidth()), true); }
+        catch (Exception e) { return null; } finally { try { r.release(); } catch (Exception ignored) {} }
     }
 
     LinearLayout.LayoutParams weighted() { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(46), 1); p.leftMargin = dp(8); return p; }
@@ -598,6 +644,23 @@ public class MainActivity extends Activity {
                 Bitmap out = side > 1600 ? Bitmap.createScaledBitmap(sq, 1600, 1600, true) : sq;
                 try (OutputStream o = new FileOutputStream(p.cover())) { out.compress(Bitmap.CompressFormat.JPEG, 93, o); }
             }, () -> { p.style.cover = true; loadAssets(); changed(); tab(tab); toast("Cover added. Choose its place and shape in Style → Cover photo."); });
+        } else if (request == REQ_VIDEO) {
+            String name = displayName(uri);
+            String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "") : "";
+            if (ext.isEmpty() || ext.length() > 5) ext = "mp4";
+            final String file = "background-video." + ext;
+            work("Copying the video…", () -> {
+                File tmp = new File(p.dir, "incoming-video");
+                copy(getContentResolver().openInputStream(uri), tmp);
+                android.media.MediaExtractor ex = new android.media.MediaExtractor();
+                boolean hasPicture = false;
+                try { ex.setDataSource(tmp.getAbsolutePath()); for (int i = 0; i < ex.getTrackCount(); i++) { String m = ex.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME); if (m != null && m.startsWith("video/")) hasPicture = true; } }
+                catch (Exception e) { hasPicture = false; } finally { ex.release(); }
+                if (!hasPicture) { tmp.delete(); throw new IOException("That file has no video picture."); }
+                File old = p.video();
+                if (old != null) old.delete();
+                if (!tmp.renameTo(new File(p.dir, file))) throw new IOException("Cannot store the video.");
+            }, () -> { p.style.background = 4; changed(); tab(tab); toast("Video added as the background. Adjust darkening and blur in Style → Background."); });
         } else if (request == REQ_LYRICS) {
             final String[] text = {null};
             work("Reading lyrics…", () -> text[0] = readText(getContentResolver().openInputStream(uri)), () -> {
@@ -1386,6 +1449,7 @@ public class MainActivity extends Activity {
         page.addView(chips(Style.BACKGROUNDS, s.background, 2, i -> {
             if (i == 2 && !project.hasPhotos()) { pickPhotos(); return; }
             if (i == 3 && !project.hasCover()) { pick("image/*", REQ_COVER); return; }
+            if (i == 4 && !project.hasVideo()) { pick("video/*", REQ_VIDEO); return; }
             if (i == 3 && s.photoBlur < .1f) s.photoBlur = .6f;
             s.background = i; changed(); tab(3);
         }));
@@ -1395,6 +1459,15 @@ public class MainActivity extends Activity {
         } else if (s.background == 1) {
             page.addView(label("Colour", 12, DIM, false));
             page.addView(swatches(s.solid, c -> { s.solid = c; changed(); }));
+        } else if (s.background == 4) {
+            page.addView(label(project.hasVideo() ? "Plays silently and loops to the length of the song. Change it in the Song tab." : "Choose a video in the Song tab.", 12, DIM, false));
+            page.addView(row(button(project.hasVideo() ? "Change video…" : "Choose video…", () -> pick("video/*", REQ_VIDEO))));
+            page.addView(label("Darken for readable lyrics", 12, DIM, false));
+            page.addView(slider(0, .85f, s.dim, v -> { s.dim = v; changed(); }));
+            page.addView(label("Blur (0 = sharp)" + (android.os.Build.VERSION.SDK_INT < 31 ? " — shown in the exported video; the preview shows it on Android 12+" : ""), 12, DIM, false));
+            page.addView(slider(0, 1, s.videoBlur, v -> { s.videoBlur = v; changed(); }));
+            page.addView(label("Colour filter", 12, DIM, false));
+            page.addView(chips(Style.PHOTO_FILTERS, s.photoFilter, 3, i -> { s.photoFilter = i; changed(); }));
         } else if (s.background == 3) {
             page.addView(label("Blur", 12, DIM, false));
             page.addView(slider(0, 1, s.photoBlur, v -> { s.photoBlur = v; changed(); }));
@@ -1475,6 +1548,7 @@ public class MainActivity extends Activity {
     void pause() {
         if (player != null && prepared && playing) { player.pause(); scrub = player.getCurrentPosition(); }
         playing = false;
+        if (backdrop != null) backdrop.follow(scrub, false);
         if (!busy) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         updateTransport();
     }
@@ -1484,11 +1558,12 @@ public class MainActivity extends Activity {
     void seekTo(int ms) {
         scrub = Math.max(0, Math.min(ms, project == null ? 0 : project.durationMs));
         if (player != null && prepared) player.seekTo((int) scrub, MediaPlayer.SEEK_CLOSEST);
+        if (backdrop != null) backdrop.seek(scrub);
         highlightedRow = -2;
         updateTransport();
     }
 
-    final Runnable ticker = new Runnable() { public void run() { if (dead) return; updateClock(); tickSync(); if (playing) handler.postDelayed(this, 60); } };
+    final Runnable ticker = new Runnable() { public void run() { if (dead) return; updateClock(); tickSync(); if (backdrop != null) backdrop.follow(now(), playing); if (playing) handler.postDelayed(this, 60); } };
 
     void updateTransport() {
         if (playButton == null || project == null) return;
@@ -1520,13 +1595,19 @@ public class MainActivity extends Activity {
             setOnClickListener(v -> togglePlay());
         }
         @Override protected void onDraw(Canvas c) {
-            c.drawColor(BG);
-            if (project == null) return;
+            if (project == null) { c.drawColor(BG); return; }
             float pad = dp(8), aw = getWidth() - 2 * pad, ah = getHeight() - 2 * pad, ratio = project.style.ratio();
             float w = Math.min(aw, ah * ratio), h = w / ratio;
             frame.set((getWidth() - w) / 2, (getHeight() - h) / 2, (getWidth() + w) / 2, (getHeight() + h) / 2);
             clip.reset();
             clip.addRoundRect(frame, dp(10), dp(10), Path.Direction.CW);
+            boolean video = videoMode();
+            renderer.videoUnder = video;
+            if (video) {
+                // The video plays on a view underneath: paint only around the frame, keep the frame see-through.
+                c.save(); c.clipOutPath(clip); c.drawColor(BG); c.restore();
+                if (backdrop != null) { RectF r = new RectF(frame); post(() -> backdrop.place(r)); }
+            } else c.drawColor(BG);
             c.save();
             c.clipPath(clip);
             c.translate(frame.left, frame.top);
@@ -1590,7 +1671,7 @@ public class MainActivity extends Activity {
                         runOnUiThread(() -> { stage.setText(text); bar.setProgress(Math.round(f * 1000)); pct.setText(Math.round(f * 100) + " %" + eta); });
                     }
                     public boolean cancelled() { return cancelled[0]; }
-                });
+                }, p.video());
                 runOnUiThread(() -> stage.setText("Saving to your gallery…"));
                 saved = publish(out, safeName(p.title) + (p.artist.isEmpty() ? "" : " - " + safeName(p.artist)) + " (lyric video).mp4");
             } catch (Throwable e) { fail = e; }
@@ -1659,6 +1740,7 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         dead = true;
         releasePlayer();
+        if (backdrop != null) backdrop.release();
         jobs.shutdownNow();
         super.onDestroy();
     }

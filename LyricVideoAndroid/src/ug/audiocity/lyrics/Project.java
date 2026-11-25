@@ -61,6 +61,12 @@ final class Project {
     /** Square cover photo shown on top of the background. */
     File cover() { return new File(dir, "cover.jpg"); }
     boolean hasCover() { return cover().isFile(); }
+    /** Background video (any container Android plays), stored as background-video.&lt;ext&gt;. */
+    File video() {
+        File[] f = dir.listFiles((d, n) -> n.startsWith("background-video."));
+        return f != null && f.length > 0 ? f[0] : null;
+    }
+    boolean hasVideo() { File v = video(); return v != null && v.isFile(); }
     boolean hasAudio() { File a = audio(); return a != null && a.isFile() && durationMs > 0; }
 
     static File root(File filesDir) { File f = new File(filesDir, "projects"); f.mkdirs(); return f; }
@@ -103,7 +109,7 @@ final class Project {
                     .put("progressBar", s.progressBar).put("fps", s.fps).put("letterSpacing", (double) s.letterSpacing).put("outline", s.outline)
                     .put("glow", s.glow).put("box", s.box).put("letterbox", s.letterbox).put("photoFit", s.photoFit).put("photoFilter", s.photoFilter)
                     .put("photoSeconds", s.photoSeconds).put("photoBlur", (double) s.photoBlur).put("cover", s.cover).put("coverPos", s.coverPos)
-                    .put("coverShape", s.coverShape).put("coverSize", (double) s.coverSize).put("coverPulse", s.coverPulse).put("coverCaption", s.coverCaption));
+                    .put("coverShape", s.coverShape).put("coverSize", (double) s.coverSize).put("coverPulse", s.coverPulse).put("coverCaption", s.coverCaption).put("videoBlur", (double) s.videoBlur));
             File tmp = new File(dir, "project.json.tmp");
             try (OutputStream out = new FileOutputStream(tmp)) { out.write(o.toString(1).getBytes(StandardCharsets.UTF_8)); }
             if (!tmp.renameTo(new File(dir, "project.json"))) throw new IOException("Cannot save the project.");
@@ -147,6 +153,7 @@ final class Project {
                 d.photoBlur = (float) s.optDouble("photoBlur", d.photoBlur); d.cover = s.optBoolean("cover", d.cover); d.coverPos = s.optInt("coverPos", d.coverPos);
                 d.coverShape = s.optInt("coverShape", d.coverShape); d.coverSize = (float) s.optDouble("coverSize", d.coverSize);
                 d.coverPulse = s.optBoolean("coverPulse", d.coverPulse); d.coverCaption = s.optBoolean("coverCaption", d.coverCaption);
+                d.videoBlur = (float) s.optDouble("videoBlur", d.videoBlur);
                 d.sanitise();
             }
         } catch (org.json.JSONException e) { throw new IOException("Damaged project file: " + e.getMessage()); }
