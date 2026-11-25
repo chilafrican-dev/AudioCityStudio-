@@ -40,8 +40,8 @@ final class VideoExporter {
 
     /** Returns the size actually used (encoders differ in what they accept). */
     static int[] export(LyricRenderer r, File song, File out, Listener l, File backgroundVideo) throws IOException {
-        l.progress(0, "Encoding the song…");
-        Audio audio = encodeAudio(song, r.duration, l);
+        Audio audio = null;
+        if (song != null && song.isFile()) { l.progress(0, "Encoding the song…"); audio = encodeAudio(song, r.duration, l); }
         int[] size = pickSize(r.style.width(), r.style.height());
         encodeVideo(r, size[0], size[1], audio, out, l, r.style.background == 4 ? backgroundVideo : null);
         return size;
@@ -155,7 +155,7 @@ final class VideoExporter {
 
     static void encodeVideo(LyricRenderer r, int w, int h, Audio audio, File out, Listener l, File backgroundVideo) throws IOException {
         int fps = r.style.fps;
-        long durationMs = Math.max(r.duration, audio.samples.isEmpty() ? 0 : audio.samples.get(audio.samples.size() - 1)[2] / 1000);
+        long durationMs = Math.max(r.duration, audio == null || audio.samples.isEmpty() ? 0 : audio.samples.get(audio.samples.size() - 1)[2] / 1000);
         long frames = Math.max(1, (durationMs * fps + 999) / 1000);
 
         MediaFormat vf = MediaFormat.createVideoFormat(AVC, w, h);
@@ -279,7 +279,7 @@ final class VideoExporter {
             if (id == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 if (muxing[0]) throw new IOException("The video encoder changed format twice.");
                 tracks[0] = mux.addTrack(enc.getOutputFormat());
-                tracks[1] = mux.addTrack(audio.format);
+                tracks[1] = audio == null ? -1 : mux.addTrack(audio.format); // no song: a video without sound
                 mux.start();
                 muxing[0] = true;
                 continue;
@@ -300,6 +300,7 @@ final class VideoExporter {
 
     /** Interleaves audio: writes every AAC frame up to the given time. */
     static void writeAudio(MediaMuxer mux, int track, Audio a, MediaCodec.BufferInfo info, long upToUs) {
+        if (a == null || track < 0) return;
         while (a.next < a.samples.size() && a.samples.get(a.next)[2] <= upToUs) {
             long[] s = a.samples.get(a.next++);
             info.set((int) s[0], (int) s[1], s[2], (int) s[3]);

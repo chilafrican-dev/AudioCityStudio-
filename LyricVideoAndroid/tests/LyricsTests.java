@@ -7,7 +7,7 @@ public final class LyricsTests {
     static void eq(Object a, Object b, String what) { check(a == null ? b == null : a.equals(b), what + ": expected " + b + ", got " + a); }
 
     public static void main(String[] args) {
-        plainText(); words(); wordTapping(); lineEnds(); stamps2(); clipTools(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
+        plainText(); words(); wordTapping(); lineEnds(); stamps2(); clipTools(); evenly(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
         System.out.println("LyricsTests: " + checks + " checks passed");
     }
 
@@ -53,6 +53,16 @@ public final class LyricsTests {
         Lyrics keep = Lyrics.parseLrc(lrc, null);
         keep.setText("Nkwagala nnyo mukwano\nA new line\nLine without word tags");
         check(keep.lines.get(0).wordTimed(), "editing other lines keeps word times");
+    }
+
+    static void evenly() {
+        Lyrics l = Lyrics.parse("BIG CONCERT\nSaturday 7 PM\nKampala Serena\nCall 0700 000000", null);
+        l.spreadEvenly(0, 20000, 400);
+        eq(l.lines.get(0).start, 0L, "first line at the start");
+        eq(l.lines.get(1).start, 5200L, "equal 5 s slots");
+        check(l.lines.get(0).end == 4800 && l.lines.get(3).end == 19800, "short gaps between lines");
+        check(l.fullySynced() && l.frame(7000, 20000).index == 1, "plays line by line");
+        check(l.frame(4900, 20000).index == -1 || l.frame(4900, 20000).index == 0, "gap or end of line 1");
     }
 
     static void clipTools() {

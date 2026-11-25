@@ -302,7 +302,7 @@ public class MainActivity extends Activity {
         for (Project p : list) {
             LinearLayout c = card();
             c.addView(label(p.title, 17, TEXT, true));
-            String info = (p.artist.isEmpty() ? "" : p.artist + "  ·  ") + (p.hasAudio() ? clock(p.durationMs) : "no song") + "  ·  " + p.lyrics.lines.size() + " lines, " + p.lyrics.syncedCount() + " synced  ·  " + Style.ASPECTS[p.style.aspect].split(" ")[0];
+            String info = Project.KINDS[p.kind].substring(0, 2).trim() + "  " + (p.artist.isEmpty() ? "" : p.artist + "  ·  ") + (p.ready() ? clock(p.durationMs) : "no song") + "  ·  " + p.lyrics.lines.size() + " lines, " + p.lyrics.syncedCount() + " synced  ·  " + Style.ASPECTS[p.style.aspect].split(" ")[0];
             c.addView(label(info, 13, DIM, false));
             c.setOnClickListener(v -> open(p));
             c.setOnLongClickListener(v -> { projectMenu(p); return true; });
@@ -325,11 +325,47 @@ public class MainActivity extends Activity {
     }
 
     void newProject() {
+        String[] items = {"🎵  Lyric video — a song with its lyrics", "💬  Subtitles — captions for a talking video", "📣  Promo / event — show, concert, product advert",
+                "🖼  Photo slideshow — photos and music", "✨  Quote / message — scripture, quote, greeting"};
+        new AlertDialog.Builder(this).setTitle("What are you making?").setItems(items, (d, k) -> createProject(k)).show();
+    }
+
+    /** New project of a kind, with starting settings that suit it (all can be changed later). */
+    void createProject(int kind) {
         try {
             Project p = Project.create(getFilesDir());
             p.editor = prefs().getString("editorName", "");
+            p.kind = kind;
+            Style s = p.style;
+            switch (kind) {
+                case Project.SUBTITLES:
+                    p.title = "Untitled video";
+                    s.position = 1; s.animation = 12; s.font = 1; s.textSize = .85f; s.titleCard = false; s.visualizer = false; s.progressBar = false;
+                    break;
+                case Project.PROMO:
+                    p.title = "My event"; p.durationMs = 30000;
+                    s.preset(7); s.titleCard = false; s.visualizer = false; s.progressBar = false; s.animation = 8;
+                    break;
+                case Project.SLIDESHOW:
+                    p.title = "My slideshow"; p.durationMs = 60000;
+                    s.background = 2; s.animation = 1; s.font = 9; s.titleCard = true; s.titleHold = 5000; s.visualizer = false; s.progressBar = false; s.kenBurns = true; s.position = 1; s.textSize = .9f;
+                    break;
+                case Project.QUOTE:
+                    p.title = "My message"; p.durationMs = 20000;
+                    s.font = 9; s.animation = 1; s.textSize = 1.1f; s.titleCard = false; s.visualizer = false; s.progressBar = false; s.palette = 6;
+                    break;
+                default: break;
+            }
             p.save();
-            open(p); tab(0); toast("Start by choosing the song.");
+            open(p);
+            tab(kind == Project.QUOTE ? 1 : 0);
+            switch (kind) {
+                case Project.SUBTITLES: toast("Choose the talking video."); pick("video/*", REQ_SONG_VIDEO); break;
+                case Project.PROMO: toast("Fill in the event details, then add a photo or music."); break;
+                case Project.SLIDESHOW: toast("Add your photos, then music."); pickPhotos(); break;
+                case Project.QUOTE: toast("Type your message — one line per row."); break;
+                default: toast("Start by choosing the song."); break;
+            }
         }
         catch (IOException e) { error("New project", e.getMessage()); }
     }
@@ -442,6 +478,7 @@ public class MainActivity extends Activity {
         }
         root.addView(tabs);
         tabsArea = tabs;
+        tabButtons[1].setText(textWord());
         // Shown instead of the preview while typing lyrics.
         LinearLayout typeBar = new LinearLayout(this);
         typeBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -473,7 +510,7 @@ public class MainActivity extends Activity {
         setContentView(root);
         // Carry on where the user stopped: the same tab and the same point in the song.
         int lastTab = prefs().getInt("tab:" + project.dir.getName(), -1);
-        tab(lastTab >= 0 && lastTab < TABS.length ? lastTab : project.hasAudio() ? (project.lyrics.lines.isEmpty() ? 1 : project.lyrics.fullySynced() ? 3 : 2) : 0);
+        tab(lastTab >= 0 && lastTab < TABS.length ? lastTab : project.ready() ? (project.lyrics.lines.isEmpty() ? 1 : project.lyrics.fullySynced() ? 3 : 2) : 0);
         updateTransport();
     }
 
@@ -533,6 +570,7 @@ public class MainActivity extends Activity {
         if (content == null) return;
         if (typing) setTyping(false);
         applyLyricsNow();
+        if (tab == 1 && k != 1) autoSpread();
         tab = k;
         if (project != null) prefs().edit().putInt("tab:" + project.dir.getName(), k).apply();
         for (int i = 0; i < tabButtons.length; i++) {
@@ -576,10 +614,27 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ Song tab
 
+    /** What the text is called for this kind of video. */
+    String textWord() { return project == null ? "Lyrics" : project.kind == Project.SUBTITLES || project.kind == Project.SLIDESHOW ? "Captions" : project.kind == Project.LYRICS ? "Lyrics" : "Text"; }
+
+    /** Promos, quotes and slideshow captions have no singing to follow: give the lines equal slots automatically. */
+    void autoSpread() {
+        if (project == null || project.kind == Project.LYRICS || project.kind == Project.SUBTITLES) return;
+        Lyrics l = project.lyrics;
+        if (!project.ready() || l.lines.isEmpty() || l.syncedCount() > 0) return;
+        long start = project.style.titleCard && project.style.titleHold > 0 ? project.style.titleHold : 300;
+        l.spreadEvenly(Math.min(start, project.durationMs / 3), project.durationMs - 300, 500);
+        changed(); saveNow();
+        toast("Text spread evenly across the video — adjust it on the Timeline if you like.");
+    }
+
     void songTab(LinearLayout page) {
+        if (project.kind == Project.PROMO) promoCard(page);
+        if (project.kind != Project.LYRICS && project.kind != Project.SUBTITLES) lengthCard(page);
         LinearLayout song = card();
         song.addView(label("Song", 13, DIM, true));
-        song.addView(label(project.hasAudio() ? project.audioName + "  ·  " + clock(project.durationMs) : "No song chosen yet", 17, TEXT, true));
+        if (project.kind != Project.LYRICS && project.kind != Project.SUBTITLES) song.addView(label("Music (optional)", 12, ACCENT, true));
+        song.addView(label(project.hasAudio() ? project.audioName + "  ·  " + clock(project.durationMs) : project.silent() ? "No music · silent " + clock(project.durationMs) + " video" : "No song chosen yet", 17, TEXT, true));
         song.addView(label("MP3, M4A/AAC, WAV, FLAC, OGG and Opus work. The file is copied into the project, so it keeps working if the original moves.", 12, DIM, false));
         song.addView(row(button(project.hasAudio() ? "Replace song…" : "Choose song…", () -> pick("audio/*", REQ_AUDIO), project.hasAudio() ? PANEL2 : ACCENT, project.hasAudio() ? TEXT : 0xff1a1a1a)));
         song.addView(row(button("🎬  Use a video (its sound + picture)", () -> pick("video/*", REQ_SONG_VIDEO))));
@@ -687,6 +742,52 @@ public class MainActivity extends Activity {
         android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
         try { r.setDataSource(f.getAbsolutePath()); Bitmap b = r.getFrameAtTime(1_000_000); return b == null ? null : Bitmap.createScaledBitmap(b, 300, Math.max(1, 300 * b.getHeight() / b.getWidth()), true); }
         catch (Exception e) { return null; } finally { try { r.release(); } catch (Exception ignored) {} }
+    }
+
+    /** Video length for videos without a song (with a song, the song sets the length). */
+    void lengthCard(LinearLayout page) {
+        LinearLayout c = card();
+        c.addView(label("Video length", 13, DIM, true));
+        if (project.hasAudio()) { c.addView(label("Set by the music: " + clock(project.durationMs) + ".", 12, DIM, false)); addCard(page, c); return; }
+        int[] secs = {15, 20, 30, 45, 60, 90, 120};
+        String[] names = new String[secs.length];
+        int sel = -1;
+        for (int i = 0; i < secs.length; i++) { names[i] = secs[i] < 60 ? secs[i] + " s" : (secs[i] / 60) + (secs[i] % 60 == 0 ? " min" : " min " + secs[i] % 60 + " s"); if (project.durationMs == secs[i] * 1000L) sel = i; }
+        c.addView(chips(names, sel, 4, i -> {
+            boolean respread = project.lyrics.syncedCount() > 0;
+            project.durationMs = secs[i] * 1000L;
+            if (respread) { project.lyrics.clearTimes(); autoSpread(); }
+            changed(); saveNow(); updateTransport(); tab(0);
+        }));
+        c.addView(label("No music needed. Add music with “Choose song…” below if you want sound.", 11, DIM, false));
+        addCard(page, c);
+    }
+
+    /** Promo form: the details become the video's text, one per slide. */
+    void promoCard(LinearLayout page) {
+        LinearLayout c = card();
+        c.addView(label("Event / promo details", 13, DIM, true));
+        String[] hints = {"Headline (e.g. BIG CONCERT)", "When (e.g. Saturday 14 Dec · 7 PM)", "Where (e.g. Kampala Serena)", "Contact / tickets (e.g. Call 0700 000000)", "Extra line (optional)"};
+        for (int i = 0; i < hints.length; i++) {
+            final int k = i;
+            EditText f = field(project.promo[i], hints[i]);
+            f.addTextChangedListener(watcher(v -> { project.promo[k] = v.trim(); changed(); }));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(6);
+            c.addView(f, lp);
+        }
+        c.addView(row(button("✨ Make the video text", () -> {
+            StringBuilder b = new StringBuilder();
+            for (String v : project.promo) if (v != null && !v.trim().isEmpty()) { if (b.length() > 0) b.append('\n'); b.append(v.trim()); }
+            if (b.length() == 0) { toast("Fill in at least the headline."); return; }
+            if (!project.promo[0].isEmpty() && project.title.startsWith("My event")) project.title = project.promo[0];
+            Lyrics made = Lyrics.parse(b.toString(), null);
+            replaceLyrics(made.lines);
+            autoSpread();
+            changed(); saveNow();
+            toast(made.lines.size() + " slides made. Press play to see them; restyle in Style.");
+        }, ACCENT, 0xff1a1a1a)));
+        c.addView(label("Each detail becomes one slide. Add a poster, logo or photos below; music is optional.", 11, DIM, false));
+        addCard(page, c);
     }
 
     LinearLayout.LayoutParams weighted() { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(46), 1); p.leftMargin = dp(8); return p; }
@@ -959,7 +1060,7 @@ public class MainActivity extends Activity {
 
     /** New lyrics have no times yet, so they cannot appear in the video: offer to time them now. */
     void offerTiming() {
-        if (project == null || !project.hasAudio() || project.lyrics.lines.isEmpty()) return;
+        if (project == null || !project.ready() || project.lyrics.lines.isEmpty()) return;
         boolean ai = ModelStore.ready(this);
         String[] items = {ai ? "🎧  AI listens & syncs every word (best)" : "🎧  Download the AI, then sync every word (best)", "⚡  Quick sync (instant estimate)", "Later"};
         new AlertDialog.Builder(this).setTitle("Place the lyrics in the video?")
@@ -1075,9 +1176,9 @@ public class MainActivity extends Activity {
 
     void syncTab(LinearLayout page) {
         Lyrics l = project.lyrics;
-        if (!project.hasAudio() || l.lines.isEmpty()) {
+        if (!project.ready() || l.lines.isEmpty()) {
             LinearLayout c = card();
-            c.addView(label(!project.hasAudio() ? "Choose a song first (Song tab)." : "Add lyrics first (Lyrics tab).", 16, TEXT, true));
+            c.addView(label(!project.ready() ? "Choose a song or a video length first (Song tab)." : "Add the " + textWord().toLowerCase(Locale.ROOT) + " first.", 16, TEXT, true));
             addCard(page, c);
             return;
         }
@@ -1760,9 +1861,9 @@ public class MainActivity extends Activity {
 
     void timelineTab(LinearLayout page) {
         timeline = null;
-        if (!project.hasAudio() || project.lyrics.lines.isEmpty()) {
+        if (!project.ready() || project.lyrics.lines.isEmpty()) {
             LinearLayout c = card();
-            c.addView(label(!project.hasAudio() ? "Choose a song first (Song tab)." : "Add lyrics first (Lyrics tab).", 16, TEXT, true));
+            c.addView(label(!project.ready() ? "Choose a song or a video length first (Song tab)." : "Add the " + textWord().toLowerCase(Locale.ROOT) + " first.", 16, TEXT, true));
             addCard(page, c);
             return;
         }
@@ -2152,12 +2253,24 @@ public class MainActivity extends Activity {
         player = null; prepared = false; playing = false;
     }
 
+    long silentStart = -1, silentBase;
+
     long now() {
         if (player != null && prepared) { try { return player.getCurrentPosition(); } catch (Exception ignored) {} }
+        // No song: a silent clock runs the timeline.
+        if (playing && silentStart >= 0) return Math.min(project == null ? 0 : project.durationMs, silentBase + (android.os.SystemClock.uptimeMillis() - silentStart));
         return scrub;
     }
 
     void play() {
+        if (player == null && project != null && project.silent()) {
+            if (scrub >= project.durationMs - 50) scrub = 0;
+            silentBase = scrub; silentStart = android.os.SystemClock.uptimeMillis();
+            playing = true;
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            updateTransport();
+            return;
+        }
         if (player == null || !prepared) { toast(project != null && project.hasAudio() ? "The song is still loading." : "Choose a song first."); return; }
         player.start();
         playing = true;
@@ -2168,6 +2281,7 @@ public class MainActivity extends Activity {
 
     void pause() {
         if (player != null && prepared && playing) { player.pause(); scrub = player.getCurrentPosition(); }
+        if (silentStart >= 0) { scrub = now(); silentStart = -1; }
         playing = false;
         if (backdrop != null) backdrop.follow(scrub, false);
         if (!busy) getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -2179,18 +2293,21 @@ public class MainActivity extends Activity {
     void seekTo(int ms) {
         scrub = Math.max(0, Math.min(ms, project == null ? 0 : project.durationMs));
         if (player != null && prepared) player.seekTo((int) scrub, MediaPlayer.SEEK_CLOSEST);
+        if (silentStart >= 0) { silentBase = scrub; silentStart = android.os.SystemClock.uptimeMillis(); }
         if (backdrop != null) backdrop.seek(scrub);
         highlightedRow = -2;
         updateTransport();
     }
 
-    final Runnable ticker = new Runnable() { public void run() { if (dead) return; updateClock(); tickSync(); if (backdrop != null) backdrop.follow(now(), playing); if (playing) handler.postDelayed(this, 60); } };
+    final Runnable ticker = new Runnable() { public void run() { if (dead) return;
+        if (playing && silentStart >= 0 && project != null && now() >= project.durationMs) { pause(); scrub = 0; updateTransport(); }
+        updateClock(); tickSync(); if (backdrop != null) backdrop.follow(now(), playing); if (playing) handler.postDelayed(this, 60); } };
 
     void updateTransport() {
         if (playButton == null || project == null) return;
         playButton.setText(playing ? "❚❚" : "▶");
         seek.setMax((int) Math.max(1, project.durationMs));
-        seek.setEnabled(project.hasAudio());
+        seek.setEnabled(project.ready());
         updateClock();
         if (preview != null) preview.invalidate();
         refreshOverlay();
@@ -2258,7 +2375,8 @@ public class MainActivity extends Activity {
     void exportDialog() {
         applyLyricsNow();
         pause();
-        if (!project.hasAudio()) { toast("Choose a song first."); tab(0); return; }
+        if (!project.ready()) { toast("Choose a song or a video length first."); tab(0); return; }
+        autoSpread();
         Style s = project.style;
         int synced = project.lyrics.syncedCount(), total = project.lyrics.lines.size();
         String warn = total == 0 ? "\n\n⚠ There are no lyrics yet: the video will only show the title, background and visualizer."

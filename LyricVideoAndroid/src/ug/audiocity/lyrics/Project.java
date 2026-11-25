@@ -21,6 +21,12 @@ final class Project {
     String title = "Untitled song", artist = "", audioFile, audioName;
     /** The editor's own name, credited in the watermark ("Edited by …"). */
     String editor = "";
+    /** What kind of video this is (see KINDS); the engine is the same, defaults and wording differ. */
+    int kind = 0;
+    static final int LYRICS = 0, SUBTITLES = 1, PROMO = 2, SLIDESHOW = 3, QUOTE = 4;
+    static final String[] KINDS = {"🎵 Lyric video", "💬 Subtitles", "📣 Promo / event", "🖼 Photo slideshow", "✨ Quote / message"};
+    /** Promo form: headline, when, where, contact, extra line. */
+    String[] promo = {"", "", "", "", ""};
     long durationMs;
     long updated;
     final Lyrics lyrics = new Lyrics();
@@ -70,6 +76,10 @@ final class Project {
     }
     boolean hasVideo() { File v = video(); return v != null && v.isFile(); }
     boolean hasAudio() { File a = audio(); return a != null && a.isFile() && durationMs > 0; }
+    /** A video without a song: plays on a silent clock for durationMs and exports without a sound track. */
+    boolean silent() { return audioFile == null && durationMs > 0; }
+    /** Has a timeline to place text on (a song, or a set length). */
+    boolean ready() { return hasAudio() || silent(); }
 
     static File root(File filesDir) { File f = new File(filesDir, "projects"); f.mkdirs(); return f; }
 
@@ -93,7 +103,8 @@ final class Project {
         updated = System.currentTimeMillis();
         try {
             JSONObject o = new JSONObject();
-            o.put("version", 2).put("title", title).put("artist", artist).put("editor", editor).put("durationMs", durationMs).put("updated", updated);
+            o.put("version", 2).put("title", title).put("artist", artist).put("editor", editor).put("kind", kind)
+                    .put("promo", new JSONArray(java.util.Arrays.asList(promo))).put("durationMs", durationMs).put("updated", updated);
             if (audioFile != null) o.put("audioFile", audioFile);
             if (audioName != null) o.put("audioName", audioName);
             JSONArray ls = new JSONArray();
@@ -113,7 +124,7 @@ final class Project {
                     .put("glow", s.glow).put("box", s.box).put("letterbox", s.letterbox).put("photoFit", s.photoFit).put("photoFilter", s.photoFilter)
                     .put("photoSeconds", s.photoSeconds).put("photoBlur", (double) s.photoBlur).put("cover", s.cover).put("coverPos", s.coverPos)
                     .put("coverShape", s.coverShape).put("coverSize", (double) s.coverSize).put("coverPulse", s.coverPulse).put("coverCaption", s.coverCaption).put("videoBlur", (double) s.videoBlur).put("videoFit", s.videoFit)
-                    .put("watermarkPos", s.watermarkPos).put("creditOnTitle", s.creditOnTitle));
+                    .put("watermarkPos", s.watermarkPos).put("creditOnTitle", s.creditOnTitle).put("titleHold", s.titleHold));
             File tmp = new File(dir, "project.json.tmp");
             try (OutputStream out = new FileOutputStream(tmp)) { out.write(o.toString(1).getBytes(StandardCharsets.UTF_8)); }
             if (!tmp.renameTo(new File(dir, "project.json"))) throw new IOException("Cannot save the project.");
@@ -127,6 +138,9 @@ final class Project {
             byte[] bytes = java.nio.file.Files.readAllBytes(new File(dir, "project.json").toPath());
             JSONObject o = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
             p.title = o.optString("title", p.title); p.artist = o.optString("artist", ""); p.editor = o.optString("editor", "");
+            p.kind = Math.max(0, Math.min(KINDS.length - 1, o.optInt("kind", 0)));
+            JSONArray pr = o.optJSONArray("promo");
+            if (pr != null) for (int i = 0; i < Math.min(pr.length(), p.promo.length); i++) p.promo[i] = pr.optString(i, "");
             p.audioFile = o.has("audioFile") ? o.getString("audioFile") : null; p.audioName = o.has("audioName") ? o.getString("audioName") : null;
             p.durationMs = o.optLong("durationMs", 0); p.updated = o.optLong("updated", dir.lastModified());
             JSONArray ls = o.optJSONArray("lines");
@@ -160,6 +174,7 @@ final class Project {
                 d.coverPulse = s.optBoolean("coverPulse", d.coverPulse); d.coverCaption = s.optBoolean("coverCaption", d.coverCaption);
                 d.videoBlur = (float) s.optDouble("videoBlur", d.videoBlur); d.videoFit = s.optInt("videoFit", d.videoFit);
                 d.watermarkPos = s.optInt("watermarkPos", d.watermarkPos); d.creditOnTitle = s.optBoolean("creditOnTitle", d.creditOnTitle);
+                d.titleHold = Math.max(0, s.optInt("titleHold", d.titleHold));
                 d.sanitise();
             }
         } catch (org.json.JSONException e) { throw new IOException("Damaged project file: " + e.getMessage()); }

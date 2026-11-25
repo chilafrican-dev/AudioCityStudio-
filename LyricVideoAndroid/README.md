@@ -4,6 +4,18 @@
 
 It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and installs alongside it.
 
+## What it makes
+
+A new project starts by asking *What are you making?*
+
+- **🎵 Lyric video:** a song with its lyrics, timed line by line or word by word.
+- **💬 Subtitles:** captions for a talking video, such as an interview, sermon, vlog or advert. Choose the video, then type or AI-write the captions and time them. The captions sit at the bottom in the social-caption style.
+- **📣 Promo / event:** fill in the headline, when, where and contact. *Make the video text* turns them into slides. Add a poster, photos or video; music is optional.
+- **🖼 Photo slideshow:** photos with cross-fades, a title for the first seconds and optional captions. Music is optional.
+- **✨ Quote / message:** scripture, a quote, a greeting or an announcement, typed one line per row and spread across the video. Music is optional.
+
+Without music, choose a video length (15 s to 2 min). The preview plays on a silent clock and the export has no sound track. For promos, quotes and slideshows, the text is spread evenly across the video automatically, and it can be fine-tuned on the Timeline.
+
 ## How it works
 
 1. **Song tab.** **🎬 Use a video:** start from your own music video. Its sound becomes the song and its picture the background, always in sync, and the export keeps them with the lyrics added on top. Choose an audio file (MP3, M4A/AAC, WAV, FLAC, OGG or Opus). The app copies it into the project and analyses its loudness, which drives the visualizer. Set the title and artist for the opening title card. Add background photos here too: pick one or many at once (up to 20), then tap a thumbnail to move or remove it.

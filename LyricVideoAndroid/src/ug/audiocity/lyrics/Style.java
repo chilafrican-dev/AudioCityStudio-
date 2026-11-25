@@ -85,6 +85,8 @@ public final class Style {
     public int watermarkPos = 0;
     /** Also show "Edited by …" on the opening title card. */
     public boolean creditOnTitle = false;
+    /** Title card shown only for this many ms (0 = until the first line). */
+    public int titleHold = 0;
 
     int shortSide() { return quality == 0 ? 720 : quality == 2 ? 2160 : 1080; }
     /** Output width for the chosen aspect and quality (even numbers, as encoders require). */
@@ -101,7 +103,7 @@ public final class Style {
         s.solid = solid; s.textColor = textColor; s.highlight = highlight; s.textSize = textSize; s.letterSpacing = letterSpacing; s.dim = dim;
         s.visualizer = visualizer; s.titleCard = titleCard; s.shadow = shadow; s.uppercase = uppercase; s.kenBurns = kenBurns; s.progressBar = progressBar;
         s.outline = outline; s.glow = glow; s.box = box; s.letterbox = letterbox;
-        s.photoFit = photoFit; s.photoFilter = photoFilter; s.photoSeconds = photoSeconds; s.fps = fps; s.watermarkPos = watermarkPos; s.creditOnTitle = creditOnTitle; s.photoBlur = photoBlur; s.videoBlur = videoBlur; s.videoFit = videoFit;
+        s.photoFit = photoFit; s.photoFilter = photoFilter; s.photoSeconds = photoSeconds; s.fps = fps; s.watermarkPos = watermarkPos; s.creditOnTitle = creditOnTitle; s.titleHold = titleHold; s.photoBlur = photoBlur; s.videoBlur = videoBlur; s.videoFit = videoFit;
         s.cover = cover; s.coverPulse = coverPulse; s.coverCaption = coverCaption; s.coverPos = coverPos; s.coverShape = coverShape; s.coverSize = coverSize;
         return s;
     }

@@ -144,12 +144,14 @@ final class LyricRenderer {
     private void lyricsLayer(Canvas c, int w, int h, long t, Lyrics.Frame f, float anchor, float maxW, float size) {
         // A cover with its caption already shows the title and artist, so the big title card is not repeated.
         boolean card = style.titleCard && !(style.cover && cover != null && style.coverCaption);
-        if (f.untilFirst > 0 && card) titleCard(c, w, h, t, f.untilFirst);
-        if (f.untilFirst > 0 && card && style.animation != 2) return;
+        long until = f.untilFirst;
+        if (style.titleHold > 0) until = t < style.titleHold ? Math.min(until > 0 ? until : Long.MAX_VALUE - 1, style.titleHold - t) : -1; // a short title, then the rest
+        if (until > 0 && card) titleCard(c, w, h, t, until);
+        if (until > 0 && card && style.animation != 2) return;
         if (style.animation >= 5 && style.animation != 12) exitPrevious(c, w, f, anchor, maxW, size);
         switch (style.animation) {
             case 1: fadeRise(c, w, f, anchor, maxW, size); break;
-            case 2: scrolling(c, w, f, anchor, maxW, size, f.untilFirst > 0 && card); break;
+            case 2: scrolling(c, w, f, anchor, maxW, size, until > 0 && card); break;
             case 3: typewriter(c, w, f, anchor, maxW, size); break;
             case 4: wordPop(c, w, f, anchor, maxW, size); break;
             case 5: neon(c, w, f, anchor, maxW, size); break;

@@ -297,6 +297,22 @@ public final class Lyrics {
 
     static double weight(String text) { return 10 + text.length(); }
 
+    /**
+     * Gives every line an equal slot between start and end (for promos, quotes and slideshow captions, which have no
+     * singing to follow): each line starts gap ms into its slot and ends gap ms before the next one.
+     */
+    public void spreadEvenly(long start, long end, long gap) {
+        int n = lines.size();
+        if (n == 0 || end <= start) return;
+        double slot = (end - start) / (double) n;
+        for (int i = 0; i < n; i++) {
+            Line l = lines.get(i);
+            l.start = start + Math.round(slot * i) + (i == 0 ? 0 : gap / 2);
+            l.end = Math.max(l.start + 300, start + Math.round(slot * (i + 1)) - gap / 2);
+            l.wordTimes = null;
+        }
+    }
+
     // ------------------------------------------------------------------ LRC
 
     static final Pattern TIME = Pattern.compile("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]");
