@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 out=build/test; rm -rf "$out"; mkdir -p "$out"
-javac -nowarn --release 8 -d "$out" src/ug/audiocity/lyrics/Lyrics.java src/ug/audiocity/lyrics/Style.java src/ug/audiocity/lyrics/Ctc.java src/ug/audiocity/lyrics/Audio16k.java src/ug/audiocity/lyrics/AutoTiming.java src/ug/audiocity/lyrics/WordTapper.java tests/LyricsTests.java tests/AlignTests.java
+javac -nowarn --release 8 -d "$out" src/ug/audiocity/lyrics/Lyrics.java src/ug/audiocity/lyrics/Style.java src/ug/audiocity/lyrics/Ctc.java src/ug/audiocity/lyrics/Audio16k.java src/ug/audiocity/lyrics/AutoTiming.java src/ug/audiocity/lyrics/WordTapper.java src/ug/audiocity/lyrics/ProjectBackup.java tests/LyricsTests.java tests/AlignTests.java tests/BackupTests.java
 java -ea -cp "$out" ug.audiocity.lyrics.LyricsTests
 java -ea -cp "$out" ug.audiocity.lyrics.AlignTests
+java -ea -cp "$out" ug.audiocity.lyrics.BackupTests

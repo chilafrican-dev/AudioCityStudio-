@@ -34,7 +34,7 @@ import java.util.concurrent.Executors;
 /** Audio City Lyrics: make lyric videos on the phone. Song → lyrics → tap-to-sync → style → MP4. */
 public class MainActivity extends Activity {
     static final int BG = 0xff111116, PANEL = 0xff1d1d26, PANEL2 = 0xff272733, LINE = 0xff3a3a48, TEXT = 0xfff2f2f5, DIM = 0xff9b9bab, ACCENT = 0xffffd166;
-    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7;
+    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7, REQ_BACKUP = 8, REQ_RESTORE = 9;
     /** Tab numbers stay fixed (0 Song, 1 Lyrics, 2 Sync, 3 Style, 4 Timeline); TAB_ORDER is how they are shown. */
     static final String[] TABS = {"Song", "Lyrics", "Sync", "Style", "Timeline"};
     static final int[] TAB_ORDER = {0, 1, 2, 4, 3};
@@ -247,6 +247,7 @@ public class MainActivity extends Activity {
     /** Saves right now (pending typing included): used when leaving a project and after clip changes. */
     void saveNow() {
         if (project == null) return;
+        prefs().edit().putLong("pos:" + project.dir.getName(), now()).apply();
         applyLyricsNow();
         handler.removeCallbacks(saveLater);
         saveLater.run();
@@ -289,7 +290,19 @@ public class MainActivity extends Activity {
             addCard(page, c);
         }
         if (!list.isEmpty()) page.addView(label("Long-press a project to rename, duplicate or delete it.", 12, DIM, false));
+        page.addView(heading("Keep your work safe"));
+        page.addView(row(button("⬇  Back up all projects", this::backupProjects), button("⬆  Restore a backup", () -> pick("*/*", REQ_RESTORE))));
+        page.addView(label("A backup is one file with every project (songs, lyrics, timings, photos, videos, styles). Keep it in Downloads or Google Drive; restore it after reinstalling or on a new phone.", 11, DIM, false));
         setContentView(root);
+    }
+
+    void backupProjects() {
+        if (Project.list(getFilesDir()).isEmpty()) { toast("There are no projects to back up yet."); return; }
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("application/zip");
+        i.putExtra(Intent.EXTRA_TITLE, "Lyric Video Studio backup " + new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new java.util.Date()) + ".zip");
+        try { startActivityForResult(i, REQ_BACKUP); } catch (Exception e) { error("Back up", e.getMessage()); }
     }
 
     void newProject() {
@@ -329,7 +342,7 @@ public class MainActivity extends Activity {
         releasePlayer();
         project = p;
         prefs().edit().putString("open", p.dir.getAbsolutePath()).apply();
-        scrub = 0;
+        scrub = Math.max(0, Math.min(p.durationMs, prefs().getLong("pos:" + p.dir.getName(), 0)));
         loadAssets();
         buildEditor();
         loadPlayer();
@@ -434,7 +447,9 @@ public class MainActivity extends Activity {
         content = new FrameLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
-        tab(project.hasAudio() ? (project.lyrics.lines.isEmpty() ? 1 : project.lyrics.fullySynced() ? 3 : 2) : 0);
+        // Carry on where the user stopped: the same tab and the same point in the song.
+        int lastTab = prefs().getInt("tab:" + project.dir.getName(), -1);
+        tab(lastTab >= 0 && lastTab < TABS.length ? lastTab : project.hasAudio() ? (project.lyrics.lines.isEmpty() ? 1 : project.lyrics.fullySynced() ? 3 : 2) : 0);
         updateTransport();
     }
 
@@ -495,6 +510,7 @@ public class MainActivity extends Activity {
         if (typing) setTyping(false);
         applyLyricsNow();
         tab = k;
+        if (project != null) prefs().edit().putInt("tab:" + project.dir.getName(), k).apply();
         for (int i = 0; i < tabButtons.length; i++) {
             tabButtons[i].setBackground(round(i == k ? ACCENT : PANEL2, 12));
             tabButtons[i].setTextColor(i == k ? 0xff1a1a1a : TEXT);
@@ -701,7 +717,30 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (result != RESULT_OK || data == null || project == null) return;
+        if (result != RESULT_OK || data == null) return;
+        if (request == REQ_BACKUP && data.getData() != null) {
+            final Uri uri = data.getData();
+            final int[] count = {0};
+            work("Backing up all projects…", () -> {
+                try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (o == null) throw new IOException("Cannot write the backup there.");
+                    count[0] = ProjectBackup.write(Project.root(getFilesDir()), o);
+                }
+            }, () -> toast(count[0] + " project(s) backed up ✓"));
+            return;
+        }
+        if (request == REQ_RESTORE && data.getData() != null) {
+            final Uri uri = data.getData();
+            final int[] count = {0};
+            work("Restoring projects…", () -> {
+                try (InputStream in = getContentResolver().openInputStream(uri)) {
+                    if (in == null) throw new IOException("Cannot read that file.");
+                    count[0] = ProjectBackup.read(in, Project.root(getFilesDir()));
+                }
+            }, () -> { toast(count[0] + " project(s) restored ✓"); if (project == null) home(); });
+            return;
+        }
+        if (project == null) return;
         final Project p = project;
         if (request == REQ_IMAGE) { addPhotos(p, data); return; }
         if (data.getData() == null) return;
@@ -2241,6 +2280,7 @@ public class MainActivity extends Activity {
         super.onPause();
         applyLyricsNow();
         pause();
+        if (project != null) prefs().edit().putLong("pos:" + project.dir.getName(), now()).apply();
         handler.removeCallbacks(saveLater);
         saveLater.run();
     }

@@ -61,6 +61,13 @@ The live preview at the top uses the same drawing code as the exporter, so the e
 
 Projects are saved automatically on the phone. Long-press a project on the home screen to rename, duplicate or delete it. Projects made with version 0.1 open unchanged: their single background photo becomes the first slideshow photo and their font is mapped to the closest bundled font.
 
+## Your work is kept
+
+- **Updates keep your projects.** When every build is signed with the same key (see *Signing* below), a new version installs over the old one and nothing is lost.
+- **Carry on where you stopped.** The app reopens the last project, on the same tab and at the same point in the song.
+- **Back up all projects** (home screen) writes one ZIP file with every project: songs, lyrics, timings, photos, videos, fonts and styles. **Restore a backup** brings them back after a reinstall or on a new phone, always as new projects, so nothing on the phone is overwritten.
+- Changes save by themselves.
+
 ## Build
 
 The app uses the same plain Android SDK toolchain as Audio City Studio (no Gradle).
@@ -69,7 +76,9 @@ The app uses the same plain Android SDK toolchain as Audio City Studio (no Gradl
 
 `.github/workflows/lyric-video-apk.yml` at the repository root runs on every push that changes `LyricVideoAndroid/`, and can also be run by hand (**Actions → Lyric Video Studio APK → Run workflow**). It runs the tests and builds `LyricVideoStudio.apk`, which you can download from the run's **Artifacts**.
 
-To keep the same signing key between builds, so that updates install over each other, store a base64-encoded keystore with alias `lyrics` and password `android` in a repository secret named `LYRICS_KEYSTORE_BASE64`. Without it, each CI run signs with a new key.
+### Signing
+
+To keep the same signing key between builds, so that updates install over each other, store a base64-encoded keystore with alias `lyrics` and password `android` in a repository secret named `LYRICS_KEYSTORE_BASE64` (*Settings → Secrets and variables → Actions → New repository secret*). Without it, each CI run signs with a new key, and a new build cannot be installed over an older one. The build log prints the certificate's SHA-256 fingerprint, so you can check that the same key is used every time. Keep a private copy of the keystore: if it is lost, later versions cannot update installed copies.
 
 ### Locally
 

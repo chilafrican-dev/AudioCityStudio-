@@ -43,7 +43,10 @@ jobs:
           fi
 
       - name: Build and sign the APK
-        run: ./build.sh
+        run: |
+          ./build.sh
+          echo "Signing certificate (the same fingerprint every build means updates install over the old app):"
+          keytool -printcert -jarfile LyricVideoStudio.apk | grep -i "SHA256:" || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
