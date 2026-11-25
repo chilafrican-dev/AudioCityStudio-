@@ -1,6 +1,6 @@
-# Lyric Video Studio (Audio City) for Android
+# Pearl Lyrics Video Maker — by Nico Pan Beats
 
-A standalone Android app (`ug.audiocity.lyrics`) for making lyric videos on a phone: choose a song, add the words, tap along to sync them, pick a look, and export an MP4 ready for Reels, TikTok, YouTube Shorts, WhatsApp Status or YouTube.
+**Pearl Lyrics Video Maker** (by Nico Pan Beats) is a standalone Android app (`ug.audiocity.lyrics`) for making lyric videos on a phone: choose a song, add the words, tap along to sync them, pick a look, and export an MP4 ready for Reels, TikTok, YouTube Shorts, WhatsApp Status or YouTube.
 
 It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and installs alongside it.
 
@@ -55,11 +55,15 @@ It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and in
    - **Background:** animated gradient (8 palettes), solid colour, or photos, or the cover photo blurred. Background photos have a blur slider from sharp to very soft (a smooth, Gaussian-like blur). Photos can be one photo or a cross-fading slideshow. They either fill the frame or show the whole photo on a blurred copy of itself. Colour filters: natural, black & white, warm, cool, vintage, dramatic. You can also set the slideshow timing, darkening, and slow zoom and pan.
    - **Extras:** audio visualizer, progress bar, title card.
    - **Video:** 720p, 1080p or 4K at 24, 30 or 60 fps. If the phone's encoder can't handle a size, such as 4K or 21:9 on older phones, the export uses the best size it supports.
-6. **Export video.** The app renders H.264 video with AAC audio on the phone's hardware encoder. The video is saved to **Movies/Lyric Videos**, and can then be shared or watched straight away.
+6. **Export video.** The app renders H.264 video with AAC audio on the phone's hardware encoder. The video is saved to **Movies/Pearl Lyrics**, and can then be shared or watched straight away.
 
 The live preview at the top uses the same drawing code as the exporter, so the exported video looks like the preview. Tap the preview to play or pause.
 
 Projects are saved automatically on the phone. Long-press a project on the home screen to rename, duplicate or delete it. Projects made with version 0.1 open unchanged: their single background photo becomes the first slideshow photo and their font is mapped to the closest bundled font.
+
+## Watermark and credits
+
+Every exported video carries a small watermark with a pearl icon: **Pearl Lyrics Video Maker · by Nico Pan Beats**. You choose its corner in *Style → Watermark & credits*. An editor can add their own name in the Song tab, and the watermark then also reads **Edited by …**. The app remembers the name for new projects. *Also show "Lyrics video by …" on the title card* credits the editor on the opening card too.
 
 ## Your work is kept
 
@@ -74,7 +78,7 @@ The app uses the same plain Android SDK toolchain as Audio City Studio (no Gradl
 
 ### GitHub Actions
 
-`.github/workflows/lyric-video-apk.yml` at the repository root runs on every push that changes `LyricVideoAndroid/`, and can also be run by hand (**Actions → Lyric Video Studio APK → Run workflow**). It runs the tests and builds `LyricVideoStudio.apk`, which you can download from the run's **Artifacts**.
+`.github/workflows/lyric-video-apk.yml` at the repository root runs on every push that changes `LyricVideoAndroid/`, and can also be run by hand (**Actions → Pearl Lyrics Video Maker APK → Run workflow**). It runs the tests and builds `PearlLyricsVideoMaker.apk`, which you can download from the run's **Artifacts**.
 
 ### Signing
 
@@ -87,7 +91,7 @@ Requirements: JDK 17+, Android SDK Platform 35 and Build Tools 35.0.0.
 ```bash
 export ANDROID_SDK_ROOT=/path/to/Android/Sdk
 ./run-tests.sh   # lyric timing, LRC, alignment and audio-conversion tests, plain Java
-./build.sh       # → LyricVideoStudio.apk
+./build.sh       # → PearlLyricsVideoMaker.apk
 ```
 
 Requires Android 10 (API 29) or later, with OpenGL ES 2.0 (every Android 10 phone has it).

@@ -31,7 +31,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Audio City Lyrics: make lyric videos on the phone. Song → lyrics → tap-to-sync → style → MP4. */
+/** Pearl Lyrics Video Maker, by Nico Pan Beats: make lyric videos on the phone. Song → lyrics → sync → style → MP4. */
 public class MainActivity extends Activity {
     static final int BG = 0xff111116, PANEL = 0xff1d1d26, PANEL2 = 0xff272733, LINE = 0xff3a3a48, TEXT = 0xfff2f2f5, DIM = 0xff9b9bab, ACCENT = 0xffffd166;
     static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7, REQ_BACKUP = 8, REQ_RESTORE = 9;
@@ -268,10 +268,29 @@ public class MainActivity extends Activity {
         scroll.addView(page);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
 
-        TextView brand = label("AUDIO CITY", 11, ACCENT, true); brand.setLetterSpacing(.25f); page.addView(brand);
-        TextView appName = label("Lyric Video Studio", 30, TEXT, false);
+        LinearLayout brandRow = new LinearLayout(this);
+        brandRow.setGravity(Gravity.CENTER_VERTICAL);
+        View pearl = new View(this) {
+            final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+            @Override protected void onDraw(Canvas c) {
+                float r = Math.min(getWidth(), getHeight()) / 2f, cx = getWidth() / 2f, cy = getHeight() / 2f;
+                p.setShader(new RadialGradient(cx - r * .35f, cy - r * .4f, r * 1.4f, new int[]{0xffffffff, 0xfff3eefc, 0xffd9cfee, 0xffb9b0d6}, new float[]{0, .35f, .75f, 1}, Shader.TileMode.CLAMP));
+                c.drawCircle(cx, cy, r, p);
+                p.setShader(null); p.setColor(0xccffffff);
+                c.drawCircle(cx - r * .38f, cy - r * .4f, r * .2f, p);
+            }
+        };
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(dp(52), dp(52)); pp.rightMargin = dp(12);
+        brandRow.addView(pearl, pp);
+        LinearLayout names = column();
+        TextView appName = label(Style.APP_NAME, 26, TEXT, false);
         appName.setTypeface(Fonts.get(0, null));
-        page.addView(appName);
+        names.addView(appName);
+        TextView by = label(Style.APP_BY, 14, ACCENT, false);
+        by.setTypeface(Fonts.get(16, null));
+        names.addView(by);
+        brandRow.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
+        page.addView(brandRow);
         page.addView(label("Turn any song into a lyric video: add the words, tap along to sync them, choose a look and export an MP4 for Reels, TikTok, Shorts, Status or YouTube.", 14, DIM, false));
         Button create = button("+  New lyric video", this::newProject, ACCENT, 0xff1a1a1a);
         create.setTextSize(17);
@@ -301,12 +320,17 @@ public class MainActivity extends Activity {
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("application/zip");
-        i.putExtra(Intent.EXTRA_TITLE, "Lyric Video Studio backup " + new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new java.util.Date()) + ".zip");
+        i.putExtra(Intent.EXTRA_TITLE, "Pearl Lyrics backup " + new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new java.util.Date()) + ".zip");
         try { startActivityForResult(i, REQ_BACKUP); } catch (Exception e) { error("Back up", e.getMessage()); }
     }
 
     void newProject() {
-        try { open(Project.create(getFilesDir())); tab(0); toast("Start by choosing the song."); }
+        try {
+            Project p = Project.create(getFilesDir());
+            p.editor = prefs().getString("editorName", "");
+            p.save();
+            open(p); tab(0); toast("Start by choosing the song.");
+        }
         catch (IOException e) { error("New project", e.getMessage()); }
     }
 
@@ -571,6 +595,15 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(-1, -2); lp2.topMargin = dp(8);
         info.addView(artist, lp2);
         info.addView(label("Shown before the first lyric (turn it off in Style).", 12, DIM, false));
+        EditText editorName = field(project.editor, "Your name as the editor (optional)");
+        editorName.addTextChangedListener(watcher(v -> {
+            project.editor = v.trim();
+            prefs().edit().putString("editorName", project.editor).apply(); // remembered for new projects
+            changed();
+        }));
+        LinearLayout.LayoutParams lp3 = new LinearLayout.LayoutParams(-1, -2); lp3.topMargin = dp(8);
+        info.addView(editorName, lp3);
+        info.addView(label("Credited on the video's watermark: “" + Style.APP_NAME + " · " + Style.APP_BY + " · Edited by your name”.", 12, DIM, false));
         addCard(page, info);
 
         LinearLayout cov = card();
@@ -2026,6 +2059,12 @@ public class MainActivity extends Activity {
             page.addView(toggle("Slow zoom & pan (Ken Burns)", s.kenBurns, b -> { s.kenBurns = b; changed(); }));
         }
 
+        page.addView(heading("Watermark & credits"));
+        page.addView(label("Every video carries a small “" + Style.APP_NAME + " · " + Style.APP_BY + "” mark" + (project.editor.isEmpty() ? ". Add your name in the Song tab to be credited as the editor." : ", with “Edited by " + project.editor + "”."), 12, DIM, false));
+        page.addView(label("Corner", 12, DIM, false));
+        page.addView(chips(Style.WATERMARK_POSITIONS, s.watermarkPos, 2, i -> { s.watermarkPos = i; changed(); }));
+        page.addView(toggle("Also show “Lyrics video by " + (project.editor.isEmpty() ? "your name" : project.editor) + "” on the title card", s.creditOnTitle, b -> { s.creditOnTitle = b; changed(); }));
+
         page.addView(heading("Extras"));
         page.addView(toggle("Audio visualizer (moves with the music)", s.visualizer, b -> { s.visualizer = b; changed(); }));
         page.addView(toggle("Song progress bar", s.progressBar, b -> { s.progressBar = b; changed(); }));
@@ -2177,7 +2216,7 @@ public class MainActivity extends Activity {
         long frames = project.durationMs * s.fps / 1000;
         String msg = s.width() + " × " + s.height() + "  ·  " + s.fps + " fps  ·  " + clock(project.durationMs) + "\n" + Style.ASPECTS[s.aspect] + "\n" + Style.ANIMATIONS[s.animation] + "\n\n"
                 + "About " + frames + " frames to draw. Keep the app open while it renders; expect a few minutes for a full song (faster at 720p / 30 fps"
-                + (s.quality == 2 ? "; 4K takes several times longer" : "") + "). The video is saved to Movies/Lyric Videos." + warn;
+                + (s.quality == 2 ? "; 4K takes several times longer" : "") + "). The video is saved to Movies/Pearl Lyrics." + warn;
         new AlertDialog.Builder(this).setTitle("Export MP4").setMessage(msg).setNegativeButton("Cancel", null).setPositiveButton("Render video", (d, w) -> render()).show();
     }
 
@@ -2242,7 +2281,7 @@ public class MainActivity extends Activity {
         ContentValues v = new ContentValues();
         v.put(MediaStore.Video.Media.DISPLAY_NAME, name);
         v.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
-        v.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Lyric Videos");
+        v.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Pearl Lyrics");
         v.put(MediaStore.Video.Media.IS_PENDING, 1);
         Uri collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
         Uri uri = getContentResolver().insert(collection, v);
@@ -2259,7 +2298,7 @@ public class MainActivity extends Activity {
     }
 
     void done(Uri video, long took) {
-        new AlertDialog.Builder(this).setTitle("Lyric video ready 🎬").setMessage("Saved to Movies/Lyric Videos in " + clock(took) + ".")
+        new AlertDialog.Builder(this).setTitle("Lyric video ready 🎬").setMessage("Saved to Movies/Pearl Lyrics in " + clock(took) + ".")
                 .setNegativeButton("Close", null)
                 .setNeutralButton("Watch", (d, w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(video, "video/mp4").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)); } catch (Exception e) { toast("No video player found."); } })
                 .setPositiveButton("Share", (d, w) -> {

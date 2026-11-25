@@ -19,6 +19,8 @@ final class Project {
 
     File dir;
     String title = "Untitled song", artist = "", audioFile, audioName;
+    /** The editor's own name, credited in the watermark ("Edited by …"). */
+    String editor = "";
     long durationMs;
     long updated;
     final Lyrics lyrics = new Lyrics();
@@ -91,7 +93,7 @@ final class Project {
         updated = System.currentTimeMillis();
         try {
             JSONObject o = new JSONObject();
-            o.put("version", 2).put("title", title).put("artist", artist).put("durationMs", durationMs).put("updated", updated);
+            o.put("version", 2).put("title", title).put("artist", artist).put("editor", editor).put("durationMs", durationMs).put("updated", updated);
             if (audioFile != null) o.put("audioFile", audioFile);
             if (audioName != null) o.put("audioName", audioName);
             JSONArray ls = new JSONArray();
@@ -110,7 +112,8 @@ final class Project {
                     .put("progressBar", s.progressBar).put("fps", s.fps).put("letterSpacing", (double) s.letterSpacing).put("outline", s.outline)
                     .put("glow", s.glow).put("box", s.box).put("letterbox", s.letterbox).put("photoFit", s.photoFit).put("photoFilter", s.photoFilter)
                     .put("photoSeconds", s.photoSeconds).put("photoBlur", (double) s.photoBlur).put("cover", s.cover).put("coverPos", s.coverPos)
-                    .put("coverShape", s.coverShape).put("coverSize", (double) s.coverSize).put("coverPulse", s.coverPulse).put("coverCaption", s.coverCaption).put("videoBlur", (double) s.videoBlur).put("videoFit", s.videoFit));
+                    .put("coverShape", s.coverShape).put("coverSize", (double) s.coverSize).put("coverPulse", s.coverPulse).put("coverCaption", s.coverCaption).put("videoBlur", (double) s.videoBlur).put("videoFit", s.videoFit)
+                    .put("watermarkPos", s.watermarkPos).put("creditOnTitle", s.creditOnTitle));
             File tmp = new File(dir, "project.json.tmp");
             try (OutputStream out = new FileOutputStream(tmp)) { out.write(o.toString(1).getBytes(StandardCharsets.UTF_8)); }
             if (!tmp.renameTo(new File(dir, "project.json"))) throw new IOException("Cannot save the project.");
@@ -123,7 +126,7 @@ final class Project {
         try {
             byte[] bytes = java.nio.file.Files.readAllBytes(new File(dir, "project.json").toPath());
             JSONObject o = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
-            p.title = o.optString("title", p.title); p.artist = o.optString("artist", "");
+            p.title = o.optString("title", p.title); p.artist = o.optString("artist", ""); p.editor = o.optString("editor", "");
             p.audioFile = o.has("audioFile") ? o.getString("audioFile") : null; p.audioName = o.has("audioName") ? o.getString("audioName") : null;
             p.durationMs = o.optLong("durationMs", 0); p.updated = o.optLong("updated", dir.lastModified());
             JSONArray ls = o.optJSONArray("lines");
@@ -156,6 +159,7 @@ final class Project {
                 d.coverShape = s.optInt("coverShape", d.coverShape); d.coverSize = (float) s.optDouble("coverSize", d.coverSize);
                 d.coverPulse = s.optBoolean("coverPulse", d.coverPulse); d.coverCaption = s.optBoolean("coverCaption", d.coverCaption);
                 d.videoBlur = (float) s.optDouble("videoBlur", d.videoBlur); d.videoFit = s.optInt("videoFit", d.videoFit);
+                d.watermarkPos = s.optInt("watermarkPos", d.watermarkPos); d.creditOnTitle = s.optBoolean("creditOnTitle", d.creditOnTitle);
                 d.sanitise();
             }
         } catch (org.json.JSONException e) { throw new IOException("Damaged project file: " + e.getMessage()); }

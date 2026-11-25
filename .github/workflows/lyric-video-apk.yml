@@ -1,4 +1,4 @@
-name: Lyric Video Studio APK
+name: Pearl Lyrics Video Maker APK
 
 on:
   push:
@@ -46,11 +46,11 @@ jobs:
         run: |
           ./build.sh
           echo "Signing certificate (the same fingerprint every build means updates install over the old app):"
-          keytool -printcert -jarfile LyricVideoStudio.apk | grep -i "SHA256:" || true
+          keytool -printcert -jarfile PearlLyricsVideoMaker.apk | grep -i "SHA256:" || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LyricVideoStudio-apk
-          path: LyricVideoAndroid/LyricVideoStudio.apk
+          name: PearlLyricsVideoMaker-apk
+          path: LyricVideoAndroid/PearlLyricsVideoMaker.apk
           retention-days: 30

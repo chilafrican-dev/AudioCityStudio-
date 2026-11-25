@@ -384,7 +384,7 @@ public final class Lyrics {
         StringBuilder b = new StringBuilder();
         if (title != null && !title.isEmpty()) b.append("[ti:").append(title).append("]\n");
         if (artist != null && !artist.isEmpty()) b.append("[ar:").append(artist).append("]\n");
-        b.append("[re:Audio City Lyrics]\n");
+        b.append("[re:Pearl Lyrics Video Maker by Nico Pan Beats]\n");
         for (Line l : lines) {
             if (l.start >= 0) b.append('[').append(stamp(l.start)).append(']');
             if (l.wordTimed()) {

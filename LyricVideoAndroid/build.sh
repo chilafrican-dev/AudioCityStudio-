@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and signs LyricVideoStudio.apk with the plain Android SDK tools (no Gradle).
+# Builds and signs PearlLyricsVideoMaker.apk with the plain Android SDK tools (no Gradle).
 set -euo pipefail
 cd "$(dirname "$0")"
 : "${ANDROID_SDK_ROOT:?Set ANDROID_SDK_ROOT to your Android SDK directory}"
@@ -28,8 +28,8 @@ cp build/base.apk build/unsigned.apk
 (cd build && zip -qr unsigned.apk lib)
 "$tools/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
 if [ ! -f build/release.keystore ]; then
-  keytool -genkeypair -keystore build/release.keystore -storepass android -keypass android -alias lyrics -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Audio City Lyric Video Studio' >/dev/null 2>&1
+  keytool -genkeypair -keystore build/release.keystore -storepass android -keypass android -alias lyrics -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Pearl Lyrics Video Maker by Nico Pan Beats' >/dev/null 2>&1
 fi
-"$tools/apksigner" sign --ks build/release.keystore --ks-key-alias lyrics --ks-pass pass:android --key-pass pass:android --out LyricVideoStudio.apk build/aligned.apk
-"$tools/apksigner" verify LyricVideoStudio.apk
-echo "Built $(pwd)/LyricVideoStudio.apk"
+"$tools/apksigner" sign --ks build/release.keystore --ks-key-alias lyrics --ks-pass pass:android --key-pass pass:android --out PearlLyricsVideoMaker.apk build/aligned.apk
+"$tools/apksigner" verify PearlLyricsVideoMaker.apk
+echo "Built $(pwd)/PearlLyricsVideoMaker.apk"

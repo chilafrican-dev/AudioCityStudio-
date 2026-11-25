@@ -13,7 +13,7 @@ import java.util.Locale;
 final class LyricRenderer {
     Lyrics lyrics = new Lyrics();
     Style style = new Style();
-    String title = "", artist = "";
+    String title = "", artist = "", editor = "";
     float[] envelope = new float[0];
     long duration;
     PhotoSet photos = new PhotoSet(null, 1080);
@@ -47,14 +47,14 @@ final class LyricRenderer {
 
     /** Points the renderer at a project's current data (for the live preview). */
     void bind(Project p) {
-        lyrics = p.lyrics; style = p.style; title = p.title; artist = p.artist; envelope = p.envelope; duration = p.durationMs;
+        lyrics = p.lyrics; style = p.style; title = p.title; artist = p.artist; editor = p.editor; envelope = p.envelope; duration = p.durationMs;
     }
 
     /** Independent copy for rendering on a background thread while the project keeps changing. */
     static LyricRenderer snapshot(Project p, PhotoSet photos, Typeface custom, Bitmap cover) {
         LyricRenderer r = new LyricRenderer();
         for (Lyrics.Line l : p.lyrics.lines) r.lyrics.lines.add(new Lyrics.Line(l.text, l.start));
-        r.style = p.style.copy(); r.title = p.title; r.artist = p.artist; r.envelope = p.envelope.clone(); r.duration = p.durationMs;
+        r.style = p.style.copy(); r.title = p.title; r.artist = p.artist; r.editor = p.editor; r.envelope = p.envelope.clone(); r.duration = p.durationMs;
         r.photos = photos; r.custom = custom; r.cover = cover;
         return r;
     }
@@ -100,6 +100,46 @@ final class LyricRenderer {
         c.save();
         c.translate(lx - w / 2f, 0);
         try { lyricsLayer(c, w, h, t, f, anchor, maxW, size); } finally { c.restore(); }
+        watermark(c, w, h, bar);
+    }
+
+    // ------------------------------------------------------------------ watermark
+
+    private final Paint mark = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    /** "Pearl Lyrics Video Maker · by Nico Pan Beats" (and the editor's name) in a corner of every frame. */
+    void watermark(Canvas c, int w, int h, float bar) {
+        String l1 = Style.APP_NAME, l2 = Style.APP_BY, l3 = editor == null || editor.trim().isEmpty() ? null : "Edited by " + editor.trim();
+        float s1 = 21 * u, s2 = 17 * u, gap = 4 * u, pad = 12 * u, icon = 34 * u;
+        mark.setTypeface(Fonts.get(0, null));
+        mark.setTextSize(s1); float w1 = mark.measureText(l1);
+        mark.setTypeface(Fonts.get(1, null));
+        mark.setTextSize(s2); float w2 = mark.measureText(l2), w3 = l3 == null ? 0 : mark.measureText(l3);
+        float textW = Math.max(w1, Math.max(w2, w3)), boxW = pad + icon + 9 * u + textW + pad;
+        float boxH = pad + s1 + gap + s2 + (l3 == null ? 0 : gap + s2) + pad * .8f;
+        int pos = style.watermarkPos;
+        float margin = 26 * u;
+        boolean top = pos < 2, right = pos == 0 || pos == 2;
+        float x = right ? w - margin - boxW : margin;
+        float y = top ? Math.max(margin, bar + 12 * u) : h - Math.max(margin, bar + 12 * u) - boxH;
+        // Bottom corners sit above the progress bar and the visualizer.
+        if (!top) y = Math.min(y, h - (style.progressBar ? 70 : 30) * u - boxH);
+        mark.setColor(0x59000000);
+        rect.set(x, y, x + boxW, y + boxH);
+        c.drawRoundRect(rect, boxH / 2.6f, boxH / 2.6f, mark);
+        // The pearl: a soft, iridescent sphere with a highlight.
+        float cx = x + pad + icon / 2, cy = y + boxH / 2, r = icon / 2;
+        mark.setShader(new RadialGradient(cx - r * .35f, cy - r * .4f, r * 1.4f, new int[]{0xffffffff, 0xfff3eefc, 0xffd9cfee, 0xffb9b0d6}, new float[]{0, .35f, .75f, 1}, Shader.TileMode.CLAMP));
+        c.drawCircle(cx, cy, r, mark);
+        mark.setShader(null);
+        mark.setColor(0xccffffff);
+        c.drawCircle(cx - r * .38f, cy - r * .4f, r * .2f, mark);
+        float tx = x + pad + icon + 9 * u, ty = y + pad + s1 * .85f;
+        mark.setTypeface(Fonts.get(0, null)); mark.setTextSize(s1); mark.setColor(0xe6ffffff);
+        c.drawText(l1, tx, ty, mark);
+        mark.setTypeface(Fonts.get(1, null)); mark.setTextSize(s2); mark.setColor(0xccffe9b0);
+        c.drawText(l2, tx, ty + gap + s2, mark);
+        if (l3 != null) { mark.setColor(0xb3ffffff); c.drawText(l3, tx, ty + 2 * (gap + s2), mark); }
     }
 
     private void lyricsLayer(Canvas c, int w, int h, long t, Lyrics.Frame f, float anchor, float maxW, float size) {
@@ -425,11 +465,19 @@ final class LyricRenderer {
         float y = top + rows.size() * lh + 22 * u + rise;
         fill.setColor(applyAlpha(style.highlight, alpha));
         rect.set(w / 2f - 60 * u, y, w / 2f + 60 * u, y + 7 * u); c.drawRoundRect(rect, 4 * u, 4 * u, fill);
+        float below = y + 40 * u;
         if (artist != null && !artist.trim().isEmpty()) {
             paint(50 * u, style.highlight, alpha);
             ArrayList<String> arRows = fit(artist.trim(), maxW, 50 * u, 2);
             float s = text.getTextSize();
             for (int r = 0; r < arRows.size(); r++) glyphs(c, arRows.get(r), w / 2f - text.measureText(arRows.get(r)) / 2, y + 40 * u + s + r * s * 1.15f, style.highlight, alpha);
+            below = y + 40 * u + s * 1.15f * arRows.size();
+        }
+        if (style.creditOnTitle && editor != null && !editor.trim().isEmpty()) {
+            String credit = "Lyrics video by " + editor.trim();
+            paint(32 * u, style.textColor, alpha * .85f);
+            fitRow(credit, maxW, 32 * u);
+            glyphs(c, credit, w / 2f - text.measureText(credit) / 2, below + 50 * u, style.textColor, alpha * .85f);
         }
     }
 

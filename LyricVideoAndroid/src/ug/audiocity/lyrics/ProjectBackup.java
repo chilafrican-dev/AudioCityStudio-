@@ -21,7 +21,7 @@ final class ProjectBackup {
         File[] dirs = root.listFiles(File::isDirectory);
         try (ZipOutputStream zip = new ZipOutputStream(new BufferedOutputStream(target))) {
             zip.putNextEntry(new ZipEntry(MARK));
-            zip.write("Lyric Video Studio projects backup, format 1\n".getBytes("UTF-8"));
+            zip.write("Pearl Lyrics Video Maker projects backup, format 1\n".getBytes("UTF-8"));
             zip.closeEntry();
             byte[] buf = new byte[1 << 16];
             if (dirs != null) for (File d : dirs) {
@@ -89,7 +89,7 @@ final class ProjectBackup {
             if (new File(d, "project.json").isFile()) n++;
             else { File[] f = d.listFiles(); if (f != null) for (File x : f) x.delete(); d.delete(); }
         }
-        if (!marked && n == 0) throw new IOException("That file is not a Lyric Video Studio backup.");
+        if (!marked && n == 0) throw new IOException("That file is not a Pearl Lyrics Video Maker backup.");
         return n;
     }
 }

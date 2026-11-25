@@ -35,6 +35,8 @@ public final class Style {
 
     public static final String[] BACKGROUNDS = {"Animated gradient", "Solid colour", "Photos", "Cover, blurred", "Video"};
     public static final String[] COVER_POSITIONS = {"Left", "Centre", "Right", "Top"};
+    public static final String[] WATERMARK_POSITIONS = {"Top right", "Top left", "Bottom right", "Bottom left"};
+    public static final String APP_NAME = "Pearl Lyrics Video Maker", APP_BY = "by Nico Pan Beats";
     public static final String[] COVER_SHAPES = {"Square", "Rounded", "Circle", "Vinyl record"};
     public static final String[] PALETTE_NAMES = {"Midnight", "Sunset", "Ocean", "Neon", "Forest", "Ember", "Rose gold", "Mono"};
     public static final int[][] PALETTES = {
@@ -79,6 +81,10 @@ public final class Style {
     /** Cover size as a share of the frame's short side, 0.25–0.7. */
     public float coverSize = .46f;
     public int fps = 30;
+    /** Corner of the app watermark (always shown): see WATERMARK_POSITIONS. */
+    public int watermarkPos = 0;
+    /** Also show "Edited by …" on the opening title card. */
+    public boolean creditOnTitle = false;
 
     int shortSide() { return quality == 0 ? 720 : quality == 2 ? 2160 : 1080; }
     /** Output width for the chosen aspect and quality (even numbers, as encoders require). */
@@ -95,7 +101,7 @@ public final class Style {
         s.solid = solid; s.textColor = textColor; s.highlight = highlight; s.textSize = textSize; s.letterSpacing = letterSpacing; s.dim = dim;
         s.visualizer = visualizer; s.titleCard = titleCard; s.shadow = shadow; s.uppercase = uppercase; s.kenBurns = kenBurns; s.progressBar = progressBar;
         s.outline = outline; s.glow = glow; s.box = box; s.letterbox = letterbox;
-        s.photoFit = photoFit; s.photoFilter = photoFilter; s.photoSeconds = photoSeconds; s.fps = fps; s.photoBlur = photoBlur; s.videoBlur = videoBlur; s.videoFit = videoFit;
+        s.photoFit = photoFit; s.photoFilter = photoFilter; s.photoSeconds = photoSeconds; s.fps = fps; s.watermarkPos = watermarkPos; s.creditOnTitle = creditOnTitle; s.photoBlur = photoBlur; s.videoBlur = videoBlur; s.videoFit = videoFit;
         s.cover = cover; s.coverPulse = coverPulse; s.coverCaption = coverCaption; s.coverPos = coverPos; s.coverShape = coverShape; s.coverSize = coverSize;
         return s;
     }
@@ -113,6 +119,7 @@ public final class Style {
         photoBlur = Math.max(0, Math.min(1, Float.isNaN(photoBlur) ? 0 : photoBlur));
         videoBlur = Math.max(0, Math.min(1, Float.isNaN(videoBlur) ? 0 : videoBlur));
         videoFit = clampIndex(videoFit, VIDEO_FITS.length);
+        watermarkPos = clampIndex(watermarkPos, WATERMARK_POSITIONS.length);
         coverPos = clampIndex(coverPos, COVER_POSITIONS.length); coverShape = clampIndex(coverShape, COVER_SHAPES.length);
         coverSize = Math.max(.25f, Math.min(.7f, Float.isNaN(coverSize) ? .46f : coverSize));
     }

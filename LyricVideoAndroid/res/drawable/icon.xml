@@ -1,7 +1,17 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#FF16161D" android:pathData="M24,8h60a16,16 0 0 1 16,16v60a16,16 0 0 1 -16,16h-60a16,16 0 0 1 -16,-16v-60a16,16 0 0 1 16,-16z"/>
-    <path android:fillColor="#FFFFD166" android:pathData="M26,34h56a4,4 0 0 1 0,8h-56a4,4 0 0 1 0,-8z"/>
-    <path android:fillColor="#66FFFFFF" android:pathData="M26,50h40a4,4 0 0 1 0,8h-40a4,4 0 0 1 0,-8z"/>
-    <path android:fillColor="#33FFFFFF" android:pathData="M26,66h48a4,4 0 0 1 0,8h-48a4,4 0 0 1 0,-8z"/>
-    <path android:fillColor="#FFFFD166" android:pathData="M72,58l16,10l-16,10z"/>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Pearl Lyrics Video Maker, by Nico Pan Beats: a pearl over lyric lines on a deep night background. -->
+    <path android:fillColor="#FF14121F" android:pathData="M24,8h60a16,16 0 0 1 16,16v60a16,16 0 0 1 -16,16h-60a16,16 0 0 1 -16,-16v-60a16,16 0 0 1 16,-16z"/>
+    <path android:fillColor="#FFFFD166" android:pathData="M26,70h56a3.5,3.5 0 0 1 0,7h-56a3.5,3.5 0 0 1 0,-7z"/>
+    <path android:fillColor="#66FFFFFF" android:pathData="M34,82h40a3,3 0 0 1 0,6h-40a3,3 0 0 1 0,-6z"/>
+    <path android:pathData="M54,20a22,22 0 1 1 -0.01,0z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="46" android:centerY="32" android:gradientRadius="30">
+                <item android:offset="0" android:color="#FFFFFFFF"/>
+                <item android:offset="0.4" android:color="#FFF3EEFC"/>
+                <item android:offset="0.8" android:color="#FFD9CFEE"/>
+                <item android:offset="1" android:color="#FFB9B0D6"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#CCFFFFFF" android:pathData="M46,29a4.5,4.5 0 1 1 -0.01,0z"/>
 </vector>
