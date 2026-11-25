@@ -70,6 +70,9 @@ public final class Style {
     public float photoBlur = 0f;
     /** Background video blur, 0 (sharp) to 1 (soft). */
     public float videoBlur = 0f;
+    /** 0 = video fills the frame (cropped); 1 = whole video in the middle over a blurred copy of itself. */
+    public int videoFit = 0;
+    public static final String[] VIDEO_FITS = {"Fill frame", "Whole video + blur"};
     /** Square cover photo on top of the background. */
     public boolean cover = false, coverPulse = true, coverCaption = true;
     public int coverPos = 0, coverShape = 1;
@@ -92,7 +95,7 @@ public final class Style {
         s.solid = solid; s.textColor = textColor; s.highlight = highlight; s.textSize = textSize; s.letterSpacing = letterSpacing; s.dim = dim;
         s.visualizer = visualizer; s.titleCard = titleCard; s.shadow = shadow; s.uppercase = uppercase; s.kenBurns = kenBurns; s.progressBar = progressBar;
         s.outline = outline; s.glow = glow; s.box = box; s.letterbox = letterbox;
-        s.photoFit = photoFit; s.photoFilter = photoFilter; s.photoSeconds = photoSeconds; s.fps = fps; s.photoBlur = photoBlur; s.videoBlur = videoBlur;
+        s.photoFit = photoFit; s.photoFilter = photoFilter; s.photoSeconds = photoSeconds; s.fps = fps; s.photoBlur = photoBlur; s.videoBlur = videoBlur; s.videoFit = videoFit;
         s.cover = cover; s.coverPulse = coverPulse; s.coverCaption = coverCaption; s.coverPos = coverPos; s.coverShape = coverShape; s.coverSize = coverSize;
         return s;
     }
@@ -109,6 +112,7 @@ public final class Style {
         if (fps != 24 && fps != 30 && fps != 60) fps = 30;
         photoBlur = Math.max(0, Math.min(1, Float.isNaN(photoBlur) ? 0 : photoBlur));
         videoBlur = Math.max(0, Math.min(1, Float.isNaN(videoBlur) ? 0 : videoBlur));
+        videoFit = clampIndex(videoFit, VIDEO_FITS.length);
         coverPos = clampIndex(coverPos, COVER_POSITIONS.length); coverShape = clampIndex(coverShape, COVER_SHAPES.length);
         coverSize = Math.max(.25f, Math.min(.7f, Float.isNaN(coverSize) ? .46f : coverSize));
     }

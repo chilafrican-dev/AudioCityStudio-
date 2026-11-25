@@ -109,7 +109,7 @@ final class Project {
                     .put("progressBar", s.progressBar).put("fps", s.fps).put("letterSpacing", (double) s.letterSpacing).put("outline", s.outline)
                     .put("glow", s.glow).put("box", s.box).put("letterbox", s.letterbox).put("photoFit", s.photoFit).put("photoFilter", s.photoFilter)
                     .put("photoSeconds", s.photoSeconds).put("photoBlur", (double) s.photoBlur).put("cover", s.cover).put("coverPos", s.coverPos)
-                    .put("coverShape", s.coverShape).put("coverSize", (double) s.coverSize).put("coverPulse", s.coverPulse).put("coverCaption", s.coverCaption).put("videoBlur", (double) s.videoBlur));
+                    .put("coverShape", s.coverShape).put("coverSize", (double) s.coverSize).put("coverPulse", s.coverPulse).put("coverCaption", s.coverCaption).put("videoBlur", (double) s.videoBlur).put("videoFit", s.videoFit));
             File tmp = new File(dir, "project.json.tmp");
             try (OutputStream out = new FileOutputStream(tmp)) { out.write(o.toString(1).getBytes(StandardCharsets.UTF_8)); }
             if (!tmp.renameTo(new File(dir, "project.json"))) throw new IOException("Cannot save the project.");
@@ -153,7 +153,7 @@ final class Project {
                 d.photoBlur = (float) s.optDouble("photoBlur", d.photoBlur); d.cover = s.optBoolean("cover", d.cover); d.coverPos = s.optInt("coverPos", d.coverPos);
                 d.coverShape = s.optInt("coverShape", d.coverShape); d.coverSize = (float) s.optDouble("coverSize", d.coverSize);
                 d.coverPulse = s.optBoolean("coverPulse", d.coverPulse); d.coverCaption = s.optBoolean("coverCaption", d.coverCaption);
-                d.videoBlur = (float) s.optDouble("videoBlur", d.videoBlur);
+                d.videoBlur = (float) s.optDouble("videoBlur", d.videoBlur); d.videoFit = s.optInt("videoFit", d.videoFit);
                 d.sanitise();
             }
         } catch (org.json.JSONException e) { throw new IOException("Damaged project file: " + e.getMessage()); }

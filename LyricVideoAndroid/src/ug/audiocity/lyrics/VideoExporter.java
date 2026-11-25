@@ -231,7 +231,7 @@ final class VideoExporter {
                     GLES20.glClearColor(0, 0, 0, 1);
                     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
                     video.advanceTo(t);
-                    video.draw(w, h, videoQuad, videoFilter, r.style.videoBlur);
+                    video.draw(w, h, videoQuad, videoFilter, r.style.videoBlur, r.style.videoFit);
                     GLES20.glEnable(GLES20.GL_BLEND);
                     GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA); // the overlay is premultiplied
                 }

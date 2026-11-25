@@ -31,6 +31,7 @@ It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and in
      - Add it in the Song tab; any picture is centre-cropped to a square. One tap uses it as a blurred background too.
    - **Video background:** choose any video on the phone (Song tab).
      - It plays silently behind the lyrics and loops to the length of the song; your song is the only sound.
+     - **Layout:** *Fill frame* (cropped), or *Whole video + blur*: the whole clip sharp in the middle over a blurred, darker copy of itself. Use it to show a landscape clip in a 9:16 video, or a vertical clip in 16:9, without cropping.
      - Darkening, blur and colour filter apply to it. The blur shows in the preview on Android 12 and newer, and always in the export.
      - In the export, each video frame is decoded by the phone's video decoder straight onto the graphics chip, and the lyrics, cover and other layers are blended over it.
    - **Background:** animated gradient (8 palettes), solid colour, or photos, or the cover photo blurred. Background photos have a blur slider from sharp to very soft (a smooth, Gaussian-like blur). Photos can be one photo or a cross-fading slideshow. They either fill the frame or show the whole photo on a blurred copy of itself. Colour filters: natural, black & white, warm, cool, vintage, dramatic. You can also set the slideshow timing, darkening, and slow zoom and pan.

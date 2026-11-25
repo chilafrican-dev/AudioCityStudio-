@@ -35,20 +35,22 @@ final class VideoLayer implements AutoCloseable {
     private long heldPts, shownPts = -1;
     final long durationUs;
     final int width, height; // as displayed (rotation applied)
-    private final int tex, program, aPos, aTex, uST, uCrop, uColor, uOffset, uBlur, uTexel;
+    private final int tex, program, aPos, aTex, uST, uCrop, uColor, uOffset, uBlur, uTexel, uBright;
     private final float[] st = new float[16];
 
     static final String VERTEX = "attribute vec4 aPos; attribute vec2 aTex; uniform mat4 uST; uniform vec2 uCrop; varying vec2 vTex;"
             + "void main(){ gl_Position = aPos; vec2 t = vec2(0.5) + (aTex - vec2(0.5)) * uCrop; vTex = (uST * vec4(t, 0.0, 1.0)).xy; }";
-    // 17-tap disc blur (two rings) when uBlur > 0, then a colour matrix.
+    // 25-tap disc blur (three rings, turned against each other) when uBlur > 0, then a colour matrix and brightness.
     static final String FRAGMENT = "#extension GL_OES_EGL_image_external : require\n"
-            + "precision mediump float; varying vec2 vTex; uniform samplerExternalOES uTex; uniform mat4 uColor; uniform vec4 uOffset; uniform float uBlur; uniform vec2 uTexel;"
+            + "precision mediump float; varying vec2 vTex; uniform samplerExternalOES uTex; uniform mat4 uColor; uniform vec4 uOffset; uniform float uBlur; uniform vec2 uTexel; uniform float uBright;"
             + "void main(){ vec4 c = texture2D(uTex, vTex);"
             + " if (uBlur > 0.0) { vec2 d = uTexel * uBlur; c *= 0.0;"
-            + "  for (int i = 0; i < 8; i++) { float a = float(i) * 0.785398; vec2 o = vec2(cos(a), sin(a));"
-            + "   c += texture2D(uTex, vTex + o * d) + texture2D(uTex, vTex + o * d * 0.5) * 1.3; }"
-            + "  c = (c + texture2D(uTex, vTex) * 1.6) / (8.0 * 2.3 + 1.6); }"
-            + " gl_FragColor = vec4(clamp((uColor * vec4(c.rgb, 1.0)).rgb + uOffset.rgb, 0.0, 1.0), 1.0); }";
+            + "  for (int i = 0; i < 8; i++) { float a = float(i) * 0.785398;"
+            + "   c += texture2D(uTex, vTex + vec2(cos(a), sin(a)) * d) * 0.7"
+            + "      + texture2D(uTex, vTex + vec2(cos(a + 0.3927), sin(a + 0.3927)) * d * 0.66)"
+            + "      + texture2D(uTex, vTex + vec2(cos(a + 0.1963), sin(a + 0.1963)) * d * 0.33) * 1.3; }"
+            + "  c = (c + texture2D(uTex, vTex) * 1.5) / (8.0 * 3.0 + 1.5); }"
+            + " gl_FragColor = vec4(clamp((uColor * vec4(c.rgb, 1.0)).rgb + uOffset.rgb, 0.0, 1.0) * uBright, 1.0); }";
 
     VideoLayer(File file) throws IOException {
         extractor.setDataSource(file.getAbsolutePath());
@@ -93,6 +95,7 @@ final class VideoLayer implements AutoCloseable {
         uOffset = GLES20.glGetUniformLocation(program, "uOffset");
         uBlur = GLES20.glGetUniformLocation(program, "uBlur");
         uTexel = GLES20.glGetUniformLocation(program, "uTexel");
+        uBright = GLES20.glGetUniformLocation(program, "uBright");
         android.opengl.Matrix.setIdentityM(st, 0);
     }
 
@@ -148,11 +151,24 @@ final class VideoLayer implements AutoCloseable {
         inputDone = false; outputDone = false; shownPts = -1;
     }
 
-    /** Draws the current frame centre-cropped to a frame of size w×h. */
-    void draw(int w, int h, FloatBuffer quad, ColorMatrix filter, float blur) {
-        GLES20.glUseProgram(program);
+    /**
+     * Draws the current frame for a w×h picture: fit 0 fills it (centre-cropped); fit 1 fills it with a blurred, darker
+     * copy and then shows the whole video sharp in the middle.
+     */
+    void draw(int w, int h, FloatBuffer quad, ColorMatrix filter, float blur, int fit) {
         float va = width / (float) height, fa = w / (float) h;
-        GLES20.glUniform2f(uCrop, va > fa ? fa / va : 1f, va > fa ? 1f : va / fa);
+        if (fit == 0) { pass(w, h, quad, filter, blur, va > fa ? fa / va : 1f, va > fa ? 1f : va / fa, 1f); return; }
+        pass(w, h, quad, filter, Math.max(.75f, blur), va > fa ? fa / va : 1f, va > fa ? 1f : va / fa, .62f);
+        int fw = va > fa ? w : Math.round(h * va), fh = va > fa ? Math.round(w / va) : h;
+        GLES20.glViewport((w - fw) / 2, (h - fh) / 2, fw, fh);
+        pass(fw, fh, quad, filter, blur * .35f, 1f, 1f, 1f);
+        GLES20.glViewport(0, 0, w, h);
+    }
+
+    private void pass(int w, int h, FloatBuffer quad, ColorMatrix filter, float blur, float cropX, float cropY, float bright) {
+        GLES20.glUseProgram(program);
+        GLES20.glUniform2f(uCrop, cropX, cropY);
+        GLES20.glUniform1f(uBright, bright);
         GLES20.glUniformMatrix4fv(uST, 1, false, st, 0);
         float[] m = filter == null ? new ColorMatrix().getArray() : filter.getArray();
         // Android's 4×5 row-major matrix (offsets 0..255) → GLSL column-major mat4 + offset.

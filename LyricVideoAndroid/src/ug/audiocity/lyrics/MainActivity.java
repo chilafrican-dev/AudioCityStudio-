@@ -350,7 +350,8 @@ public class MainActivity extends Activity {
         FrameLayout previewBox = new FrameLayout(this);
         if (backdrop != null) backdrop.release();
         backdrop = new VideoBackdrop(this);
-        previewBox.addView(backdrop.view, new FrameLayout.LayoutParams(1, 1));
+        previewBox.addView(backdrop.soft.view, new FrameLayout.LayoutParams(1, 1));
+        previewBox.addView(backdrop.main.view, new FrameLayout.LayoutParams(1, 1));
         previewBox.addView(preview, new FrameLayout.LayoutParams(-1, -1));
         root.addView(previewBox, new LinearLayout.LayoutParams(-1, h));
         syncBackdrop();
@@ -419,7 +420,7 @@ public class MainActivity extends Activity {
     /** Shows or hides the preview's background video and applies its filter and blur. */
     void syncBackdrop() {
         if (backdrop == null || project == null) return;
-        backdrop.setVideo(videoMode() ? project.video() : null);
+        backdrop.setVideo(videoMode() ? project.video() : null, project.style.videoFit);
         backdrop.look(LyricRenderer.colorMatrix(project.style.photoFilter), project.style.videoBlur);
         backdrop.seek(now());
     }
@@ -1462,6 +1463,9 @@ public class MainActivity extends Activity {
         } else if (s.background == 4) {
             page.addView(label(project.hasVideo() ? "Plays silently and loops to the length of the song. Change it in the Song tab." : "Choose a video in the Song tab.", 12, DIM, false));
             page.addView(row(button(project.hasVideo() ? "Change video…" : "Choose video…", () -> pick("video/*", REQ_VIDEO))));
+            page.addView(label("Layout", 12, DIM, false));
+            page.addView(chips(Style.VIDEO_FITS, s.videoFit, 2, i -> { s.videoFit = i; changed(); }));
+            page.addView(label("“Whole video + blur” shows all of a landscape clip in a vertical video (or a vertical clip in a landscape one) over a blurred copy of itself.", 11, DIM, false));
             page.addView(label("Darken for readable lyrics", 12, DIM, false));
             page.addView(slider(0, .85f, s.dim, v -> { s.dim = v; changed(); }));
             page.addView(label("Blur (0 = sharp)" + (android.os.Build.VERSION.SDK_INT < 31 ? " — shown in the exported video; the preview shows it on Android 12+" : ""), 12, DIM, false));
