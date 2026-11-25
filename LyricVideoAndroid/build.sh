@@ -28,6 +28,11 @@ cp build/base.apk build/unsigned.apk
 (cd build && zip -qr unsigned.apk lib)
 "$tools/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
 if [ ! -f build/release.keystore ]; then
+  # Never sign with a throwaway key by accident: installed apps could not be updated.
+  if [ "${ALLOW_DEV_KEY:-}" != "1" ]; then
+    echo "No signing key at build/release.keystore. Put the permanent key there (see README > Signing), or set ALLOW_DEV_KEY=1 for a test-only build." >&2
+    exit 1
+  fi
   keytool -genkeypair -keystore build/release.keystore -storepass android -keypass android -alias lyrics -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Pearl Lyrics Video Maker by Nico Pan Beats' >/dev/null 2>&1
 fi
 "$tools/apksigner" sign --ks build/release.keystore --ks-key-alias lyrics --ks-pass pass:android --key-pass pass:android --out PearlLyricsVideoMaker.apk build/aligned.apk

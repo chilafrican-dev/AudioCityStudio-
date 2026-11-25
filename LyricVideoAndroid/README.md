@@ -82,7 +82,7 @@ The app uses the same plain Android SDK toolchain as Audio City Studio (no Gradl
 
 ### Signing
 
-To keep the same signing key between builds, so that updates install over each other, store a base64-encoded keystore with alias `lyrics` and password `android` in a repository secret named `LYRICS_KEYSTORE_BASE64` (*Settings → Secrets and variables → Actions → New repository secret*). Without it, each CI run signs with a new key, and a new build cannot be installed over an older one. The build log prints the certificate's SHA-256 fingerprint, so you can check that the same key is used every time. Keep a private copy of the keystore: if it is lost, later versions cannot update installed copies.
+To keep the same signing key between builds, so that updates install over each other, store a base64-encoded keystore with alias `lyrics` and password `android` in a repository secret named `LYRICS_KEYSTORE_BASE64` (*Settings → Secrets and variables → Actions → New repository secret*). The build refuses to run without it and checks that the APK is signed with exactly this key (SHA-256 6D:16:89:90:…:25:6C), so a temporary key is never used. The build log prints the certificate's SHA-256 fingerprint, so you can check that the same key is used every time. Keep a private copy of the keystore: if it is lost, later versions cannot update installed copies.
 
 ### Locally
 

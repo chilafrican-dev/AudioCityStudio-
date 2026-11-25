@@ -31,22 +31,28 @@ jobs:
       - name: Run lyric timing tests
         run: ./run-tests.sh
 
-      - name: Restore the signing key (optional LYRICS_KEYSTORE_BASE64 secret)
+      - name: Restore the permanent signing key (LYRICS_KEYSTORE_BASE64 secret, required)
         env:
           LYRICS_KEYSTORE_BASE64: ${{ secrets.LYRICS_KEYSTORE_BASE64 }}
         run: |
           mkdir -p build
-          if [ -n "$LYRICS_KEYSTORE_BASE64" ]; then
-            echo "$LYRICS_KEYSTORE_BASE64" | base64 -d > build/release.keystore
-          else
-            echo "::warning::No LYRICS_KEYSTORE_BASE64 secret: a new signing key is generated, so this APK cannot update an install signed with a different key."
+          if [ -z "$LYRICS_KEYSTORE_BASE64" ]; then
+            echo "::error::The LYRICS_KEYSTORE_BASE64 secret is missing. Builds are never signed with a temporary key, so no APK is made. Add the secret (Settings > Secrets and variables > Actions) and run again."
+            exit 1
           fi
+          echo "$LYRICS_KEYSTORE_BASE64" | base64 -d > build/release.keystore
 
       - name: Build and sign the APK
         run: |
           ./build.sh
-          echo "Signing certificate (the same fingerprint every build means updates install over the old app):"
-          keytool -printcert -jarfile PearlLyricsVideoMaker.apk | grep -i "SHA256:" || true
+          # Only the permanent key is accepted: its fingerprint must match exactly.
+          expected="6D:16:89:90:3C:9D:CF:05:9F:FA:54:59:52:E2:8F:73:D5:41:A5:E8:57:C6:4E:7D:10:D6:AE:1B:42:A5:25:6C"
+          actual=$(keytool -printcert -jarfile PearlLyricsVideoMaker.apk | grep -i "SHA256:" | head -1 | awk '{print $2}')
+          echo "Signing certificate SHA-256: $actual"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::The APK is not signed with the permanent Pearl Lyrics key (expected $expected). No APK is published."
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
