@@ -76,8 +76,8 @@ final class LyricRenderer {
         if (style.visualizer) visualizer(c, w, h, t, u);
         if (style.progressBar && duration > 0) progress(c, w, h, t, u);
         Lyrics.Frame f = lyrics.frame(t, duration);
-        float anchor = h * (style.position == 1 ? .66f : style.position == 2 ? .32f : .5f);
-        if (style.aspect == 1 && style.position == 1) anchor = h * .7f;
+        // Lower third sits higher in wide frames so the next-line hint clears the visualizer.
+        float anchor = h * (style.position == 1 ? (style.aspect == 0 ? .66f : .58f) : style.position == 2 ? .32f : .5f);
         float maxW = w * (style.aspect == 1 ? .74f : .86f);
         float size = 76 * u * style.textSize;
         if (f.untilFirst > 0 && style.titleCard) titleCard(c, w, h, t, f.untilFirst, u);
@@ -139,7 +139,6 @@ final class LyricRenderer {
         int half = 22;
         float span = w * (style.aspect == 1 ? .5f : .8f), gap = span / (half * 2), bw = gap * .52f;
         float base = h - (style.progressBar ? 120 : 90) * u;
-        if (style.position == 1 && style.aspect != 0) base = h - 70 * u;
         for (int k = 0; k < half; k++) {
             float v = level(t - k * 45L);
             float shape = 1 - k / (float) half * .55f;
@@ -328,17 +327,36 @@ final class LyricRenderer {
         float pos;
         if (current < 0) { if (titleShown) return; pos = (f.next >= 0 ? f.next : 0) - .8f; }
         else { int from = f.index >= 0 && f.previous >= 0 ? f.previous : current; pos = current - (1 - f.change) * (current - from); }
-        float s = size * .78f, spacing = s * 1.6f;
-        for (int k = Math.max(0, (int) pos - 4); k <= Math.min(lyrics.lines.size() - 1, (int) pos + 5); k++) {
-            float d = k - pos, ad = Math.abs(d);
-            if (ad > 4.5f) continue;
-            boolean active = k == f.index;
-            float alpha = active ? 1 - f.out * .5f : Math.max(0, .62f - ad * .14f);
-            float rowSize = s * (active ? 1.08f : 1f);
+        // Long lines wrap to two rows rather than shrinking, so each line gets its own height.
+        float s = size * .78f, gap = s * .45f;
+        int lo = Math.max(0, (int) Math.floor(pos) - 4), hi = Math.min(lyrics.lines.size() - 1, (int) Math.ceil(pos) + 5);
+        int n = hi - lo + 1;
+        if (n <= 0) return;
+        ArrayList<ArrayList<String>> rows = new ArrayList<>();
+        float[] sizes = new float[n], centre = new float[n];
+        float at = 0;
+        for (int k = lo; k <= hi; k++) {
+            float rowSize = s * (k == f.index ? 1.08f : 1f);
             paint(rowSize, style.textColor, 1);
-            fitRow(shown(k), maxW, rowSize);
-            ArrayList<String> one = new ArrayList<>(); one.add(shown(k));
-            block(c, w, one, y + d * spacing, active ? f.wipe : -1, active ? style.highlight : style.textColor, style.highlight, alpha);
+            ArrayList<String> r = fit(shown(k), maxW, rowSize, 2);
+            sizes[k - lo] = text.getTextSize();
+            float bh = blockHeight(r.size());
+            rows.add(r);
+            centre[k - lo] = at + bh / 2;
+            at += bh + gap;
+        }
+        // Interpolate the centre for the fractional scroll position, then place that point on the anchor.
+        int a = Math.max(lo, Math.min(hi, (int) Math.floor(pos))), b = Math.min(hi, a + 1);
+        float frac = Math.max(0, Math.min(1, pos - a));
+        float focus = pos < lo ? centre[0] - (lo - pos) * (s * 1.6f) : centre[a - lo] + (centre[b - lo] - centre[a - lo]) * frac;
+        for (int k = lo; k <= hi; k++) {
+            float yk = y + centre[k - lo] - focus;
+            float d = Math.abs(yk - y) / (s * 1.6f);
+            if (d > 4.5f) continue;
+            boolean active = k == f.index;
+            float alpha = active ? 1 - f.out * .5f : Math.max(0, .62f - d * .14f);
+            paint(sizes[k - lo], style.textColor, 1);
+            block(c, w, rows.get(k - lo), yk, active ? f.wipe : -1, active ? style.highlight : style.textColor, style.highlight, alpha);
         }
     }
 
