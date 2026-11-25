@@ -749,7 +749,7 @@ public class MainActivity extends Activity {
         LinearLayout c = card();
         c.addView(label("Video length", 13, DIM, true));
         if (project.hasAudio()) { c.addView(label("Set by the music: " + clock(project.durationMs) + ".", 12, DIM, false)); addCard(page, c); return; }
-        int[] secs = {15, 20, 30, 45, 60, 90, 120};
+        int[] secs = {15, 30, 60, 120, 180, 300, 600};
         String[] names = new String[secs.length];
         int sel = -1;
         for (int i = 0; i < secs.length; i++) { names[i] = secs[i] < 60 ? secs[i] + " s" : (secs[i] / 60) + (secs[i] % 60 == 0 ? " min" : " min " + secs[i] % 60 + " s"); if (project.durationMs == secs[i] * 1000L) sel = i; }
@@ -759,7 +759,15 @@ public class MainActivity extends Activity {
             if (respread) { project.lyrics.clearTimes(); autoSpread(); }
             changed(); saveNow(); updateTransport(); tab(0);
         }));
-        c.addView(label("No music needed. Add music with “Choose song…” below if you want sound.", 11, DIM, false));
+        c.addView(row(button("Any length… (" + clock(project.durationMs) + ")", () -> input("Video length (minutes:seconds, e.g. 12:30)", clock(project.durationMs), v -> {
+            long ms = Lyrics.parseStamp(v.trim());
+            if (ms < 1000) { toast("Type a length like 0:45, 3:00 or 12:30."); return; }
+            boolean respread = project.lyrics.syncedCount() > 0;
+            project.durationMs = ms;
+            if (respread) { project.lyrics.clearTimes(); autoSpread(); }
+            changed(); saveNow(); updateTransport(); tab(0);
+        }))));
+        c.addView(label("No limit. No music needed — add music with “Choose song…” below if you want sound.", 11, DIM, false));
         addCard(page, c);
     }
 

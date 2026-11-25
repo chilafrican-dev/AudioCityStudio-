@@ -35,7 +35,8 @@ final class Project {
     float[] envelope = new float[0];
 
     File audio() { return audioFile == null ? null : new File(dir, audioFile); }
-    static final int MAX_PHOTOS = 20;
+    /** Photo files are numbered photo_000 … photo_998; in practice there is no limit. */
+    static final int MAX_PHOTOS = 999;
 
     /** Photos in slideshow order. */
     File[] photos() {

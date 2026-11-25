@@ -14,7 +14,7 @@ A new project starts by asking *What are you making?*
 - **🖼 Photo slideshow:** photos with cross-fades, a title for the first seconds and optional captions. Music is optional.
 - **✨ Quote / message:** scripture, a quote, a greeting or an announcement, typed one line per row and spread across the video. Music is optional.
 
-Without music, choose a video length (15 s to 2 min). The preview plays on a silent clock and the export has no sound track. For promos, quotes and slideshows, the text is spread evenly across the video automatically, and it can be fine-tuned on the Timeline.
+Without music, choose any video length (quick choices from 15 s to 10 min, or type any length). The preview plays on a silent clock and the export has no sound track. For promos, quotes and slideshows, the text is spread evenly across the video automatically, and it can be fine-tuned on the Timeline.
 
 ## How it works
 
