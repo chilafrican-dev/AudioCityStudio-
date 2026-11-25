@@ -53,7 +53,7 @@ public final class AlignTests {
     static void gap(List<Object[]> parts, String sym, int frames, int[] clock) { parts.add(new Object[]{sym, frames}); clock[0] += frames; }
 
     public static void main(String[] args) {
-        tokens(); planted(false); planted(true); transcribe(); resample(); applyAndBlocks();
+        tokens(); planted(false); planted(true); transcribe(); resample(); applyAndBlocks(); pieces();
         System.out.println("AlignTests: " + checks + " checks passed");
     }
 
@@ -148,6 +148,26 @@ public final class AlignTests {
         check(b.lines.get(1).wordTimed() && b.lines.get(1).wordTimes[2] == 4800, "blocks keep word times");
         Lyrics c = AutoTiming.blocks(words, st, en, 20, 5000);
         for (Lyrics.Line x : c.lines) check(x.text.length() <= 20, "blocks respect the length limit: " + x.text);
+    }
+
+    static void pieces() {
+        int rate = 16000;
+        float[] a = new float[rate * 100]; // 100 s of "music" with a silent gap at 27.0–27.4 s and 58–58.5 s
+        Random r = new Random(5);
+        for (int i = 0; i < a.length; i++) a[i] = (float) (r.nextGaussian() * .3);
+        for (int i = (int) (27.0 * rate); i < 27.4 * rate; i++) a[i] = 0;
+        for (int i = 58 * rate; i < 58.5 * rate; i++) a[i] = 0;
+        int[] cuts = AutoTiming.pieces(a, rate);
+        check(cuts[0] == 0 && cuts[cuts.length - 1] == a.length, "pieces cover the whole song");
+        check(Math.abs(cuts[1] - 27.2 * rate) < .25 * rate, "first cut in the quiet gap: " + cuts[1] / (float) rate);
+        check(Math.abs(cuts[2] - 58.25 * rate) < .3 * rate, "second cut in the next gap: " + cuts[2] / (float) rate);
+        for (int i = 1; i < cuts.length; i++) check(cuts[i] - cuts[i - 1] <= 40 * rate, "no piece longer than 40 s");
+        check(AutoTiming.pieces(new float[rate * 35], rate).length == 2, "a short clip is one piece");
+        Lyrics l = AutoTiming.fromPieces(Arrays.asList(new long[]{0, 30000}, new long[]{30000, 60000}, new long[]{60000, 90000}),
+                Arrays.asList("Nkwagala nnyo mukwano gwange. Tuli wamu bulijjo", "", "Kampala ekibuga kyaffe"));
+        check(l.lines.size() == 3, "lines from the pieces (empty piece skipped): " + l.lines.size());
+        check(l.lines.get(0).start == 0 && l.lines.get(1).start > 0 && l.lines.get(1).start < 30000, "lines of a piece stay inside its time");
+        check(l.lines.get(2).start == 60000, "next piece starts at its own time");
     }
 
     static Ctc.Word w(int s, int e, float score) { Ctc.Word x = new Ctc.Word(); x.start = s; x.end = e; x.score = score; return x; }

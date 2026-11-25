@@ -35,6 +35,11 @@ final class AutoSync {
     static Heard listen(File modelDir, File song, long durationMs, VideoExporter.Listener progress) throws IOException {
         float[] audio = songAudio(song, durationMs, scaled(progress, 0, .1f));
         if (progress.cancelled()) throw new CancellationException();
+        return listen(modelDir, audio, progress);
+    }
+
+    /** Runs the model over audio that is already 16 kHz mono. */
+    static Heard listen(File modelDir, float[] audio, VideoExporter.Listener progress) throws IOException {
         Heard h = new Heard();
         try (SpeechModel m = new SpeechModel(modelDir)) {
             int[] T = new int[1];

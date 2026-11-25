@@ -1183,21 +1183,26 @@ public class MainActivity extends Activity {
 
     void sunbirdWrite() {
         final Project p = project;
-        if (p.durationMs > 10 * 60_000) toast("Sunbird may only transcribe the first 10 minutes.");
-        final String[] text = {null};
+        final String key = sunbirdKey();
         final Lyrics[] timed = {null};
         final boolean canTime = ModelStore.ready(this);
         progressJob("Sunbird AI is writing the lyrics", l -> {
-            l.progress(.05f, "Uploading the song to Sunbird…");
-            text[0] = Sunbird.transcribe(p.audio(), sunbirdKey(), "lug");
+            float[] audio = AutoSync.songAudio(p.audio(), p.durationMs, AutoSync.scaled(l, 0, .05f));
+            ArrayList<Sunbird.Part> parts = Sunbird.transcribe(audio, key, "lug", AutoSync.scaled(l, .05f, canTime ? .6f : 1f));
+            StringBuilder all = new StringBuilder();
+            java.util.List<long[]> spans = new ArrayList<>();
+            java.util.List<String> texts = new ArrayList<>();
+            for (Sunbird.Part part : parts) { all.append(part.text).append('\n'); spans.add(new long[]{part.startMs, part.endMs}); texts.add(part.text); }
+            if (all.toString().trim().isEmpty()) throw new IOException("Sunbird returned no words for this song.");
             if (canTime) {
-                final String key = p.dir.getAbsolutePath() + "/" + p.audioFile + "/" + p.durationMs;
-                AutoSync.Heard h = key.equals(heardFor) ? heard : null;
-                if (h == null) { h = AutoSync.listen(ModelStore.dir(this), p.audio(), p.durationMs, AutoSync.scaled(l, .3f, 1f)); heard = h; heardFor = key; }
-                timed[0] = AutoSync.timeAndSplit(text[0], h);
-            }
-        }, () -> offerLyrics("Lyrics from Sunbird AI", timed[0] != null ? timed[0] : Lyrics.parse(Lyrics.cleanUp(text[0].replaceAll("([.!?])\\s+", "$1\n"), Lyrics.LONG_LINE), null),
-                timed[0] != null ? "Split into lines at the singer's pauses and timed word by word on the phone." : "Download the AI model (Sync tab) to time these word by word automatically."));
+                // Time Sunbird's words exactly with the on-phone model, splitting lines at the singer's pauses.
+                String cacheKey = p.dir.getAbsolutePath() + "/" + p.audioFile + "/" + p.durationMs;
+                AutoSync.Heard h = cacheKey.equals(heardFor) ? heard : null;
+                if (h == null) { h = AutoSync.listen(ModelStore.dir(this), audio, AutoSync.scaled(l, .6f, 1f)); heard = h; heardFor = cacheKey; }
+                timed[0] = AutoSync.timeAndSplit(all.toString(), h);
+            } else timed[0] = AutoTiming.fromPieces(spans, texts);
+        }, () -> offerLyrics("Lyrics from Sunbird AI", timed[0],
+                canTime ? "Split into lines at the singer's pauses and timed word by word on the phone." : "Roughly timed by 30-second piece. Download the AI model (Sync tab), then use “Listen & sync every word” for exact timing."));
     }
 
     void offlineWrite() {

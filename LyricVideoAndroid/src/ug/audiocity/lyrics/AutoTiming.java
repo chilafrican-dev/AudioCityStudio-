@@ -89,6 +89,48 @@ final class AutoTiming {
         return out;
     }
 
+    /**
+     * Cut points for sending a song in pieces of about 30 s: each cut is placed at the quietest 100 ms between 22 and
+     * 34 s after the previous one, so words are rarely split. Returns sample indices, first 0 and last audio.length.
+     */
+    static int[] pieces(float[] a, int rate) {
+        ArrayList<Integer> cuts = new ArrayList<>();
+        cuts.add(0);
+        int start = 0, win = rate / 10;
+        while (a.length - start > 40 * rate) {
+            int from = start + 22 * rate, to = Math.min(a.length - win, start + 34 * rate), best = start + 30 * rate;
+            double quietest = Double.MAX_VALUE;
+            for (int i = from; i + win <= to; i += win / 2) {
+                double e = 0;
+                for (int k = i; k < i + win; k++) e += a[k] * a[k];
+                if (e < quietest) { quietest = e; best = i + win / 2; }
+            }
+            cuts.add(best);
+            start = best;
+        }
+        cuts.add(a.length);
+        int[] out = new int[cuts.size()];
+        for (int i = 0; i < out.length; i++) out[i] = cuts.get(i);
+        return out;
+    }
+
+    /**
+     * Screen lines from pieces of text with known time spans (e.g. Sunbird's answer for each 30-second piece): each
+     * piece is split into readable lines, which are spread over the piece's time by their length.
+     */
+    static Lyrics fromPieces(List<long[]> spans, List<String> texts) {
+        Lyrics out = new Lyrics();
+        for (int i = 0; i < texts.size(); i++) {
+            String t = texts.get(i) == null ? "" : texts.get(i).trim();
+            if (t.isEmpty()) continue;
+            Lyrics piece = Lyrics.parse(Lyrics.cleanUp(t.replaceAll("([.!?])\\s+", "$1\n"), Lyrics.LONG_LINE), null);
+            piece.spread(spans.get(i)[0], Math.max(spans.get(i)[0] + 1000, spans.get(i)[1] - 1500));
+            out.lines.addAll(piece.lines);
+        }
+        out.repairOrder();
+        return out;
+    }
+
     /** All words of a text, in order (for aligning a transcript that has no line breaks yet). */
     static List<String[]> asOneLine(String text) {
         ArrayList<String[]> l = new ArrayList<>();
