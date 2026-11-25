@@ -53,6 +53,9 @@ public class MainActivity extends Activity {
 
     FrameLayout content;
     PreviewView preview;
+    /** Parts of the editor that fold away while the keyboard is up, so the lyrics box gets the room. */
+    View previewArea, transportArea, tabsArea, typingBar, lyricsSteps;
+    boolean typing;
     VideoBackdrop backdrop;
     SeekBar seek;
     TextView clock;
@@ -357,6 +360,7 @@ public class MainActivity extends Activity {
         previewBox.addView(backdrop.main.view, new FrameLayout.LayoutParams(1, 1));
         previewBox.addView(preview, new FrameLayout.LayoutParams(-1, -1));
         root.addView(previewBox, new LinearLayout.LayoutParams(-1, h));
+        previewArea = previewBox;
         syncBackdrop();
 
         LinearLayout transport = new LinearLayout(this);
@@ -375,6 +379,7 @@ public class MainActivity extends Activity {
         clock.setTypeface(Typeface.MONOSPACE);
         transport.addView(clock);
         root.addView(transport);
+        transportArea = transport;
 
         LinearLayout tabs = new LinearLayout(this);
         tabs.setPadding(dp(12), dp(4), dp(12), dp(4));
@@ -389,6 +394,28 @@ public class MainActivity extends Activity {
             tabs.addView(tabButtons[k], p);
         }
         root.addView(tabs);
+        tabsArea = tabs;
+        // Shown instead of the preview while typing lyrics.
+        LinearLayout typeBar = new LinearLayout(this);
+        typeBar.setGravity(Gravity.CENTER_VERTICAL);
+        typeBar.setPadding(dp(14), dp(4), dp(14), dp(4));
+        TextView tl = label("✍️  Typing lyrics — one line per row", 13, DIM, true);
+        typeBar.addView(tl, new LinearLayout.LayoutParams(0, -2, 1));
+        typeBar.addView(button("✓ Done typing", this::doneTyping, ACCENT, 0xff1a1a1a), new LinearLayout.LayoutParams(-2, dp(40)));
+        typeBar.setVisibility(View.GONE);
+        root.addView(typeBar, 1);
+        typingBar = typeBar;
+        typing = false;
+        // Fold the preview away while the keyboard is up on the Lyrics tab.
+        root.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            if (dead || root.getRootView() == null) return;
+            android.graphics.Rect r = new android.graphics.Rect();
+            root.getWindowVisibleDisplayFrame(r);
+            int screen = root.getRootView().getHeight();
+            boolean keyboard = screen - r.bottom > screen * .15f;
+            boolean want = keyboard && lyricsBox != null && lyricsBox.hasFocus();
+            if (want != typing) setTyping(want);
+        });
 
         content = new FrameLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -397,8 +424,38 @@ public class MainActivity extends Activity {
         updateTransport();
     }
 
+    void setTyping(boolean on) {
+        typing = on;
+        if (previewArea != null) previewArea.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (transportArea != null) transportArea.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (tabsArea != null) tabsArea.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (typingBar != null) typingBar.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (lyricsSteps != null) lyricsSteps.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (on && lyricsBox != null) lyricsBox.post(() -> { if (lyricsBox != null) lyricsBox.requestRectangleOnScreen(cursorRect(lyricsBox)); });
+    }
+
+    /** Where the text cursor is, so the page can keep it above the keyboard. */
+    static android.graphics.Rect cursorRect(EditText e) {
+        android.text.Layout layout = e.getLayout();
+        if (layout == null) return new android.graphics.Rect(0, 0, e.getWidth(), e.getHeight());
+        int line = layout.getLineForOffset(Math.max(0, e.getSelectionStart()));
+        int top = layout.getLineTop(line) + e.getPaddingTop(), bottom = layout.getLineBottom(line) + e.getPaddingTop();
+        return new android.graphics.Rect(0, Math.max(0, top - e.getLineHeight()), e.getWidth(), bottom + e.getLineHeight());
+    }
+
+    void doneTyping() {
+        applyLyricsNow();
+        View f = getCurrentFocus();
+        if (f != null) {
+            ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(f.getWindowToken(), 0);
+            f.clearFocus();
+        }
+        setTyping(false);
+    }
+
     void tab(int k) {
         if (content == null) return;
+        if (typing) setTyping(false);
         applyLyricsNow();
         tab = k;
         for (int i = 0; i < tabButtons.length; i++) {
@@ -406,7 +463,7 @@ public class MainActivity extends Activity {
             tabButtons[i].setTextColor(i == k ? 0xff1a1a1a : TEXT);
         }
         content.removeAllViews();
-        syncRows.clear(); tapButton = null; syncStatus = null; lyricsBox = null; highlightedRow = -2; timeline = null; timelineNote = null;
+        syncRows.clear(); tapButton = null; syncStatus = null; lyricsBox = null; highlightedRow = -2; timeline = null; timelineNote = null; lyricsSteps = null;
         ScrollView scroll = new ScrollView(this);
         LinearLayout page = column();
         page.setPadding(dp(14), 0, dp(14), dp(40));
@@ -776,6 +833,7 @@ public class MainActivity extends Activity {
         steps.addView(label("Add the words in three easy ways", 15, TEXT, true));
         steps.addView(label("0. Don't have them? “Write the lyrics for me” listens to the song (Luganda) and drafts them for you to correct.\n1. Copy the lyrics from anywhere and tap Paste.\n2. Or type them: press Enter for each new line on screen.\n3. Or import a .lrc / .txt file (LRC keeps its timings).\n\nTip: Clean up removes labels like [Chorus], stray symbols and timestamps, and splits long rows so they fit on screen.", 13, DIM, false));
         addCard(page, steps);
+        lyricsSteps = steps;
         page.addView(row(button("📋  Paste", this::pasteLyrics, ACCENT, 0xff1a1a1a), button("✨  Clean up", this::cleanLyrics), button("Import file", () -> pick("*/*", REQ_LYRICS))));
         page.addView(row(button("✍️  Write the lyrics for me (AI)", this::writeLyricsMenu)));
         lyricsCount = label("", 12, DIM, false);
