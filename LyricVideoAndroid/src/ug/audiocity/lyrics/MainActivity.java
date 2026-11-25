@@ -603,7 +603,7 @@ public class MainActivity extends Activity {
         }));
         LinearLayout.LayoutParams lp3 = new LinearLayout.LayoutParams(-1, -2); lp3.topMargin = dp(8);
         info.addView(editorName, lp3);
-        info.addView(label("Credited on the video's watermark: “" + Style.APP_NAME + " · " + Style.APP_BY + " · Edited by your name”.", 12, DIM, false));
+        info.addView(label("Shown on the watermark as ✎ your name.", 12, DIM, false));
         addCard(page, info);
 
         LinearLayout cov = card();
@@ -2060,7 +2060,7 @@ public class MainActivity extends Activity {
         }
 
         page.addView(heading("Watermark & credits"));
-        page.addView(label("Every video carries a small “" + Style.APP_NAME + " · " + Style.APP_BY + "” mark" + (project.editor.isEmpty() ? ". Add your name in the Song tab to be credited as the editor." : ", with “Edited by " + project.editor + "”."), 12, DIM, false));
+        page.addView(label("“Pearl Lyrics · " + Style.APP_BY + "”" + (project.editor.isEmpty() ? " — add your name in the Song tab." : " · ✎ " + project.editor), 12, DIM, false));
         page.addView(label("Corner", 12, DIM, false));
         page.addView(chips(Style.WATERMARK_POSITIONS, s.watermarkPos, 2, i -> { s.watermarkPos = i; changed(); }));
         page.addView(toggle("Also show “Lyrics video by " + (project.editor.isEmpty() ? "your name" : project.editor) + "” on the title card", s.creditOnTitle, b -> { s.creditOnTitle = b; changed(); }));

@@ -63,7 +63,7 @@ Projects are saved automatically on the phone. Long-press a project on the home 
 
 ## Watermark and credits
 
-Every exported video carries a small watermark with a pearl icon: **Pearl Lyrics Video Maker · by Nico Pan Beats**. You choose its corner in *Style → Watermark & credits*. An editor can add their own name in the Song tab, and the watermark then also reads **Edited by …**. The app remembers the name for new projects. *Also show "Lyrics video by …" on the title card* credits the editor on the opening card too.
+Every exported video carries a short watermark with a pearl icon: **Pearl Lyrics · by Nico Pan Beats**. You choose its corner in *Style → Watermark & credits*. An editor can add their own name in the Song tab, and the watermark then also shows **✎ their name**. The app remembers the name for new projects. *Also show "Lyrics video by …" on the title card* credits the editor on the opening card too.
 
 ## Your work is kept
 
