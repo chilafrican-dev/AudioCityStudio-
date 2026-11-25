@@ -50,6 +50,7 @@ public final class Lyrics {
     /** Plain text, one line per row. Blank rows are skipped. LRC text keeps its timings. */
     public static Lyrics parse(String text, String[] meta) {
         if (looksLikeLrc(text)) return parseLrc(text, meta);
+        if (text != null && text.startsWith("﻿")) text = text.substring(1);
         Lyrics l = new Lyrics();
         for (String row : split(text)) { String t = clean(row); if (!t.isEmpty()) l.lines.add(new Line(t, -1)); }
         return l;
@@ -95,6 +96,86 @@ public final class Lyrics {
         long last = -1;
         for (Line l : lines) { if (l.start < 0) continue; if (l.start < last) l.start = -1; else last = l.start; }
     }
+
+    // ------------------------------------------------------------------ typing helpers
+
+    /** A whole row that is only a section label: "Chorus", "Verse 2:", "(Hook x2)", "x3". Real lyrics that merely start with such a word are kept. */
+    static final Pattern SECTION = Pattern.compile("^[\\[(]?\\s*(?:(?:intro|outro|verse|chorus|pre-?chorus|post-?chorus|hook|bridge|refrain|interlude|instrumental|break|breakdown|drop|ad-?libs?|repeat|solo|coda)(?:\\s*\\d+)?(?:\\s*[x\u00d7]\\s*\\d+)?|[x\u00d7]\\s*\\d+|\\d+\\s*[x\u00d7])\\s*[\\])]?\\s*:?\\s*$", Pattern.CASE_INSENSITIVE);
+    public static final int LONG_LINE = 42;
+
+    /**
+     * Tidies pasted lyrics: removes section labels ([Chorus], Verse 2:), LRC/word timestamps and stray symbols, joins
+     * spaces, and splits rows that are too long to read on screen at a natural break (punctuation, then the middle).
+     */
+    public static String cleanUp(String text, int maxChars) {
+        StringBuilder b = new StringBuilder();
+        for (String raw : split(text)) {
+            String row = TIME.matcher(raw).replaceAll("");
+            row = WORD_TIME.matcher(row).replaceAll("");
+            if (META.matcher(raw.trim()).matches() && !TIME.matcher(raw.trim()).lookingAt()) continue;
+            row = row.replace(' ', ' ').replaceAll("[\\u200b\\u200e\\u200f*_#~|]", "");
+            row = clean(row);
+            if (row.isEmpty() || SECTION.matcher(row).matches() || row.matches("^\\[.*\\]$")) continue; // [Verse 1: Artist]
+            for (String part : splitLong(row, maxChars)) { if (b.length() > 0) b.append('\n'); b.append(part); }
+        }
+        return b.toString();
+    }
+
+    /** Splits a row longer than maxChars at the best break near its middle (recursively). */
+    static ArrayList<String> splitLong(String row, int maxChars) {
+        ArrayList<String> out = new ArrayList<>();
+        if (row.length() <= maxChars || row.indexOf(' ') < 0) { out.add(row); return out; }
+        int mid = row.length() / 2, best = -1;
+        double bestScore = Double.MAX_VALUE;
+        for (int i = 1; i < row.length() - 1; i++) {
+            if (row.charAt(i) != ' ') continue;
+            char prev = row.charAt(i - 1);
+            // Prefer breaking after punctuation, as long as both halves then fit on screen.
+            boolean fits = Math.max(i, row.length() - i - 1) <= maxChars;
+            double score = Math.abs(i - mid) - (fits && ",;:.!?—–-".indexOf(prev) >= 0 ? row.length() * .3 : 0);
+            if (score < bestScore) { bestScore = score; best = i; }
+        }
+        out.addAll(splitLong(row.substring(0, best).trim(), maxChars));
+        out.addAll(splitLong(row.substring(best + 1).trim(), maxChars));
+        return out;
+    }
+
+    /** True when {@link #cleanUp} would change the text, so the app can suggest it. */
+    public static boolean needsCleanUp(String text) {
+        String c = cleanUp(text, LONG_LINE);
+        StringBuilder plain = new StringBuilder();
+        for (String row : split(text)) { String t = clean(row); if (!t.isEmpty()) { if (plain.length() > 0) plain.append('\n'); plain.append(t); } }
+        return !c.equals(plain.toString());
+    }
+
+    /**
+     * Quick sync: gives every unsynced line a time, spreading lines between the synced lines around them (or between
+     * start and end) in proportion to their length. Returns how many lines were timed.
+     */
+    public int spread(long start, long end) {
+        int timed = 0, n = lines.size(), i = 0;
+        while (i < n) {
+            if (lines.get(i).start >= 0) { i++; continue; }
+            int a = i;
+            while (i < n && lines.get(i).start < 0) i++;
+            int b = i - 1; // unsynced run a..b
+            long right = i < n ? lines.get(i).start : end;
+            int from = a > 0 ? a - 1 : a; // a synced line before the run takes its own share of the time
+            long left = a > 0 ? lines.get(a - 1).start : Math.min(start, right);
+            if (right <= left) right = left + 1500L * (b - a + 1);
+            double total = 0;
+            for (int k = from; k <= b; k++) total += weight(lines.get(k).text);
+            double acc = 0;
+            for (int k = from; k <= b; k++) {
+                if (k >= a) { lines.get(k).start = left + Math.round((right - left) * acc / total); timed++; }
+                acc += weight(lines.get(k).text);
+            }
+        }
+        repairOrder();
+        return timed;
+    }
+
+    static double weight(String text) { return 10 + text.length(); }
 
     // ------------------------------------------------------------------ LRC
 

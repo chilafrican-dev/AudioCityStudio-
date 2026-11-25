@@ -11,8 +11,8 @@ import java.util.ArrayList;
 import java.util.UUID;
 
 /**
- * One lyric video project, stored in its own folder: project.json, the copied song (audio.*), an optional
- * background photo (background.jpg), the loudness envelope (envelope.bin) and an optional font (font.ttf).
+ * One lyric video project, stored in its own folder: project.json, the copied song (song.*), background photos
+ * (photo_000.jpg, photo_001.jpg… in slideshow order), the loudness envelope (envelope.bin) and an optional font (font.ttf).
  */
 final class Project {
     static final int ENVELOPE_RATE = 100; // values per second
@@ -27,7 +27,36 @@ final class Project {
     float[] envelope = new float[0];
 
     File audio() { return audioFile == null ? null : new File(dir, audioFile); }
-    File image() { return new File(dir, "background.jpg"); }
+    static final int MAX_PHOTOS = 20;
+
+    /** Photos in slideshow order. */
+    File[] photos() {
+        File[] f = dir.listFiles((d, n) -> n.startsWith("photo_") && n.endsWith(".jpg"));
+        if (f == null) return new File[0];
+        java.util.Arrays.sort(f, (a, b) -> a.getName().compareTo(b.getName()));
+        return f;
+    }
+    boolean hasPhotos() { return photos().length > 0; }
+
+    /** File for a newly added photo, after the existing ones. */
+    File nextPhoto() {
+        File[] p = photos();
+        int n = 0;
+        for (File f : p) { try { n = Math.max(n, Integer.parseInt(f.getName().substring(6, 9)) + 1); } catch (RuntimeException ignored) {} }
+        return new File(dir, String.format(java.util.Locale.ROOT, "photo_%03d.jpg", n));
+    }
+
+    /** Renames the photos so they play in the given order. */
+    void orderPhotos(java.util.List<File> order) throws IOException {
+        ArrayList<File> temp = new ArrayList<>();
+        for (int i = 0; i < order.size(); i++) {
+            File t = new File(dir, "reorder_" + i + ".tmp");
+            if (!order.get(i).renameTo(t)) throw new IOException("Cannot reorder photos.");
+            temp.add(t);
+        }
+        for (int i = 0; i < temp.size(); i++)
+            if (!temp.get(i).renameTo(new File(dir, String.format(java.util.Locale.ROOT, "photo_%03d.jpg", i)))) throw new IOException("Cannot reorder photos.");
+    }
     File font() { return new File(dir, "font.ttf"); }
     boolean hasAudio() { File a = audio(); return a != null && a.isFile() && durationMs > 0; }
 
@@ -53,18 +82,20 @@ final class Project {
         updated = System.currentTimeMillis();
         try {
             JSONObject o = new JSONObject();
-            o.put("version", 1).put("title", title).put("artist", artist).put("durationMs", durationMs).put("updated", updated);
+            o.put("version", 2).put("title", title).put("artist", artist).put("durationMs", durationMs).put("updated", updated);
             if (audioFile != null) o.put("audioFile", audioFile);
             if (audioName != null) o.put("audioName", audioName);
             JSONArray ls = new JSONArray();
             for (Lyrics.Line l : lyrics.lines) ls.put(new JSONObject().put("text", l.text).put("start", l.start));
             o.put("lines", ls);
             Style s = style;
-            o.put("style", new JSONObject().put("aspect", s.aspect).put("animation", s.animation).put("font", s.font).put("background", s.background)
+            o.put("style", new JSONObject().put("aspect", s.aspect).put("animation", s.animation).put("fontName", Style.FONT_NAMES[s.font]).put("background", s.background)
                     .put("palette", s.palette).put("position", s.position).put("quality", s.quality).put("solid", s.solid).put("textColor", s.textColor)
                     .put("highlight", s.highlight).put("textSize", (double) s.textSize).put("dim", (double) s.dim).put("visualizer", s.visualizer)
                     .put("titleCard", s.titleCard).put("shadow", s.shadow).put("uppercase", s.uppercase).put("kenBurns", s.kenBurns)
-                    .put("progressBar", s.progressBar).put("fps", s.fps));
+                    .put("progressBar", s.progressBar).put("fps", s.fps).put("letterSpacing", (double) s.letterSpacing).put("outline", s.outline)
+                    .put("glow", s.glow).put("box", s.box).put("letterbox", s.letterbox).put("photoFit", s.photoFit).put("photoFilter", s.photoFilter)
+                    .put("photoSeconds", s.photoSeconds));
             File tmp = new File(dir, "project.json.tmp");
             try (OutputStream out = new FileOutputStream(tmp)) { out.write(o.toString(1).getBytes(StandardCharsets.UTF_8)); }
             if (!tmp.renameTo(new File(dir, "project.json"))) throw new IOException("Cannot save the project.");
@@ -86,17 +117,26 @@ final class Project {
             JSONObject s = o.optJSONObject("style");
             if (s != null) {
                 Style d = p.style;
-                d.aspect = s.optInt("aspect", d.aspect); d.animation = s.optInt("animation", d.animation); d.font = s.optInt("font", d.font);
+                d.aspect = s.optInt("aspect", d.aspect); d.animation = s.optInt("animation", d.animation);
+                int named = Style.fontIndex(s.optString("fontName", ""));
+                if (named >= 0) d.font = named;
+                else { int old = s.optInt("font", 0); d.font = Style.OLD_FONTS[Math.max(0, Math.min(Style.OLD_FONTS.length - 1, old))]; }
                 d.background = s.optInt("background", d.background); d.palette = s.optInt("palette", d.palette); d.position = s.optInt("position", d.position);
                 d.quality = s.optInt("quality", d.quality); d.solid = s.optInt("solid", d.solid); d.textColor = s.optInt("textColor", d.textColor);
                 d.highlight = s.optInt("highlight", d.highlight); d.textSize = (float) s.optDouble("textSize", d.textSize); d.dim = (float) s.optDouble("dim", d.dim);
                 d.visualizer = s.optBoolean("visualizer", d.visualizer); d.titleCard = s.optBoolean("titleCard", d.titleCard); d.shadow = s.optBoolean("shadow", d.shadow);
                 d.uppercase = s.optBoolean("uppercase", d.uppercase); d.kenBurns = s.optBoolean("kenBurns", d.kenBurns); d.progressBar = s.optBoolean("progressBar", d.progressBar);
                 d.fps = s.optInt("fps", d.fps);
+                d.letterSpacing = (float) s.optDouble("letterSpacing", d.letterSpacing); d.outline = s.optBoolean("outline", d.outline);
+                d.glow = s.optBoolean("glow", d.glow); d.box = s.optBoolean("box", d.box); d.letterbox = s.optBoolean("letterbox", d.letterbox);
+                d.photoFit = s.optInt("photoFit", d.photoFit); d.photoFilter = s.optInt("photoFilter", d.photoFilter); d.photoSeconds = s.optInt("photoSeconds", d.photoSeconds);
                 d.sanitise();
             }
         } catch (org.json.JSONException e) { throw new IOException("Damaged project file: " + e.getMessage()); }
         p.envelope = readEnvelope(new File(dir, "envelope.bin"));
+        // Version 0.1 kept a single background.jpg: it becomes the first photo.
+        File old = new File(dir, "background.jpg");
+        if (old.isFile() && !p.hasPhotos()) old.renameTo(new File(dir, "photo_000.jpg"));
         return p;
     }
 

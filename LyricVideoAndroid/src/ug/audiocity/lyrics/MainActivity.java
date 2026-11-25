@@ -46,7 +46,6 @@ public class MainActivity extends Activity {
     boolean prepared, playing, dead, busy;
     long scrub;
     int tab;
-    Bitmap previewPhoto;
     Typeface projectFont;
 
     FrameLayout content;
@@ -68,6 +67,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
+        Fonts.assets = getAssets();
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         String last = prefs().getString("open", null);
@@ -251,7 +251,9 @@ public class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
 
         TextView brand = label("AUDIO CITY", 11, ACCENT, true); brand.setLetterSpacing(.25f); page.addView(brand);
-        page.addView(label("Lyric Video Studio", 28, TEXT, true));
+        TextView appName = label("Lyric Video Studio", 30, TEXT, false);
+        appName.setTypeface(Fonts.get(0, null));
+        page.addView(appName);
         page.addView(label("Turn any song into a lyric video: add the words, tap along to sync them, choose a look and export an MP4 for Reels, TikTok, Shorts, Status or YouTube.", 14, DIM, false));
         Button create = button("+  New lyric video", this::newProject, ACCENT, 0xff1a1a1a);
         create.setTextSize(17);
@@ -316,24 +318,10 @@ public class MainActivity extends Activity {
     }
 
     void loadAssets() {
-        if (previewPhoto != null) previewPhoto.recycle();
-        previewPhoto = decodePhoto(project.image(), 1280);
         projectFont = LyricRenderer.loadFont(project.font());
-        renderer.photo = previewPhoto;
+        renderer.photos = new PhotoSet(project.photos(), 1080);
         renderer.custom = projectFont;
         renderer.bind(project);
-    }
-
-    static Bitmap decodePhoto(File f, int maxSide) {
-        if (!f.isFile()) return null;
-        BitmapFactory.Options o = new BitmapFactory.Options();
-        o.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(f.getAbsolutePath(), o);
-        int sample = 1;
-        while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= maxSide) sample *= 2;
-        BitmapFactory.Options d = new BitmapFactory.Options();
-        d.inSampleSize = sample;
-        return BitmapFactory.decodeFile(f.getAbsolutePath(), d);
     }
 
     void buildEditor() {
@@ -449,14 +437,63 @@ public class MainActivity extends Activity {
         addCard(page, info);
 
         LinearLayout photo = card();
-        photo.addView(label("Background photo", 13, DIM, true));
-        boolean has = project.image().isFile();
-        photo.addView(label(has ? "Photo added. It slowly zooms during the song (Ken Burns), darkened for readable lyrics." : "Optional: cover art or any picture. Without one, an animated gradient is used.", 12, DIM, false));
-        if (has) photo.addView(row(button("Change photo…", () -> pick("image/*", REQ_IMAGE)), button("Remove", () -> {
-            project.image().delete(); if (project.style.background == 2) project.style.background = 0; loadAssets(); changed(); tab(0);
-        })));
-        else photo.addView(row(button("Choose photo…", () -> pick("image/*", REQ_IMAGE))));
+        File[] photos = project.photos();
+        photo.addView(label("Background photos", 13, DIM, true));
+        photo.addView(label(photos.length == 0 ? "Optional: cover art, artist shots or any pictures. One photo stays for the whole song; several play as a slideshow with smooth cross-fades. Without photos, an animated gradient is used."
+                : photos.length + (photos.length == 1 ? " photo. Add more for a slideshow." : " photos in a slideshow. Tap one to move or remove it.") + " Look options are in Style → Background.", 12, DIM, false));
+        if (photos.length > 0) {
+            HorizontalScrollView strip = new HorizontalScrollView(this);
+            strip.setHorizontalScrollBarEnabled(false);
+            LinearLayout thumbs = new LinearLayout(this);
+            strip.addView(thumbs);
+            for (int i = 0; i < photos.length; i++) {
+                final int k = i;
+                ImageView v = new ImageView(this);
+                v.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                v.setBackground(round(PANEL2, 8));
+                v.setClipToOutline(true);
+                Bitmap thumb = PhotoSet.decode(photos[i], 240);
+                if (thumb != null) v.setImageBitmap(thumb);
+                v.setOnClickListener(x -> photoMenu(k));
+                LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(dp(74), dp(74)); tp.rightMargin = dp(8);
+                thumbs.addView(v, tp);
+            }
+            strip.setPadding(0, dp(8), 0, dp(4));
+            photo.addView(strip);
+        }
+        LinearLayout photoButtons = row(button(photos.length == 0 ? "Add photos…" : "Add more…", this::pickPhotos));
+        if (photos.length > 0) photoButtons.addView(button("Remove all", () -> new AlertDialog.Builder(this).setTitle("Remove all photos?").setNegativeButton("Cancel", null)
+                .setPositiveButton("Remove", (d, w) -> { for (File f : project.photos()) f.delete(); if (project.style.background == 2) project.style.background = 0; loadAssets(); changed(); tab(0); }).show()),
+                weighted());
+        photo.addView(photoButtons);
         addCard(page, photo);
+    }
+
+    LinearLayout.LayoutParams weighted() { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(46), 1); p.leftMargin = dp(8); return p; }
+
+    void pickPhotos() {
+        if (project.photos().length >= Project.MAX_PHOTOS) { toast("Up to " + Project.MAX_PHOTOS + " photos per video."); return; }
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("image/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        try { startActivityForResult(i, REQ_IMAGE); } catch (Exception e) { error("Choose photos", "No file picker is available: " + e.getMessage()); }
+    }
+
+    void photoMenu(int k) {
+        File[] photos = project.photos();
+        if (k >= photos.length) return;
+        new AlertDialog.Builder(this).setTitle("Photo " + (k + 1) + " of " + photos.length).setItems(new String[]{"Move earlier", "Move later", "Make it the first photo", "Remove"}, (d, which) -> {
+            java.util.ArrayList<File> order = new java.util.ArrayList<>(java.util.Arrays.asList(photos));
+            File f = order.get(k);
+            if (which == 3) { f.delete(); if (project.photos().length == 0 && project.style.background == 2) project.style.background = 0; }
+            else {
+                order.remove(k);
+                order.add(which == 0 ? Math.max(0, k - 1) : which == 1 ? Math.min(order.size(), k + 1) : 0, f);
+                try { project.orderPhotos(order); } catch (IOException e) { error("Photos", e.getMessage()); }
+            }
+            loadAssets(); changed(); tab(0);
+        }).show();
     }
 
     void pick(String type, int request) {
@@ -497,9 +534,11 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (result != RESULT_OK || data == null || data.getData() == null || project == null) return;
-        Uri uri = data.getData();
+        if (result != RESULT_OK || data == null || project == null) return;
         final Project p = project;
+        if (request == REQ_IMAGE) { addPhotos(p, data); return; }
+        if (data.getData() == null) return;
+        Uri uri = data.getData();
         if (request == REQ_AUDIO) {
             String name = displayName(uri);
             String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "") : "";
@@ -527,16 +566,6 @@ public class MainActivity extends Activity {
                 tab(p.lyrics.lines.isEmpty() ? 1 : 0);
                 toast("Song ready (" + clock(p.durationMs) + "). Now add the lyrics.");
             }, () -> { if (project == p) loadPlayer(); }); // the previous song, if any, is untouched
-        } else if (request == REQ_IMAGE) {
-            work("Preparing the photo…", () -> {
-                File tmp = new File(p.dir, "incoming-image");
-                copy(getContentResolver().openInputStream(uri), tmp);
-                Bitmap b = decodePhoto(tmp, 2160);
-                tmp.delete();
-                if (b == null) throw new IOException("That picture could not be opened.");
-                try (OutputStream o = new FileOutputStream(p.image())) { b.compress(Bitmap.CompressFormat.JPEG, 92, o); }
-                b.recycle();
-            }, () -> { p.style.background = 2; loadAssets(); changed(); tab(tab); });
         } else if (request == REQ_LYRICS) {
             final String[] text = {null};
             work("Reading lyrics…", () -> text[0] = readText(getContentResolver().openInputStream(uri)), () -> {
@@ -557,13 +586,38 @@ public class MainActivity extends Activity {
                 Typeface t = LyricRenderer.loadFont(tmp);
                 if (t == null) { tmp.delete(); throw new IOException("That is not a TrueType or OpenType font."); }
                 if (!tmp.renameTo(p.font())) throw new IOException("Cannot store the font.");
-            }, () -> { p.style.font = 6; loadAssets(); changed(); tab(3); });
+            }, () -> { p.style.font = Style.FONT_IMPORTED; loadAssets(); changed(); tab(3); });
         } else if (request == REQ_SAVE_LRC) {
             String lrc = p.lyrics.toLrc(p.title, p.artist);
             work("Saving LRC…", () -> {
                 try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) { if (o == null) throw new IOException("Cannot write there."); o.write(lrc.getBytes(StandardCharsets.UTF_8)); }
             }, () -> toast("Synced lyrics saved as LRC."));
         }
+    }
+
+    void addPhotos(Project p, Intent data) {
+        final java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
+        if (data.getClipData() != null) for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
+        else if (data.getData() != null) uris.add(data.getData());
+        if (uris.isEmpty()) return;
+        final int[] added = {0};
+        work("Adding " + uris.size() + (uris.size() == 1 ? " photo…" : " photos…"), () -> {
+            for (Uri uri : uris) {
+                if (p.photos().length >= Project.MAX_PHOTOS) break;
+                File tmp = new File(p.dir, "incoming-image");
+                copy(getContentResolver().openInputStream(uri), tmp);
+                Bitmap b = PhotoSet.decode(tmp, 2560);
+                tmp.delete();
+                if (b == null) continue;
+                try (OutputStream o = new FileOutputStream(p.nextPhoto())) { b.compress(Bitmap.CompressFormat.JPEG, 92, o); }
+                b.recycle();
+                added[0]++;
+            }
+            if (added[0] == 0) throw new IOException("Those pictures could not be opened.");
+        }, () -> {
+            p.style.background = 2; loadAssets(); changed(); tab(tab);
+            toast(added[0] + (added[0] == 1 ? " photo added." : " photos added.") + (added[0] < uris.size() ? " Some were skipped (limit " + Project.MAX_PHOTOS + " or unreadable)." : ""));
+        });
     }
 
     // ------------------------------------------------------------------ Lyrics tab
@@ -586,24 +640,74 @@ public class MainActivity extends Activity {
         changed();
     }
 
+    TextView lyricsCount;
+
     void lyricsTab(LinearLayout page) {
-        page.addView(heading("Lyrics · one line per row"));
+        LinearLayout steps = card();
+        steps.addView(label("Add the words in three easy ways", 15, TEXT, true));
+        steps.addView(label("1. Copy the lyrics from anywhere and tap Paste.\n2. Or type them: press Enter for each new line on screen.\n3. Or import a .lrc / .txt file (LRC keeps its timings).\n\nTip: Clean up removes labels like [Chorus], stray symbols and timestamps, and splits long rows so they fit on screen.", 13, DIM, false));
+        addCard(page, steps);
+        page.addView(row(button("📋  Paste", this::pasteLyrics, ACCENT, 0xff1a1a1a), button("✨  Clean up", this::cleanLyrics), button("Import file", () -> pick("*/*", REQ_LYRICS))));
+        lyricsCount = label("", 12, DIM, false);
+        lyricsCount.setPadding(0, dp(10), 0, dp(4));
+        page.addView(lyricsCount);
         lyricsBox = new EditText(this);
         lyricsBox.setText(project.lyrics.toText());
-        lyricsBox.setHint("Paste or type the lyrics here.\n\nEach row becomes one line on screen. Keep rows short (a phrase each) for the best look.\n\nPasting an LRC file keeps its timings.");
+        lyricsBox.setHint("Type or paste the lyrics here…\n\nOne row = one line on screen.\nKeep each row to a short phrase for the best look.");
         lyricsBox.setHintTextColor(0xff6c6c7c);
         lyricsBox.setTextColor(TEXT);
-        lyricsBox.setTextSize(16);
+        lyricsBox.setTextSize(17);
+        lyricsBox.setLineSpacing(dp(4), 1);
         lyricsBox.setGravity(Gravity.TOP);
         lyricsBox.setMinLines(12);
-        lyricsBox.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        lyricsBox.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_AUTO_CORRECT);
         lyricsBox.setBackground(round(PANEL, 14));
         lyricsBox.setPadding(dp(14), dp(12), dp(14), dp(12));
-        lyricsBox.addTextChangedListener(watcher(s -> { if (!settingLyricsText) { handler.removeCallbacks(applyLyrics); handler.postDelayed(applyLyrics, 900); } }));
+        lyricsBox.addTextChangedListener(watcher(s -> { updateLyricsCount(); if (!settingLyricsText) { handler.removeCallbacks(applyLyrics); handler.postDelayed(applyLyrics, 900); } }));
         page.addView(lyricsBox, new LinearLayout.LayoutParams(-1, -2));
-        page.addView(label("Editing a line keeps the timings of the others.", 12, DIM, false));
-        page.addView(row(button("Import .lrc / .txt", () -> pick("*/*", REQ_LYRICS)), button("Save as .lrc", this::saveLrc)));
-        page.addView(row(button("Next: sync ▸", () -> tab(2), ACCENT, 0xff1a1a1a)));
+        updateLyricsCount();
+        page.addView(row(button("Clear all", () -> new AlertDialog.Builder(this).setTitle("Clear all lyrics?").setMessage("The words and their timings are removed.").setNegativeButton("Cancel", null)
+                .setPositiveButton("Clear", (d, w) -> { settingLyricsText = true; lyricsBox.setText(""); settingLyricsText = false; project.lyrics.lines.clear(); changed(); updateLyricsCount(); }).show()),
+                button("Save as .lrc", this::saveLrc)));
+        page.addView(row(button("Next: sync the lines ▸", () -> tab(2), ACCENT, 0xff1a1a1a)));
+    }
+
+    void updateLyricsCount() {
+        if (lyricsCount == null || lyricsBox == null) return;
+        String t = lyricsBox.getText().toString();
+        int lines = 0, longOnes = 0;
+        for (String r : t.split("\n")) { String x = r.trim(); if (x.isEmpty()) continue; lines++; if (x.length() > Lyrics.LONG_LINE) longOnes++; }
+        lyricsCount.setText(lines == 0 ? "No lyrics yet." : lines + " lines" + (longOnes > 0 ? "  ·  " + longOnes + " long — Clean up can split them" : "") + "  ·  " + project.lyrics.syncedCount() + " synced");
+    }
+
+    void pasteLyrics() {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        CharSequence clip = null;
+        if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip() != null && cm.getPrimaryClip().getItemCount() > 0) clip = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+        if (clip == null || clip.toString().trim().isEmpty()) { toast("Copy the lyrics first (from a website, notes or messages), then tap Paste."); return; }
+        String text = clip.toString();
+        Runnable put = () -> {
+            boolean messy = Lyrics.needsCleanUp(text) && !Lyrics.looksLikeLrc(text);
+            String current = lyricsBox.getText().toString().trim();
+            lyricsBox.setText(current.isEmpty() || !replaceOnPaste ? text : current + "\n" + text);
+            applyLyricsNow();
+            if (messy) new AlertDialog.Builder(this).setTitle("Tidy the pasted lyrics?").setMessage("They contain section labels, symbols or very long rows. Clean up removes labels like [Chorus] and splits long rows into readable lines.")
+                    .setNegativeButton("Keep as is", null).setPositiveButton("Clean up", (d, w) -> cleanLyrics()).show();
+        };
+        replaceOnPaste = true;
+        if (lyricsBox.getText().toString().trim().isEmpty()) put.run();
+        else new AlertDialog.Builder(this).setTitle("Paste lyrics").setItems(new String[]{"Replace the current lyrics", "Add to the end"}, (d, i) -> { replaceOnPaste = i == 0; put.run(); }).show();
+    }
+    boolean replaceOnPaste = true;
+
+    void cleanLyrics() {
+        String before = lyricsBox.getText().toString();
+        if (Lyrics.looksLikeLrc(before)) { applyLyricsNow(); before = lyricsBox.getText().toString(); }
+        String after = Lyrics.cleanUp(before, Lyrics.LONG_LINE);
+        if (after.equals(before.trim())) { toast("Already tidy ✓"); return; }
+        lyricsBox.setText(after);
+        applyLyricsNow();
+        toast("Cleaned up: " + project.lyrics.lines.size() + " lines.");
     }
 
     void saveLrc() {
@@ -633,13 +737,21 @@ public class MainActivity extends Activity {
         syncStatus = label("", 13, DIM, false);
         syncStatus.setPadding(0, dp(10), 0, dp(4));
         page.addView(syncStatus);
-        page.addView(row(button("⟲  Start over", this::syncFromStart), button("▶  Continue", this::syncContinue)));
-        tapButton = button("", this::tap, ACCENT, 0xff1a1a1a);
-        tapButton.setTextSize(18);
+        Button full = button("🎤  Sync mode (full screen)", this::openSyncMode, ACCENT, 0xff1a1a1a);
+        full.setTextSize(17);
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, dp(64)); fp.topMargin = dp(4);
+        page.addView(full, fp);
+        page.addView(label("Big text, tap anywhere on the screen, slow-down playback and quick undo. The easiest way to sync.", 12, DIM, false));
+        page.addView(row(button("⚡  Quick sync", this::quickSync), button("⟲  Start over", this::syncFromStart)));
+        page.addView(label("Quick sync spreads the lines across the song in seconds; then play it and fix the few lines that are off.", 12, DIM, false));
+        page.addView(heading("Or tap here"));
+        tapButton = button("", () -> {}, PANEL2, TEXT);
+        tapButton.setTextSize(16);
         tapButton.setPadding(dp(16), dp(12), dp(16), dp(12));
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(118)); tp.topMargin = dp(6);
+        tapOnTouch(tapButton);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(100)); tp.topMargin = dp(6);
         page.addView(tapButton, tp);
-        page.addView(row(button("Undo last tap", this::undoTap), button("Shift all…", this::shiftAll)));
+        page.addView(row(button("▶  Continue", this::syncContinue), button("Undo last tap", this::undoTap), button("Shift all…", this::shiftAll)));
         TextView offset = label("", 12, DIM, false);
         Runnable showOffset = () -> offset.setText("Reaction compensation: taps count " + tapOffset() + " ms earlier.");
         showOffset.run();
@@ -659,12 +771,137 @@ public class MainActivity extends Activity {
         refreshSync();
     }
 
+    /** Taps count the moment the finger lands (not when it lifts), so timings are tighter. */
+    void tapOnTouch(View v) {
+        v.setOnTouchListener((view, e) -> {
+            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) { view.setPressed(true); tap(); }
+            else if (e.getActionMasked() == MotionEvent.ACTION_UP || e.getActionMasked() == MotionEvent.ACTION_CANCEL) view.setPressed(false);
+            return true;
+        });
+    }
+
+    // ------------------------------------------------------------------ full-screen sync mode
+
+    FrameLayout syncOverlay;
+    TextView ovPrev, ovNext, ovAfter, ovCount, ovHint;
+    Button ovSpeed, ovPlay;
+    float speed = 1f;
+
+    void openSyncMode() {
+        if (syncOverlay != null) return;
+        FrameLayout o = new FrameLayout(this);
+        o.setBackgroundColor(0xf70d0d12);
+        insets(o);
+        LinearLayout col = column();
+        col.setPadding(dp(16), dp(10), dp(16), dp(16));
+        o.addView(col, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        Button done = button("✕  Done", this::closeSyncMode);
+        ovSpeed = button("Speed 1×", this::cycleSpeed);
+        Button back = button("⟲ 5 s", () -> seekTo((int) Math.max(0, now() - 5000)));
+        Button undo = button("Undo", this::undoTap);
+        for (Button b : new Button[]{done, ovSpeed, back, undo}) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(46), 1); p.rightMargin = dp(6); top.addView(b, p); }
+        col.addView(top);
+
+        ovCount = label("", 13, DIM, true);
+        ovCount.setGravity(Gravity.CENTER);
+        ovCount.setPadding(0, dp(14), 0, 0);
+        col.addView(ovCount, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout middle = column();
+        middle.setGravity(Gravity.CENTER);
+        ovPrev = label("", 18, 0xff6f6f80, false);
+        TextView nextTag = label("TAP WHEN THIS STARTS", 11, ACCENT, true);
+        nextTag.setLetterSpacing(.2f);
+        ovNext = label("", 30, TEXT, true);
+        ovAfter = label("", 18, 0xff8a8a99, false);
+        for (TextView t : new TextView[]{ovPrev, nextTag, ovNext, ovAfter}) { t.setGravity(Gravity.CENTER); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.topMargin = dp(12); middle.addView(t, p); }
+        ovNext.setTypeface(Fonts.get(0, null));
+        col.addView(middle, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        ovHint = label("", 15, DIM, false);
+        ovHint.setGravity(Gravity.CENTER);
+        col.addView(ovHint, new LinearLayout.LayoutParams(-1, -2));
+        ovPlay = button("▶  Play", this::togglePlay, ACCENT, 0xff1a1a1a);
+        ovPlay.setTextSize(17);
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, dp(56)); pp.topMargin = dp(12);
+        col.addView(ovPlay, pp);
+
+        // Anywhere that is not a button is the tap area.
+        o.setOnTouchListener((v, e) -> { if (e.getActionMasked() == MotionEvent.ACTION_DOWN) { tap(); v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); } return true; });
+        syncOverlay = o;
+        addContentView(o, new ViewGroup.LayoutParams(-1, -1));
+        o.requestApplyInsets();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        refreshOverlay();
+    }
+
+    void closeSyncMode() {
+        if (syncOverlay == null) return;
+        pause();
+        setSpeed(1f);
+        ((ViewGroup) syncOverlay.getParent()).removeView(syncOverlay);
+        syncOverlay = null;
+        tab(2);
+    }
+
+    void cycleSpeed() { setSpeed(speed == 1f ? .75f : speed == .75f ? .5f : 1f); }
+
+    void setSpeed(float s) {
+        speed = s;
+        if (ovSpeed != null) ovSpeed.setText("Speed " + (s == 1f ? "1" : s == .75f ? "0.75" : "0.5") + "×");
+        if (player != null && prepared && playing) try { player.setPlaybackParams(player.getPlaybackParams().setSpeed(s)); } catch (Exception ignored) {}
+    }
+
+    void refreshOverlay() {
+        if (syncOverlay == null) return;
+        Lyrics l = project.lyrics;
+        int next = l.nextUnsynced(), prev = -1;
+        for (int i = (next < 0 ? l.lines.size() : next) - 1; i >= 0; i--) if (l.lines.get(i).start >= 0) { prev = i; break; }
+        ovCount.setText(l.syncedCount() + " of " + l.lines.size() + " lines synced");
+        ovPrev.setText(prev >= 0 ? "✓ " + l.lines.get(prev).text : "");
+        ovNext.setText(next >= 0 ? l.lines.get(next).text : "All lines synced ✓");
+        ovNext.setTextColor(next >= 0 ? ACCENT : 0xff7ee0a1);
+        ovAfter.setText(next >= 0 && next + 1 < l.lines.size() ? l.lines.get(next + 1).text : "");
+        ovHint.setText(next < 0 ? "Tap Done, then play the song to check it." : playing ? "Tap anywhere on the screen as the highlighted line begins" : "Press Play, then tap anywhere as each line begins");
+        ovPlay.setText(playing ? "❚❚  Pause" : "▶  Play");
+    }
+
+    void quickSync() {
+        Lyrics l = project.lyrics;
+        long guess = 0;
+        float[] env = project.envelope;
+        for (int i = 0; i < env.length; i++) if (env[i] > .3f) { guess = i * 1000L / Project.ENVELOPE_RATE; break; }
+        LinearLayout box = column();
+        box.setPadding(dp(20), dp(4), dp(20), 0);
+        box.addView(label("Lines without a time are spread over the song by their length. Synced lines stay where they are.", 13, 0xff555555, false));
+        EditText start = field(Lyrics.stamp(l.firstStart() >= 0 ? l.firstStart() : guess), "First line starts at");
+        EditText end = field(Lyrics.stamp(Math.max(0, project.durationMs - 3000)), "Last line by");
+        box.addView(label("First line starts at (m:ss)", 12, 0xff555555, true));
+        box.addView(start);
+        box.addView(label("Last line sung by (m:ss)", 12, 0xff555555, true));
+        box.addView(end);
+        box.addView(row(button("Use playhead for the start", () -> start.setText(Lyrics.stamp(now())))));
+        new AlertDialog.Builder(this).setTitle("⚡ Quick sync").setView(box).setNegativeButton("Cancel", null).setPositiveButton("Spread lines", (d, w) -> {
+            long a = Lyrics.parseStamp(start.getText().toString()), b = Lyrics.parseStamp(end.getText().toString());
+            if (a < 0 || b <= a) { toast("Check the two times (m:ss), the end must be after the start."); return; }
+            int n = l.spread(a, Math.min(b, project.durationMs));
+            changed(); refreshSync();
+            toast(n == 0 ? "Every line already has a time." : n + " lines timed. Play it and tap any line that's off to adjust it.");
+            seekTo((int) Math.max(0, a - 1500));
+        }).show();
+    }
+
     void refreshSync() {
+        refreshOverlay();
         if (syncStatus == null) return;
         Lyrics l = project.lyrics;
         int next = l.nextUnsynced();
         syncStatus.setText(l.syncedCount() + " of " + l.lines.size() + " lines synced. Play the song and tap the big button the moment each line starts.");
         tapButton.setText(next < 0 ? "All lines synced ✓\nPlay to check, or tap a line below to adjust" : "TAP when this starts\n“" + l.lines.get(next).text + "”");
+        tapButton.setBackground(round(next < 0 ? PANEL2 : 0xff3b3520, 12));
         for (int i = 0; i < syncRows.size() && i < l.lines.size(); i++) {
             Lyrics.Line line = l.lines.get(i);
             syncRows.get(i).setText((line.start < 0 ? "  –:––.––" : Lyrics.stamp(line.start)) + "    " + line.text);
@@ -703,7 +940,8 @@ public class MainActivity extends Activity {
         int next = l.nextUnsynced();
         if (next < 0) { togglePlay(); return; }
         if (!playing) { play(); toast("Playing. Tap when the highlighted line starts."); return; }
-        long t = Math.max(0, now() - tapOffset());
+        // Reaction time is real time: at slower playback it covers less of the song.
+        long t = Math.max(0, now() - Math.round(tapOffset() * speed));
         for (int k = next - 1; k >= 0; k--) if (l.lines.get(k).start >= 0) { t = Math.max(t, l.lines.get(k).start + 100); break; }
         for (int k = next + 1; k < l.lines.size(); k++) if (l.lines.get(k).start >= 0) { if (t >= l.lines.get(k).start) { toast("This line would start after the next synced line. Use Start over or edit the times."); return; } break; }
         l.lines.get(next).start = t;
@@ -773,51 +1011,137 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ Style tab
 
+    /** Selectable chips laid out in rows; the chosen one is gold. */
+    LinearLayout chips(String[] items, int selected, int cols, Pick pick) {
+        LinearLayout box = column();
+        Button[] all = new Button[items.length];
+        LinearLayout row = null;
+        for (int i = 0; i < items.length; i++) {
+            if (i % cols == 0) { row = new LinearLayout(this); box.addView(row); row.setPadding(0, dp(3), 0, dp(3)); }
+            final int k = i;
+            Button b = button(items[i], () -> {
+                for (int x = 0; x < all.length; x++) { all[x].setBackground(round(x == k ? ACCENT : PANEL2, 12)); all[x].setTextColor(x == k ? 0xff1a1a1a : TEXT); }
+                pick.picked(k);
+            });
+            b.setTextSize(13);
+            b.setPadding(dp(6), 0, dp(6), 0);
+            b.setBackground(round(i == selected ? ACCENT : PANEL2, 12));
+            b.setTextColor(i == selected ? 0xff1a1a1a : TEXT);
+            all[i] = b;
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1);
+            if (i % cols > 0) p.leftMargin = dp(6);
+            row.addView(b, p);
+        }
+        if (items.length % cols != 0) for (int i = items.length % cols; i < cols; i++) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1); p.leftMargin = dp(6); row.addView(new View(this), p); }
+        return box;
+    }
+
+    void fontPicker() {
+        ScrollView sv = new ScrollView(this);
+        LinearLayout list = column();
+        list.setPadding(dp(12), dp(6), dp(12), dp(6));
+        sv.addView(list);
+        AlertDialog[] dlg = {null};
+        for (int i = 0; i < Style.FONT_NAMES.length; i++) {
+            final int k = i;
+            if (i == Style.FONT_IMPORTED && projectFont == null) continue;
+            TextView t = label(Style.FONT_NAMES[i], 24, i == project.style.font ? ACCENT : TEXT, false);
+            t.setTypeface(Fonts.get(i, projectFont));
+            t.setPadding(dp(14), dp(12), dp(14), dp(12));
+            t.setBackground(round(i == project.style.font ? 0xff3b3520 : PANEL, 10));
+            t.setOnClickListener(v -> { project.style.font = k; changed(); dlg[0].dismiss(); tab(3); });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(6);
+            list.addView(t, lp);
+        }
+        Button imp = button("Import your own font (.ttf / .otf)…", () -> { dlg[0].dismiss(); pick("*/*", REQ_FONT); });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(48)); lp.topMargin = dp(10);
+        list.addView(imp, lp);
+        dlg[0] = new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_NoActionBar).setView(sv).setNegativeButton("Close", null).create();
+        dlg[0].show();
+    }
+
     void styleTab(LinearLayout page) {
         Style s = project.style;
+        page.addView(heading("One-tap looks"));
+        page.addView(chips(Style.PRESETS, -1, 2, i -> { s.preset(i); changed(); tab(3); toast("“" + Style.PRESETS[i] + "” applied. Adjust anything below."); }));
+
         page.addView(heading("Format"));
-        page.addView(spinner(Style.ASPECTS, s.aspect, i -> { s.aspect = i; changed(); }));
-        page.addView(heading("Lyric animation"));
-        page.addView(spinner(Style.ANIMATIONS, s.animation, i -> { s.animation = i; changed(); }));
+        page.addView(label("Portrait", 12, DIM, false));
+        int[] portrait = {0, 3, 2}, landscape = {1, 4, 5};
+        String[] pNames = {"9:16  Story / Reels", "4:5  Feed", "1:1  Square"}, lNames = {"16:9  YouTube", "21:9  Cinema", "4:3  Classic"};
+        int pSel = -1, lSel = -1;
+        for (int i = 0; i < 3; i++) { if (portrait[i] == s.aspect) pSel = i; if (landscape[i] == s.aspect) lSel = i; }
+        page.addView(chips(pNames, pSel, 3, i -> { s.aspect = portrait[i]; changed(); tab(3); }));
+        page.addView(label("Landscape", 12, DIM, false));
+        page.addView(chips(lNames, lSel, 3, i -> { s.aspect = landscape[i]; changed(); tab(3); }));
+        page.addView(toggle("Cinematic black bars", s.letterbox, b -> { s.letterbox = b; changed(); }));
+
+        page.addView(heading("Words effect"));
+        page.addView(chips(Style.ANIMATIONS, s.animation, 3, i -> { s.animation = i; changed(); }));
+        page.addView(label("Play the song to see the effect in the preview above.", 12, DIM, false));
+
         page.addView(heading("Font"));
-        page.addView(spinner(Style.FONTS, s.font, i -> {
-            if (i == 6 && projectFont == null) { pick("*/*", REQ_FONT); return; }
-            s.font = i; changed();
-        }));
-        page.addView(row(button("Import a font (.ttf / .otf)…", () -> pick("*/*", REQ_FONT))));
-        page.addView(heading("Text size"));
+        Button font = button(Style.FONT_NAMES[s.font] + "   ▸  choose", this::fontPicker);
+        font.setTypeface(Fonts.get(s.font, projectFont));
+        font.setTextSize(20);
+        page.addView(font, new LinearLayout.LayoutParams(-1, dp(56)));
+        page.addView(label("Text size", 12, DIM, false));
         page.addView(slider(.6f, 1.6f, s.textSize, v -> { s.textSize = v; changed(); }));
-        page.addView(heading("Position"));
-        page.addView(spinner(Style.POSITIONS, s.position, i -> { s.position = i; changed(); }));
-        page.addView(heading("Text colour"));
+        page.addView(label("Letter spacing", 12, DIM, false));
+        page.addView(slider(0, .3f, s.letterSpacing, v -> { s.letterSpacing = v; changed(); }));
+        page.addView(label("Position", 12, DIM, false));
+        page.addView(chips(Style.POSITIONS, s.position, 3, i -> { s.position = i; changed(); }));
+
+        page.addView(heading("Colours"));
+        page.addView(label("Text", 12, DIM, false));
         page.addView(swatches(s.textColor, c -> { s.textColor = c; changed(); }));
-        page.addView(heading("Highlight colour (sung words, visualizer)"));
+        page.addView(label("Highlight (sung words, glow, visualizer)", 12, DIM, false));
         page.addView(swatches(s.highlight, c -> { s.highlight = c; changed(); }));
 
+        page.addView(heading("Text effects"));
+        page.addView(toggle("Soft shadow", s.shadow, b -> { s.shadow = b; changed(); }));
+        page.addView(toggle("Outline", s.outline, b -> { s.outline = b; changed(); }));
+        page.addView(toggle("Glow", s.glow, b -> { s.glow = b; changed(); }));
+        page.addView(toggle("Caption box behind the words", s.box, b -> { s.box = b; changed(); }));
+        page.addView(toggle("ALL CAPS", s.uppercase, b -> { s.uppercase = b; changed(); }));
+
         page.addView(heading("Background"));
-        page.addView(spinner(Style.BACKGROUNDS, s.background, i -> {
-            if (i == 2 && !project.image().isFile()) { pick("image/*", REQ_IMAGE); return; }
-            s.background = i; changed();
+        page.addView(chips(Style.BACKGROUNDS, s.background, 3, i -> {
+            if (i == 2 && !project.hasPhotos()) { pickPhotos(); return; }
+            s.background = i; changed(); tab(3);
         }));
-        page.addView(label("Gradient colours", 12, DIM, false));
-        page.addView(spinner(Style.PALETTE_NAMES, s.palette, i -> { s.palette = i; if (s.background == 1) s.background = 0; changed(); }));
-        page.addView(label("Solid colour", 12, DIM, false));
-        page.addView(swatches(s.solid, c -> { s.solid = c; s.background = 1; changed(); }));
-        page.addView(label("Photo darkening", 12, DIM, false));
-        page.addView(slider(0, .85f, s.dim, v -> { s.dim = v; changed(); }));
+        if (s.background == 0) {
+            page.addView(label("Gradient colours", 12, DIM, false));
+            page.addView(chips(Style.PALETTE_NAMES, s.palette, 4, i -> { s.palette = i; changed(); }));
+        } else if (s.background == 1) {
+            page.addView(label("Colour", 12, DIM, false));
+            page.addView(swatches(s.solid, c -> { s.solid = c; changed(); }));
+        } else {
+            page.addView(label(project.photos().length + " photo(s) · add, reorder or remove them in the Song tab", 12, DIM, false));
+            page.addView(row(button("Add photos…", this::pickPhotos)));
+            page.addView(label("Layout", 12, DIM, false));
+            page.addView(chips(new String[]{"Fill frame", "Whole photo + blur"}, s.photoFit, 2, i -> { s.photoFit = i; changed(); }));
+            page.addView(label("Colour filter", 12, DIM, false));
+            page.addView(chips(Style.PHOTO_FILTERS, s.photoFilter, 3, i -> { s.photoFilter = i; changed(); }));
+            int secSel = 0;
+            for (int i = 0; i < Style.PHOTO_SECONDS.length; i++) if (Style.PHOTO_SECONDS[i] == s.photoSeconds) secSel = i;
+            page.addView(label("Slideshow timing", 12, DIM, false));
+            page.addView(spinner(Style.PHOTO_SECONDS_NAMES, secSel, i -> { s.photoSeconds = Style.PHOTO_SECONDS[i]; changed(); }));
+            page.addView(label("Darken for readable lyrics", 12, DIM, false));
+            page.addView(slider(0, .85f, s.dim, v -> { s.dim = v; changed(); }));
+            page.addView(toggle("Slow zoom & pan (Ken Burns)", s.kenBurns, b -> { s.kenBurns = b; changed(); }));
+        }
 
         page.addView(heading("Extras"));
         page.addView(toggle("Audio visualizer (moves with the music)", s.visualizer, b -> { s.visualizer = b; changed(); }));
         page.addView(toggle("Song progress bar", s.progressBar, b -> { s.progressBar = b; changed(); }));
         page.addView(toggle("Title card before the first line", s.titleCard, b -> { s.titleCard = b; changed(); }));
-        page.addView(toggle("Text shadow", s.shadow, b -> { s.shadow = b; changed(); }));
-        page.addView(toggle("ALL CAPS", s.uppercase, b -> { s.uppercase = b; changed(); }));
-        page.addView(toggle("Slow zoom on photo", s.kenBurns, b -> { s.kenBurns = b; changed(); }));
 
         page.addView(heading("Video quality"));
-        page.addView(spinner(Style.QUALITIES, s.quality, i -> { s.quality = i; changed(); }));
+        page.addView(chips(new String[]{"720p", "1080p HD", "4K"}, s.quality, 3, i -> { s.quality = i; changed(); if (i == 2) toast("4K needs a recent phone and takes several times longer to export. If the phone can't encode 4K, the export uses the best size it supports."); }));
         int[] rates = {24, 30, 60};
-        page.addView(spinner(new String[]{"24 fps (cinematic)", "30 fps (standard)", "60 fps (smoothest, slowest to export)"}, s.fps == 24 ? 0 : s.fps == 60 ? 2 : 1, i -> { s.fps = rates[i]; changed(); }));
+        page.addView(chips(new String[]{"24 fps film", "30 fps", "60 fps smooth"}, s.fps == 24 ? 0 : s.fps == 60 ? 2 : 1, 3, i -> { s.fps = rates[i]; changed(); }));
+        page.addView(label(s.width() + " × " + s.height() + " · " + s.fps + " fps · H.264 + AAC", 12, DIM, false));
         page.addView(row(button("Export video ▸", this::exportDialog, ACCENT, 0xff1a1a1a)));
     }
 
@@ -854,6 +1178,7 @@ public class MainActivity extends Activity {
         if (player == null || !prepared) { toast(project != null && project.hasAudio() ? "The song is still loading." : "Choose a song first."); return; }
         player.start();
         playing = true;
+        if (speed != 1f) setSpeed(speed);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         updateTransport();
     }
@@ -883,6 +1208,7 @@ public class MainActivity extends Activity {
         seek.setEnabled(project.hasAudio());
         updateClock();
         if (preview != null) preview.invalidate();
+        refreshOverlay();
         handler.removeCallbacks(ticker);
         if (playing) handler.post(ticker);
     }
@@ -933,7 +1259,8 @@ public class MainActivity extends Activity {
                 : synced < total ? "\n\n⚠ Only " + synced + " of " + total + " lines are synced. Unsynced lines will not appear." : "";
         long frames = project.durationMs * s.fps / 1000;
         String msg = s.width() + " × " + s.height() + "  ·  " + s.fps + " fps  ·  " + clock(project.durationMs) + "\n" + Style.ASPECTS[s.aspect] + "\n" + Style.ANIMATIONS[s.animation] + "\n\n"
-                + "About " + frames + " frames to draw. Keep the app open while it renders; expect a few minutes for a full song (faster at 720p / 30 fps). The video is saved to Movies/Lyric Videos." + warn;
+                + "About " + frames + " frames to draw. Keep the app open while it renders; expect a few minutes for a full song (faster at 720p / 30 fps"
+                + (s.quality == 2 ? "; 4K takes several times longer" : "") + "). The video is saved to Movies/Lyric Videos." + warn;
         new AlertDialog.Builder(this).setTitle("Export MP4").setMessage(msg).setNegativeButton("Cancel", null).setPositiveButton("Render video", (d, w) -> render()).show();
     }
 
@@ -957,12 +1284,11 @@ public class MainActivity extends Activity {
         final long started = System.currentTimeMillis();
         jobs.execute(() -> {
             File out = new File(getCacheDir(), "render.mp4");
-            Bitmap photo = null;
             Throwable fail = null;
             Uri saved = null;
             try {
-                if (p.style.background == 2) photo = decodePhoto(p.image(), 2160);
-                LyricRenderer r = LyricRenderer.snapshot(p, photo, LyricRenderer.loadFont(p.font()));
+                PhotoSet set = new PhotoSet(p.style.background == 2 ? p.photos() : null, Math.max(p.style.width(), p.style.height()));
+                LyricRenderer r = LyricRenderer.snapshot(p, set, LyricRenderer.loadFont(p.font()));
                 VideoExporter.export(r, p.audio(), out, new VideoExporter.Listener() {
                     long lastUi;
                     public void progress(float f, String text) {
@@ -978,7 +1304,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> stage.setText("Saving to your gallery…"));
                 saved = publish(out, safeName(p.title) + (p.artist.isEmpty() ? "" : " - " + safeName(p.artist)) + " (lyric video).mp4");
             } catch (Throwable e) { fail = e; }
-            finally { out.delete(); if (photo != null) photo.recycle(); }
+            finally { out.delete(); }
             final Throwable f = fail;
             final Uri video = saved;
             final long took = System.currentTimeMillis() - started;
@@ -1027,6 +1353,7 @@ public class MainActivity extends Activity {
     // ================================================================== lifecycle
 
     @Override public void onBackPressed() {
+        if (syncOverlay != null) { closeSyncMode(); return; }
         if (project != null) { applyLyricsNow(); saveLater.run(); home(); }
         else super.onBackPressed();
     }

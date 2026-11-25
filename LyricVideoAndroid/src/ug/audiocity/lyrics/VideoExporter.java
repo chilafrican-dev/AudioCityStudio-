@@ -136,12 +136,18 @@ final class VideoExporter {
         return false;
     }
 
+    /** The requested size if the phone's encoder takes it, else the same shape at 1080p, then 720p (4K and 21:9 are not universal). */
     static int[] pickSize(int w, int h) {
         int min = Math.min(w, h);
-        int sw = (w * 720 / min) & ~1, sh = (h * 720 / min) & ~1;
-        int[][] tries = {{w, h}, {w & ~15, h & ~15}, {sw, sh}, {sw & ~15, sh & ~15}};
+        ArrayList<int[]> tries = new ArrayList<>();
+        for (int side : new int[]{min, 1080, 720}) {
+            if (side > min) continue;
+            int sw = (int) ((long) w * side / min) & ~1, sh = (int) ((long) h * side / min) & ~1;
+            tries.add(new int[]{sw, sh});
+            tries.add(new int[]{sw & ~15, sh & ~15});
+        }
         for (int[] t : tries) if (supported(t[0], t[1])) return t;
-        return tries[3];
+        return tries.get(tries.size() - 1);
     }
 
     static final String VERTEX = "attribute vec4 aPos; attribute vec2 aTex; varying vec2 vTex; void main(){ gl_Position = aPos; vTex = aTex; }";

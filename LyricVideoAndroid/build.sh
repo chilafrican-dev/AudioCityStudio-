@@ -8,7 +8,7 @@ platform="$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
 rm -rf build/classes build/dex
 mkdir -p build/classes build/dex
 "$tools/aapt2" compile --dir res -o build/resources.zip
-"$tools/aapt2" link -o build/base.apk -I "$platform" --manifest AndroidManifest.xml build/resources.zip
+"$tools/aapt2" link -o build/base.apk -I "$platform" --manifest AndroidManifest.xml -A assets build/resources.zip
 javac -nowarn --release 8 -classpath "$platform" -d build/classes src/ug/audiocity/lyrics/*.java
 rm -f build/classes.jar
 (cd build/classes && zip -qr ../classes.jar .)

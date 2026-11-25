@@ -7,7 +7,7 @@ public final class LyricsTests {
     static void eq(Object a, Object b, String what) { check(a == null ? b == null : a.equals(b), what + ": expected " + b + ", got " + a); }
 
     public static void main(String[] args) {
-        plainText(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
+        plainText(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
         System.out.println("LyricsTests: " + checks + " checks passed");
     }
 
@@ -17,6 +17,40 @@ public final class LyricsTests {
         eq(l.lines.get(1).text, "Second line", "whitespace cleaned");
         check(!l.fullySynced() && l.nextUnsynced() == 0, "new lines are unsynced");
         eq(l.toText(), "First line\nSecond line", "toText");
+    }
+
+    static void cleanUp() {
+        String raw = "[Verse 1: Nico]\nChorus:\n[00:12.00]City lights are calling **out** my name\nHook me up tonight\n(oh yeah)\nx2\nVerse 2\n"
+                + "We were dancing through the night until the morning comes, and we never stopped\n";
+        String c = Lyrics.cleanUp(raw, Lyrics.LONG_LINE);
+        String[] rows = c.split("\n");
+        eq(rows[0], "City lights are calling out my name", "labels, timestamps and markdown removed");
+        eq(rows[1], "Hook me up tonight", "a real lyric starting with a section word is kept");
+        eq(rows[2], "(oh yeah)", "sung ad-libs in parentheses are kept");
+        eq(rows[3], "We were dancing through the night until", "long row split near the middle");
+        eq(rows[4], "the morning comes, and we never stopped", "second half");
+        eq(rows.length, 5, "rows after clean-up");
+        for (String r : rows) check(r.length() <= Lyrics.LONG_LINE, "every row fits: " + r);
+        check(c.contains("morning comes,"), "punctuation kept with its words");
+        check(Lyrics.needsCleanUp(raw), "suggests clean-up");
+        check(!Lyrics.needsCleanUp("Short line\nAnother one"), "clean text needs nothing");
+        eq(Lyrics.splitLong("one two, three four five six seven eight", 34).get(0), "one two,", "prefers punctuation when close");
+    }
+
+    static void spread() {
+        Lyrics l = Lyrics.parse("a\nbb\nccc\ndddd", null);
+        eq(l.spread(10000, 50000), 4, "all lines timed");
+        eq(l.lines.get(0).start, 10000L, "first at start");
+        check(l.lines.get(1).start > 10000 && l.lines.get(3).start < 50000, "inside the range");
+        check(l.lines.get(2).start - l.lines.get(1).start > l.lines.get(1).start - l.lines.get(0).start, "longer lines get more time");
+        Lyrics m = Lyrics.parse("one\ntwo\nthree\nfour\nfive", null);
+        m.lines.get(0).start = 5000; m.lines.get(3).start = 20000;
+        eq(m.spread(0, 60000), 3, "only the gaps are filled");
+        eq(m.lines.get(0).start, 5000L, "synced lines stay");
+        eq(m.lines.get(3).start, 20000L, "synced lines stay");
+        check(m.lines.get(1).start > 5000 && m.lines.get(2).start > m.lines.get(1).start && m.lines.get(2).start < 20000, "between neighbours");
+        check(m.lines.get(4).start > 20000 && m.lines.get(4).start < 60000, "tail spread to the end");
+        check(m.fullySynced(), "fully synced afterwards");
     }
 
     static void lrc() {
