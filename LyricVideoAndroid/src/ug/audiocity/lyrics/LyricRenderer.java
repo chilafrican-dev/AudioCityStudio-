@@ -18,6 +18,17 @@ final class LyricRenderer {
     long duration;
     PhotoSet photos = new PhotoSet(null, 1080);
     Typeface custom;
+    /** Square cover photo (may be null). */
+    Bitmap cover;
+    private Bitmap coverSoft, coverSoftFrom;
+    private float coverSoftAmount = -1;
+    private BitmapShader coverShader;
+    private Bitmap coverShaderFrom;
+    private final Paint coverPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final Matrix coverMatrix = new Matrix();
+    private final RectF coverRect = new RectF();
+    // Lyric area for this frame (moved aside when a cover photo is shown).
+    private float areaW = Float.MAX_VALUE, areaY = -1;
 
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
     private final Paint fx = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
@@ -38,11 +49,11 @@ final class LyricRenderer {
     }
 
     /** Independent copy for rendering on a background thread while the project keeps changing. */
-    static LyricRenderer snapshot(Project p, PhotoSet photos, Typeface custom) {
+    static LyricRenderer snapshot(Project p, PhotoSet photos, Typeface custom, Bitmap cover) {
         LyricRenderer r = new LyricRenderer();
         for (Lyrics.Line l : p.lyrics.lines) r.lyrics.lines.add(new Lyrics.Line(l.text, l.start));
         r.style = p.style.copy(); r.title = p.title; r.artist = p.artist; r.envelope = p.envelope.clone(); r.duration = p.durationMs;
-        r.photos = photos; r.custom = custom;
+        r.photos = photos; r.custom = custom; r.cover = cover;
         return r;
     }
 
@@ -65,22 +76,39 @@ final class LyricRenderer {
     void draw(Canvas c, int w, int h, long t) {
         now = t; u = Math.min(w, h) / 1080f; lv = level(t);
         background(c, w, h, t);
-        float bar = style.letterbox ? letterboxBar(w, h) : 0;
-        if (style.visualizer) visualizer(c, w, h, t, bar);
-        if (bar > 0) { fill.setColor(0xff000000); c.drawRect(0, 0, w, bar, fill); c.drawRect(0, h - bar, w, h, fill); }
-        if (style.progressBar && duration > 0) progress(c, w, h, t);
-        Lyrics.Frame f = lyrics.frame(t, duration);
         boolean wide = style.landscape();
         float anchor = h * (style.position == 1 ? (wide ? .6f : .66f) : style.position == 2 ? .32f : .5f);
         float maxW = w * (wide ? Math.min(.78f, .55f + .12f * (style.ratio() - 1)) : .86f);
         if (style.aspect == 4) maxW = w * .62f;
         float size = 76 * u * style.textSize;
-        if (f.untilFirst > 0 && style.titleCard) titleCard(c, w, h, t, f.untilFirst);
-        if (f.untilFirst > 0 && style.titleCard && style.animation != 2) return;
+        // A cover photo takes its place first; the lyrics (and the visualizer under them) use the space that is left.
+        float lx = w / 2f;
+        areaW = Float.MAX_VALUE; areaY = -1;
+        boolean showCover = style.cover && cover != null;
+        if (showCover) {
+            float[] area = coverLayout(w, h, anchor, maxW);
+            lx = area[0]; anchor = area[1]; maxW = area[2]; areaW = maxW; areaY = anchor;
+        }
+        float bar = style.letterbox ? letterboxBar(w, h) : 0;
+        if (style.visualizer) visualizer(c, w, h, t, bar, lx, showCover && lx != w / 2f ? maxW : -1);
+        if (bar > 0) { fill.setColor(0xff000000); c.drawRect(0, 0, w, bar, fill); c.drawRect(0, h - bar, w, h, fill); }
+        if (style.progressBar && duration > 0) progress(c, w, h, t);
+        Lyrics.Frame f = lyrics.frame(t, duration);
+        if (showCover) drawCover(c, w, h, t);
+        c.save();
+        c.translate(lx - w / 2f, 0);
+        try { lyricsLayer(c, w, h, t, f, anchor, maxW, size); } finally { c.restore(); }
+    }
+
+    private void lyricsLayer(Canvas c, int w, int h, long t, Lyrics.Frame f, float anchor, float maxW, float size) {
+        // A cover with its caption already shows the title and artist, so the big title card is not repeated.
+        boolean card = style.titleCard && !(style.cover && cover != null && style.coverCaption);
+        if (f.untilFirst > 0 && card) titleCard(c, w, h, t, f.untilFirst);
+        if (f.untilFirst > 0 && card && style.animation != 2) return;
         if (style.animation >= 5 && style.animation != 12) exitPrevious(c, w, f, anchor, maxW, size);
         switch (style.animation) {
             case 1: fadeRise(c, w, f, anchor, maxW, size); break;
-            case 2: scrolling(c, w, f, anchor, maxW, size, f.untilFirst > 0 && style.titleCard); break;
+            case 2: scrolling(c, w, f, anchor, maxW, size, f.untilFirst > 0 && card); break;
             case 3: typewriter(c, w, f, anchor, maxW, size); break;
             case 4: wordPop(c, w, f, anchor, maxW, size); break;
             case 5: neon(c, w, f, anchor, maxW, size); break;
@@ -98,6 +126,146 @@ final class LyricRenderer {
     /** Height of each cinematic bar: crops to 2.39:1 in wide frames, a slim band in tall ones. */
     float letterboxBar(int w, int h) { float target = (h - w / 2.39f) / 2; return target > h * .02f ? Math.min(target, h * .1f) : h * .06f; }
 
+    // ------------------------------------------------------------------ cover photo
+
+    /**
+     * Places the cover (coverRect) and returns the lyric area {centre x, anchor y, width}. Left/Right in wide frames
+     * put the cover and the lyrics side by side; in tall frames the cover sits above the lyrics.
+     */
+    float[] coverLayout(int w, int h, float anchor, float maxW) {
+        boolean wide = w > h * 1.05f;
+        int pos = style.coverPos;
+        float side = Math.min(w, h) * style.coverSize, cx, cy, lx = w / 2f, ly = anchor, lw = maxW;
+        float caption = style.coverCaption ? 120 * u : 0;
+        if (wide && (pos == 0 || pos == 2)) {
+            side = Math.min(side * 1.25f, Math.min(h * .62f, w * .36f));
+            cx = pos == 0 ? w * .27f : w * .73f;
+            cy = h * .47f - caption * .35f;
+            lx = pos == 0 ? w * .665f : w * .335f;
+            lw = w * .5f;
+        } else if (!wide && (pos == 0 || pos == 2)) {
+            side = Math.min(side * .8f, w * .42f);
+            cx = pos == 0 ? w * .07f + side / 2 : w * .93f - side / 2;
+            cy = h * .3f;
+            ly = Math.max(anchor, cy + side / 2 + h * .17f);
+        } else {
+            side = Math.min(side, wide ? h * (pos == 3 ? .36f : .46f) : w * (pos == 3 ? .6f : .72f));
+            cx = w / 2f;
+            cy = pos == 3 ? h * (wide ? .08f : .1f) + side / 2 : h * (wide ? .36f : .37f);
+            ly = Math.max(anchor, cy + side / 2 + caption + h * (wide ? .13f : .1f));
+        }
+        // Keep room for two lines of lyrics above the visualizer: shrink the cover if it would push them too low.
+        if (!(wide && (pos == 0 || pos == 2))) {
+            float limit = h * (w > h * .85f ? .66f : .7f);
+            for (int i = 0; i < 12 && ly > limit; i++) {
+                float shrink = side * .1f;
+                side -= shrink;
+                if (!(pos == 0 || pos == 2) || wide) cy -= pos == 3 ? shrink / 2 : shrink * .25f;
+                ly = Math.max(anchor, cy + side / 2 + (pos == 0 || pos == 2 ? h * .17f : caption + h * (wide ? .13f : .1f)));
+            }
+        }
+        ly = Math.min(ly, h * (wide ? .78f : .8f));
+        coverRect.set(cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2);
+        return new float[]{lx, ly, lw};
+    }
+
+    void drawCover(Canvas c, int w, int h, long t) {
+        RectF r = coverRect;
+        float side = r.width(), R = side / 2, cx = r.centerX(), cy = r.centerY();
+        float pulse = style.coverPulse ? 1 + .035f * lv : 1;
+        int shape = style.coverShape;
+        c.save();
+        c.scale(pulse, pulse, cx, cy);
+        // Soft drop shadow.
+        fill.setColor(0xff000000);
+        fill.setShadowLayer(side * .07f, 0, side * .035f, 0xa0000000);
+        float radius = shape == 0 ? 0 : shape == 1 ? side * .07f : R;
+        c.drawRoundRect(r, radius, radius, fill);
+        fill.clearShadowLayer();
+        if (coverShader == null || coverShaderFrom != cover) { coverShader = new BitmapShader(cover, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP); coverShaderFrom = cover; }
+        float bw = cover.getWidth(), bh = cover.getHeight();
+        if (shape == 3) {
+            // Vinyl record: grooved black disc, the cover as the centre label, turning at 33⅓ rpm.
+            float angle = (t * .2f) % 360;
+            fill.setShader(new RadialGradient(cx, cy, R, new int[]{0xff1c1c1c, 0xff0b0b0b, 0xff181818, 0xff050505}, new float[]{0, .45f, .8f, 1}, Shader.TileMode.CLAMP));
+            c.drawCircle(cx, cy, R, fill);
+            fill.setShader(null);
+            fill.setStyle(Paint.Style.STROKE);
+            fill.setStrokeWidth(Math.max(1, 1.2f * u));
+            for (int k = 0; k < 22; k++) { fill.setColor(k % 3 == 0 ? 0x22ffffff : 0x14ffffff); c.drawCircle(cx, cy, R * (.47f + .5f * k / 22f), fill); }
+            fill.setStyle(Paint.Style.FILL);
+            float label = R * .44f, sc = 2 * label / Math.min(bw, bh);
+            coverMatrix.setScale(sc, sc);
+            coverMatrix.postTranslate(cx - bw * sc / 2, cy - bh * sc / 2);
+            coverMatrix.postRotate(angle, cx, cy);
+            coverShader.setLocalMatrix(coverMatrix);
+            coverPaint.setShader(coverShader);
+            c.drawCircle(cx, cy, label, coverPaint);
+            fill.setColor(0xff0a0a0a);
+            c.drawCircle(cx, cy, R * .035f, fill);
+            // Light catching the grooves (stays still while the record turns).
+            fill.setShader(new SweepGradient(cx, cy, new int[]{0x00ffffff, 0x1effffff, 0x00ffffff, 0x00ffffff, 0x1effffff, 0x00ffffff}, new float[]{0, .08f, .16f, .5f, .58f, .66f}));
+            c.drawCircle(cx, cy, R, fill);
+            fill.setShader(null);
+        } else {
+            float sc = side / Math.min(bw, bh);
+            coverMatrix.setScale(sc, sc);
+            coverMatrix.postTranslate(cx - bw * sc / 2, cy - bh * sc / 2);
+            coverShader.setLocalMatrix(coverMatrix);
+            coverPaint.setShader(coverShader);
+            c.drawRoundRect(r, radius, radius, coverPaint);
+            fill.setStyle(Paint.Style.STROKE);
+            fill.setStrokeWidth(Math.max(1, 2 * u));
+            fill.setColor(0x33ffffff);
+            c.drawRoundRect(r, radius, radius, fill);
+            fill.setStyle(Paint.Style.FILL);
+        }
+        c.restore();
+        if (style.coverCaption) coverCaption(c, w, h);
+    }
+
+    /** "Now playing" caption: title and artist under the cover, or beside it when the cover sits at the side of a tall frame. */
+    void coverCaption(Canvas c, int w, int h) {
+        RectF r = coverRect;
+        boolean wide = w > h * 1.05f, beside = !wide && (style.coverPos == 0 || style.coverPos == 2);
+        String ti = title == null || title.trim().isEmpty() ? "" : title.trim(), ar = artist == null ? "" : artist.trim();
+        if (style.uppercase) { ti = ti.toUpperCase(Locale.getDefault()); ar = ar.toUpperCase(Locale.getDefault()); }
+        float maxW = beside ? w - r.width() - w * .2f : Math.max(r.width() * 1.3f, Math.min(w * .8f, r.width() * 1.6f));
+        float tx, ty;
+        boolean left = beside && style.coverPos == 0, right = beside && style.coverPos == 2;
+        if (beside) { tx = left ? r.right + w * .05f : r.left - w * .05f; ty = r.centerY() - 10 * u; }
+        else { tx = r.centerX(); ty = r.bottom + 70 * u * Math.max(1, style.coverPulse ? 1.03f : 1); }
+        if (!ti.isEmpty()) {
+            paint(46 * u, style.textColor, 1);
+            fitRow(ti, maxW, 46 * u);
+            float tw = text.measureText(ti);
+            glyphs(c, ti, right ? tx - tw : left ? tx : tx - tw / 2, ty, style.textColor, 1);
+        }
+        if (!ar.isEmpty()) {
+            paint(34 * u, style.highlight, 1);
+            fitRow(ar, maxW, 34 * u);
+            float aw = text.measureText(ar);
+            glyphs(c, ar, right ? tx - aw : left ? tx : tx - aw / 2, ty + 50 * u, style.highlight, .95f);
+        }
+    }
+
+    /** The cover, blurred, as the background ("Cover, blurred"). */
+    boolean coverBackground(Canvas c, int w, int h, long t) {
+        if (cover == null) return false;
+        float amount = Math.round(Math.max(.15f, style.photoBlur) * PhotoSet.BLUR_STEPS) / (float) PhotoSet.BLUR_STEPS;
+        if (coverSoft == null || coverSoftFrom != cover || amount != coverSoftAmount) { coverSoft = PhotoSet.blur(cover, amount); coverSoftFrom = cover; coverSoftAmount = amount; }
+        Bitmap b = coverSoft;
+        float p = duration > 0 ? Math.min(1, t / (float) duration) : 0;
+        float s = Math.max(w / (float) b.getWidth(), h / (float) b.getHeight()) * (style.kenBurns ? 1.08f + .1f * p : 1.08f) * (1 + .015f * lv);
+        place(b.getWidth(), b.getHeight(), s, w / 2f, h / 2f);
+        image.setColorFilter(filter(style.photoFilter));
+        image.setAlpha(255);
+        c.drawBitmap(b, matrix, image);
+        image.setColorFilter(null);
+        c.drawColor(Color.argb(Math.round(style.dim * 255), 0, 0, 0));
+        return true;
+    }
+
     String shown(int i) { String s = lyrics.lines.get(i).text; return style.uppercase ? s.toUpperCase(Locale.getDefault()) : s; }
 
     // ------------------------------------------------------------------ background and decorations
@@ -106,6 +274,7 @@ final class LyricRenderer {
         int[] p = Style.PALETTES[style.palette];
         if (style.background == 1) c.drawColor(style.solid);
         else if (style.background == 2 && photos.size() > 0 && photoBackground(c, w, h, t)) { /* drawn */ }
+        else if (style.background == 3 && coverBackground(c, w, h, t)) { /* drawn */ }
         else {
             double a = t / 1000.0 * .09;
             float d = (float) Math.hypot(w, h) / 2, cx = w / 2f, cy = h / 2f;
@@ -151,7 +320,7 @@ final class LyricRenderer {
     }
 
     void drawPhoto(Canvas c, int w, int h, int i, float p, float alpha) {
-        Bitmap b = photos.photo(i);
+        Bitmap b = style.photoBlur > .01f ? photos.blurredBy(i, style.photoBlur) : photos.photo(i);
         if (b == null) return;
         p = Math.max(0, Math.min(1, p));
         image.setAlpha(Math.round(255 * alpha));
@@ -203,9 +372,9 @@ final class LyricRenderer {
 
     static ColorMatrix contrast(float k) { float o = 128 * (1 - k); return new ColorMatrix(new float[]{k, 0, 0, 0, o, 0, k, 0, 0, o, 0, 0, k, 0, o, 0, 0, 0, 1, 0}); }
 
-    void visualizer(Canvas c, int w, int h, long t, float bar) {
+    void visualizer(Canvas c, int w, int h, long t, float bar, float centre, float width) {
         int half = 22;
-        float span = w * (style.landscape() ? .5f : .8f), gap = span / (half * 2), bw = gap * .52f;
+        float span = width > 0 ? width * .9f : w * (style.landscape() ? .5f : .8f), gap = span / (half * 2), bw = gap * .52f;
         float base = h - Math.max(bar + 40 * u, (style.progressBar ? 120 : 90) * u);
         for (int k = 0; k < half; k++) {
             float v = level(t - k * 45L);
@@ -214,7 +383,7 @@ final class LyricRenderer {
             int alpha = Math.round(255 * (.85f - .55f * k / half));
             fill.setColor((style.highlight & 0xffffff) | (alpha << 24));
             for (int side = -1; side <= 1; side += 2) {
-                float x = w / 2f + side * (k * gap + gap / 2);
+                float x = centre + side * (k * gap + gap / 2);
                 rect.set(x - bw / 2, base - bh, x + bw / 2, base + bh * .35f);
                 c.drawRoundRect(rect, bw / 2, bw / 2, fill);
             }
@@ -234,13 +403,13 @@ final class LyricRenderer {
         float alpha = untilFirst == Long.MAX_VALUE ? 1 : Lyrics.clamp((untilFirst - 250) / 650f);
         alpha *= Lyrics.clamp(t / 500f + .35f);
         if (alpha <= 0) return;
-        float maxW = w * (style.landscape() ? .7f : .82f), size = 104 * u * Math.min(1.25f, style.textSize);
+        float maxW = Math.min(areaW, w * (style.landscape() ? .7f : .82f)), size = (areaY > 0 ? 84 : 104) * u * Math.min(1.25f, style.textSize);
         String ti = title == null || title.trim().isEmpty() ? "Untitled" : title.trim();
         if (style.uppercase) ti = ti.toUpperCase(Locale.getDefault());
         paint(size, style.textColor, alpha);
         ArrayList<String> rows = fit(ti, maxW, size, 3);
         size = text.getTextSize();
-        float lh = size * 1.12f, top = h * .47f - rows.size() * lh / 2;
+        float lh = size * 1.12f, top = (areaY > 0 ? areaY : h * .47f) - rows.size() * lh / 2;
         if (artist != null && !artist.trim().isEmpty()) top -= 30 * u;
         float rise = (1 - Lyrics.ease(Lyrics.clamp(t / 900f))) * 30 * u;
         for (int r = 0; r < rows.size(); r++) glyphs(c, rows.get(r), w / 2f - text.measureText(rows.get(r)) / 2, top + r * lh + lh * .8f + rise, style.textColor, alpha);

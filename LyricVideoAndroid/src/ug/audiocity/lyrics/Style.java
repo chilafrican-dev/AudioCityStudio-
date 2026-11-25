@@ -33,7 +33,9 @@ public final class Style {
     /** Mapping for projects saved by version 0.1, which stored a font index into a shorter list. */
     static final int[] OLD_FONTS = {0, 2, 5, 9, 8, 16, FONT_IMPORTED};
 
-    public static final String[] BACKGROUNDS = {"Animated gradient", "Solid colour", "Photos"};
+    public static final String[] BACKGROUNDS = {"Animated gradient", "Solid colour", "Photos", "Cover, blurred"};
+    public static final String[] COVER_POSITIONS = {"Left", "Centre", "Right", "Top"};
+    public static final String[] COVER_SHAPES = {"Square", "Rounded", "Circle", "Vinyl record"};
     public static final String[] PALETTE_NAMES = {"Midnight", "Sunset", "Ocean", "Neon", "Forest", "Ember", "Rose gold", "Mono"};
     public static final int[][] PALETTES = {
             {0xff0b0b23, 0xff2b1a5a, 0xff0f4c75},
@@ -64,6 +66,13 @@ public final class Style {
     public boolean visualizer = true, titleCard = true, shadow = true, uppercase = false, kenBurns = true, progressBar = true;
     public boolean outline = false, glow = false, box = false, letterbox = false;
     public int photoFit = 0, photoFilter = 0, photoSeconds = 0;
+    /** Background photo blur, 0 (sharp) to 1 (very soft). */
+    public float photoBlur = 0f;
+    /** Square cover photo on top of the background. */
+    public boolean cover = false, coverPulse = true, coverCaption = true;
+    public int coverPos = 0, coverShape = 1;
+    /** Cover size as a share of the frame's short side, 0.25–0.7. */
+    public float coverSize = .46f;
     public int fps = 30;
 
     int shortSide() { return quality == 0 ? 720 : quality == 2 ? 2160 : 1080; }
@@ -81,7 +90,8 @@ public final class Style {
         s.solid = solid; s.textColor = textColor; s.highlight = highlight; s.textSize = textSize; s.letterSpacing = letterSpacing; s.dim = dim;
         s.visualizer = visualizer; s.titleCard = titleCard; s.shadow = shadow; s.uppercase = uppercase; s.kenBurns = kenBurns; s.progressBar = progressBar;
         s.outline = outline; s.glow = glow; s.box = box; s.letterbox = letterbox;
-        s.photoFit = photoFit; s.photoFilter = photoFilter; s.photoSeconds = photoSeconds; s.fps = fps;
+        s.photoFit = photoFit; s.photoFilter = photoFilter; s.photoSeconds = photoSeconds; s.fps = fps; s.photoBlur = photoBlur;
+        s.cover = cover; s.coverPulse = coverPulse; s.coverCaption = coverCaption; s.coverPos = coverPos; s.coverShape = coverShape; s.coverSize = coverSize;
         return s;
     }
 
@@ -95,18 +105,22 @@ public final class Style {
         textSize = Math.max(.6f, Math.min(1.6f, Float.isNaN(textSize) ? 1 : textSize)); dim = Math.max(0, Math.min(.85f, Float.isNaN(dim) ? .45f : dim));
         letterSpacing = Math.max(0, Math.min(.3f, Float.isNaN(letterSpacing) ? 0 : letterSpacing));
         if (fps != 24 && fps != 30 && fps != 60) fps = 30;
+        photoBlur = Math.max(0, Math.min(1, Float.isNaN(photoBlur) ? 0 : photoBlur));
+        coverPos = clampIndex(coverPos, COVER_POSITIONS.length); coverShape = clampIndex(coverShape, COVER_SHAPES.length);
+        coverSize = Math.max(.25f, Math.min(.7f, Float.isNaN(coverSize) ? .46f : coverSize));
     }
 
     static int fontIndex(String name) { for (int i = 0; i < FONT_NAMES.length; i++) if (FONT_NAMES[i].equals(name)) return i; return -1; }
 
     // ------------------------------------------------------------------ one-tap looks
 
-    public static final String[] PRESETS = {"Clean pop", "Neon night", "Cinematic", "Karaoke classic", "Minimal", "Social captions", "Handwritten", "Bold poster"};
+    public static final String[] PRESETS = {"Clean pop", "Neon night", "Cinematic", "Karaoke classic", "Minimal", "Social captions", "Handwritten", "Bold poster", "Album cover", "Vinyl"};
 
     /** Applies a ready-made professional look. Keeps the format, photos, quality and colours of the background choice the user made. */
     public void preset(int i) {
         shadow = true; outline = false; glow = false; box = false; uppercase = false; letterSpacing = 0; textSize = 1f; letterbox = false; position = 0;
         textColor = 0xffffffff;
+        if (i < 8) { cover = false; if (background == 3) background = 0; }
         switch (i) {
             case 0: font = 0; animation = 7; highlight = 0xffffd166; if (background != 2) { background = 0; palette = 1; } break;
             case 1: font = 12; animation = 5; highlight = 0xffff70a6; textColor = 0xfffff3d6; glow = true; if (background != 2) { background = 0; palette = 3; } break;
@@ -115,7 +129,10 @@ public final class Style {
             case 4: font = 1; animation = 1; highlight = 0xffffffff; shadow = false; letterSpacing = .02f; if (background != 2) { background = 0; palette = 7; } break;
             case 5: font = 2; animation = 12; highlight = 0xffffd166; box = false; position = 1; textSize = .95f; if (background != 2) { background = 0; palette = 2; } break;
             case 6: font = 18; animation = 9; highlight = 0xfff1c6b8; textSize = 1.15f; if (background != 2) { background = 0; palette = 6; } break;
-            default: font = 3; animation = 8; highlight = 0xffef476f; uppercase = true; textSize = 1.25f; letterSpacing = .04f; if (background != 2) { background = 0; palette = 5; } break;
+            case 7: font = 3; animation = 8; highlight = 0xffef476f; uppercase = true; textSize = 1.25f; letterSpacing = .04f; if (background != 2) { background = 0; palette = 5; } break;
+            // The two cover looks need a cover photo; the app asks for one if missing.
+            case 8: font = 2; animation = 7; highlight = 0xffffd166; cover = true; coverShape = 1; coverPos = landscape() ? 0 : 3; coverCaption = true; coverPulse = true; background = 3; photoBlur = Math.max(photoBlur, .6f); dim = .5f; textSize = .9f; break;
+            default: font = 0; animation = 0; highlight = 0xffffd166; cover = true; coverShape = 3; coverPos = landscape() ? 0 : 3; coverCaption = true; coverPulse = false; background = 3; photoBlur = Math.max(photoBlur, .7f); dim = .55f; textSize = .9f; break;
         }
     }
 }

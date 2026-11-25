@@ -24,7 +24,12 @@ It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and in
    - **13 words effects:** karaoke wipe, fade & rise, scrolling lyrics, typewriter, word pop, neon glow, blur focus, slide-up words, zoom burst, letter cascade, wave, cinematic, word highlighter.
    - **20 professional fonts** are bundled, and the picker shows each one: Montserrat, Inter, Poppins, Bebas Neue, Anton, Oswald, Archivo Black, Raleway, Space Grotesk, Playfair Display, DM Serif Display, Abril Fatface, Righteous, Bungee, Permanent Marker, Pacifico, Dancing Script, Great Vibes, Caveat and Lobster. You can also use the system font or import your own.
    - **Text:** size, letter spacing, position, text and highlight colours, soft shadow, outline, glow, caption box, all caps.
-   - **Background:** animated gradient (8 palettes), solid colour, or photos. Photos can be one photo or a cross-fading slideshow. They either fill the frame or show the whole photo on a blurred copy of itself. Colour filters: natural, black & white, warm, cool, vintage, dramatic. You can also set the slideshow timing, darkening, and slow zoom and pan.
+   - **Cover photo (square):** your artwork on top of the background.
+     - Place it left, centre, right or top. The lyrics, and the visualizer under them, move to the free space automatically.
+     - Shapes: square, rounded, circle, or a vinyl record that spins at 33⅓ rpm while the song plays.
+     - Adjustable size, an optional pulse on the beat, an optional "Now playing" caption with title and artist, and a soft drop shadow.
+     - Add it in the Song tab; any picture is centre-cropped to a square. One tap uses it as a blurred background too.
+   - **Background:** animated gradient (8 palettes), solid colour, or photos, or the cover photo blurred. Background photos have a blur slider from sharp to very soft (a smooth, Gaussian-like blur). Photos can be one photo or a cross-fading slideshow. They either fill the frame or show the whole photo on a blurred copy of itself. Colour filters: natural, black & white, warm, cool, vintage, dramatic. You can also set the slideshow timing, darkening, and slow zoom and pan.
    - **Extras:** audio visualizer, progress bar, title card.
    - **Video:** 720p, 1080p or 4K at 24, 30 or 60 fps. If the phone's encoder can't handle a size, such as 4K or 21:9 on older phones, the export uses the best size it supports.
 5. **Export video.** The app renders H.264 video with AAC audio on the phone's hardware encoder. The video is saved to **Movies/Lyric Videos**, and can then be shared or watched straight away.

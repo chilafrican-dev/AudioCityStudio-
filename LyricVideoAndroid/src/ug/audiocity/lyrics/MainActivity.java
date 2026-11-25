@@ -34,7 +34,7 @@ import java.util.concurrent.Executors;
 /** Audio City Lyrics: make lyric videos on the phone. Song → lyrics → tap-to-sync → style → MP4. */
 public class MainActivity extends Activity {
     static final int BG = 0xff111116, PANEL = 0xff1d1d26, PANEL2 = 0xff272733, LINE = 0xff3a3a48, TEXT = 0xfff2f2f5, DIM = 0xff9b9bab, ACCENT = 0xffffd166;
-    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5;
+    static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6;
     static final String[] TABS = {"Song", "Lyrics", "Sync", "Style"};
 
     final Handler handler = new Handler(Looper.getMainLooper());
@@ -320,6 +320,7 @@ public class MainActivity extends Activity {
     void loadAssets() {
         projectFont = LyricRenderer.loadFont(project.font());
         renderer.photos = new PhotoSet(project.photos(), 1080);
+        renderer.cover = PhotoSet.decode(project.cover(), 900);
         renderer.custom = projectFont;
         renderer.bind(project);
     }
@@ -435,6 +436,25 @@ public class MainActivity extends Activity {
         info.addView(artist, lp2);
         info.addView(label("Shown before the first lyric (turn it off in Style).", 12, DIM, false));
         addCard(page, info);
+
+        LinearLayout cov = card();
+        cov.addView(label("Cover photo (square)", 13, DIM, true));
+        cov.addView(label(project.hasCover() ? "Shown on top of the background — left, centre, right or top, as a square, rounded, circle or spinning vinyl record. Set it up in Style → Cover photo."
+                : "Optional: your single or album artwork, placed on top of the background beside or above the lyrics. Any picture is cropped to a square from its centre.", 12, DIM, false));
+        if (project.hasCover()) {
+            ImageView cv = new ImageView(this);
+            cv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            cv.setBackground(round(PANEL2, 10));
+            cv.setClipToOutline(true);
+            Bitmap th = PhotoSet.decode(project.cover(), 300);
+            if (th != null) cv.setImageBitmap(th);
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(dp(96), dp(96)); cp.topMargin = dp(8);
+            cov.addView(cv, cp);
+            cov.addView(row(button("Change cover…", () -> pick("image/*", REQ_COVER)), button("Remove", () -> {
+                project.cover().delete(); project.style.cover = false; if (project.style.background == 3) project.style.background = 0; loadAssets(); changed(); tab(0);
+            })));
+        } else cov.addView(row(button("Choose cover photo…", () -> pick("image/*", REQ_COVER))));
+        addCard(page, cov);
 
         LinearLayout photo = card();
         File[] photos = project.photos();
@@ -566,6 +586,18 @@ public class MainActivity extends Activity {
                 tab(p.lyrics.lines.isEmpty() ? 1 : 0);
                 toast("Song ready (" + clock(p.durationMs) + "). Now add the lyrics.");
             }, () -> { if (project == p) loadPlayer(); }); // the previous song, if any, is untouched
+        } else if (request == REQ_COVER) {
+            work("Preparing the cover…", () -> {
+                File tmp = new File(p.dir, "incoming-cover");
+                copy(getContentResolver().openInputStream(uri), tmp);
+                Bitmap b = PhotoSet.decode(tmp, 1600);
+                tmp.delete();
+                if (b == null) throw new IOException("That picture could not be opened.");
+                int side = Math.min(b.getWidth(), b.getHeight());
+                Bitmap sq = Bitmap.createBitmap(b, (b.getWidth() - side) / 2, (b.getHeight() - side) / 2, side, side);
+                Bitmap out = side > 1600 ? Bitmap.createScaledBitmap(sq, 1600, 1600, true) : sq;
+                try (OutputStream o = new FileOutputStream(p.cover())) { out.compress(Bitmap.CompressFormat.JPEG, 93, o); }
+            }, () -> { p.style.cover = true; loadAssets(); changed(); tab(tab); toast("Cover added. Choose its place and shape in Style → Cover photo."); });
         } else if (request == REQ_LYRICS) {
             final String[] text = {null};
             work("Reading lyrics…", () -> text[0] = readText(getContentResolver().openInputStream(uri)), () -> {
@@ -1287,7 +1319,11 @@ public class MainActivity extends Activity {
     void styleTab(LinearLayout page) {
         Style s = project.style;
         page.addView(heading("One-tap looks"));
-        page.addView(chips(Style.PRESETS, -1, 2, i -> { s.preset(i); changed(); tab(3); toast("“" + Style.PRESETS[i] + "” applied. Adjust anything below."); }));
+        page.addView(chips(Style.PRESETS, -1, 2, i -> {
+            if (i >= 8 && !project.hasCover()) { toast("Choose a cover photo for this look."); pick("image/*", REQ_COVER); }
+            s.preset(i); if (!project.hasCover()) { s.cover = false; if (s.background == 3) s.background = 0; }
+            changed(); tab(3); toast("“" + Style.PRESETS[i] + "” applied. Adjust anything below.");
+        }));
 
         page.addView(heading("Format"));
         page.addView(label("Portrait", 12, DIM, false));
@@ -1329,9 +1365,28 @@ public class MainActivity extends Activity {
         page.addView(toggle("Caption box behind the words", s.box, b -> { s.box = b; changed(); }));
         page.addView(toggle("ALL CAPS", s.uppercase, b -> { s.uppercase = b; changed(); }));
 
+        page.addView(heading("Cover photo"));
+        if (!project.hasCover()) page.addView(row(button("Choose a square cover photo…", () -> pick("image/*", REQ_COVER))));
+        else {
+            page.addView(toggle("Show the cover on top of the background", s.cover, b -> { s.cover = b; changed(); tab(3); }));
+            if (s.cover) {
+                page.addView(label("Place (lyrics move to the free space)", 12, DIM, false));
+                page.addView(chips(Style.COVER_POSITIONS, s.coverPos, 4, i -> { s.coverPos = i; changed(); }));
+                page.addView(label("Shape", 12, DIM, false));
+                page.addView(chips(Style.COVER_SHAPES, s.coverShape, 2, i -> { s.coverShape = i; changed(); }));
+                page.addView(label("Size", 12, DIM, false));
+                page.addView(slider(.25f, .7f, s.coverSize, v -> { s.coverSize = v; changed(); }));
+                page.addView(toggle("Pulse with the beat", s.coverPulse, b -> { s.coverPulse = b; changed(); }));
+                page.addView(toggle("Show title & artist with the cover", s.coverCaption, b -> { s.coverCaption = b; changed(); }));
+            }
+            page.addView(row(button("Use the cover as a blurred background", () -> { s.background = 3; if (s.photoBlur < .1f) s.photoBlur = .6f; changed(); tab(3); })));
+        }
+
         page.addView(heading("Background"));
-        page.addView(chips(Style.BACKGROUNDS, s.background, 3, i -> {
+        page.addView(chips(Style.BACKGROUNDS, s.background, 2, i -> {
             if (i == 2 && !project.hasPhotos()) { pickPhotos(); return; }
+            if (i == 3 && !project.hasCover()) { pick("image/*", REQ_COVER); return; }
+            if (i == 3 && s.photoBlur < .1f) s.photoBlur = .6f;
             s.background = i; changed(); tab(3);
         }));
         if (s.background == 0) {
@@ -1340,11 +1395,21 @@ public class MainActivity extends Activity {
         } else if (s.background == 1) {
             page.addView(label("Colour", 12, DIM, false));
             page.addView(swatches(s.solid, c -> { s.solid = c; changed(); }));
+        } else if (s.background == 3) {
+            page.addView(label("Blur", 12, DIM, false));
+            page.addView(slider(0, 1, s.photoBlur, v -> { s.photoBlur = v; changed(); }));
+            page.addView(label("Colour filter", 12, DIM, false));
+            page.addView(chips(Style.PHOTO_FILTERS, s.photoFilter, 3, i -> { s.photoFilter = i; changed(); }));
+            page.addView(label("Darken for readable lyrics", 12, DIM, false));
+            page.addView(slider(0, .85f, s.dim, v -> { s.dim = v; changed(); }));
+            page.addView(toggle("Slow zoom (Ken Burns)", s.kenBurns, b -> { s.kenBurns = b; changed(); }));
         } else {
             page.addView(label(project.photos().length + " photo(s) · add, reorder or remove them in the Song tab", 12, DIM, false));
             page.addView(row(button("Add photos…", this::pickPhotos)));
             page.addView(label("Layout", 12, DIM, false));
             page.addView(chips(new String[]{"Fill frame", "Whole photo + blur"}, s.photoFit, 2, i -> { s.photoFit = i; changed(); }));
+            page.addView(label("Blur (0 = sharp)", 12, DIM, false));
+            page.addView(slider(0, 1, s.photoBlur, v -> { s.photoBlur = v; changed(); }));
             page.addView(label("Colour filter", 12, DIM, false));
             page.addView(chips(Style.PHOTO_FILTERS, s.photoFilter, 3, i -> { s.photoFilter = i; changed(); }));
             int secSel = 0;
@@ -1512,7 +1577,8 @@ public class MainActivity extends Activity {
             Uri saved = null;
             try {
                 PhotoSet set = new PhotoSet(p.style.background == 2 ? p.photos() : null, Math.max(p.style.width(), p.style.height()));
-                LyricRenderer r = LyricRenderer.snapshot(p, set, LyricRenderer.loadFont(p.font()));
+                Bitmap coverFull = p.style.cover || p.style.background == 3 ? PhotoSet.decode(p.cover(), 1600) : null;
+                LyricRenderer r = LyricRenderer.snapshot(p, set, LyricRenderer.loadFont(p.font()), coverFull);
                 VideoExporter.export(r, p.audio(), out, new VideoExporter.Listener() {
                     long lastUi;
                     public void progress(float f, String text) {

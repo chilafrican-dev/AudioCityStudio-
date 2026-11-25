@@ -58,6 +58,9 @@ final class Project {
             if (!temp.get(i).renameTo(new File(dir, String.format(java.util.Locale.ROOT, "photo_%03d.jpg", i)))) throw new IOException("Cannot reorder photos.");
     }
     File font() { return new File(dir, "font.ttf"); }
+    /** Square cover photo shown on top of the background. */
+    File cover() { return new File(dir, "cover.jpg"); }
+    boolean hasCover() { return cover().isFile(); }
     boolean hasAudio() { File a = audio(); return a != null && a.isFile() && durationMs > 0; }
 
     static File root(File filesDir) { File f = new File(filesDir, "projects"); f.mkdirs(); return f; }
@@ -99,7 +102,8 @@ final class Project {
                     .put("titleCard", s.titleCard).put("shadow", s.shadow).put("uppercase", s.uppercase).put("kenBurns", s.kenBurns)
                     .put("progressBar", s.progressBar).put("fps", s.fps).put("letterSpacing", (double) s.letterSpacing).put("outline", s.outline)
                     .put("glow", s.glow).put("box", s.box).put("letterbox", s.letterbox).put("photoFit", s.photoFit).put("photoFilter", s.photoFilter)
-                    .put("photoSeconds", s.photoSeconds));
+                    .put("photoSeconds", s.photoSeconds).put("photoBlur", (double) s.photoBlur).put("cover", s.cover).put("coverPos", s.coverPos)
+                    .put("coverShape", s.coverShape).put("coverSize", (double) s.coverSize).put("coverPulse", s.coverPulse).put("coverCaption", s.coverCaption));
             File tmp = new File(dir, "project.json.tmp");
             try (OutputStream out = new FileOutputStream(tmp)) { out.write(o.toString(1).getBytes(StandardCharsets.UTF_8)); }
             if (!tmp.renameTo(new File(dir, "project.json"))) throw new IOException("Cannot save the project.");
@@ -140,6 +144,9 @@ final class Project {
                 d.letterSpacing = (float) s.optDouble("letterSpacing", d.letterSpacing); d.outline = s.optBoolean("outline", d.outline);
                 d.glow = s.optBoolean("glow", d.glow); d.box = s.optBoolean("box", d.box); d.letterbox = s.optBoolean("letterbox", d.letterbox);
                 d.photoFit = s.optInt("photoFit", d.photoFit); d.photoFilter = s.optInt("photoFilter", d.photoFilter); d.photoSeconds = s.optInt("photoSeconds", d.photoSeconds);
+                d.photoBlur = (float) s.optDouble("photoBlur", d.photoBlur); d.cover = s.optBoolean("cover", d.cover); d.coverPos = s.optInt("coverPos", d.coverPos);
+                d.coverShape = s.optInt("coverShape", d.coverShape); d.coverSize = (float) s.optDouble("coverSize", d.coverSize);
+                d.coverPulse = s.optBoolean("coverPulse", d.coverPulse); d.coverCaption = s.optBoolean("coverCaption", d.coverCaption);
                 d.sanitise();
             }
         } catch (org.json.JSONException e) { throw new IOException("Damaged project file: " + e.getMessage()); }
