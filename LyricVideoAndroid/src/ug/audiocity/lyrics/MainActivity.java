@@ -668,12 +668,13 @@ public class MainActivity extends Activity {
                 String[] meta = {null, null};
                 Lyrics l = Lyrics.parse(text[0], meta);
                 if (l.lines.isEmpty()) { toast("No lyric lines were found in that file."); return; }
-                p.lyrics.lines.clear(); p.lyrics.lines.addAll(l.lines);
+                replaceLyrics(l.lines);
                 if (meta[0] != null && !meta[0].isEmpty() && p.title.equals("Untitled song")) p.title = meta[0];
                 if (meta[1] != null && !meta[1].isEmpty() && p.artist.isEmpty()) p.artist = meta[1];
                 changed();
                 tab(l.syncedCount() > 0 ? 3 : 2);
-                toast(l.lines.size() + " lines imported" + (l.syncedCount() > 0 ? ", " + l.syncedCount() + " with timings." : ". Next: sync them."));
+                toast(l.lines.size() + " lines imported" + (l.syncedCount() > 0 ? ", " + l.syncedCount() + " with timings." : "."));
+                if (l.syncedCount() == 0) offerTiming();
             });
         } else if (request == REQ_FONT) {
             work("Installing font…", () -> {
@@ -719,6 +720,32 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ Lyrics tab
 
     final Runnable applyLyrics = this::applyLyricsNow;
+
+    /**
+     * Puts new lyrics in place (from a file, the AI or Sunbird). The text box on screen still holds the old words, so it
+     * is detached first: otherwise switching tabs would save the old box over the new lyrics.
+     */
+    void replaceLyrics(java.util.List<Lyrics.Line> lines) {
+        handler.removeCallbacks(applyLyrics);
+        lyricsBox = null;
+        lyricsCount = null;
+        aiCheck.clear();
+        java.util.ArrayList<Lyrics.Line> copy = new java.util.ArrayList<>(lines);
+        project.lyrics.lines.clear();
+        project.lyrics.lines.addAll(copy);
+    }
+
+    /** New lyrics have no times yet, so they cannot appear in the video: offer to time them now. */
+    void offerTiming() {
+        if (project == null || !project.hasAudio() || project.lyrics.lines.isEmpty()) return;
+        boolean ai = ModelStore.ready(this);
+        String[] items = {ai ? "🎧  AI listens & syncs every word (best)" : "🎧  Download the AI, then sync every word (best)", "⚡  Quick sync (instant estimate)", "Later"};
+        new AlertDialog.Builder(this).setTitle("Place the lyrics in the video?")
+                .setItems(items, (d, i) -> {
+                    if (i == 0) { tab(2); if (ai) aiSync(); else downloadModel(); }
+                    else if (i == 1) { tab(2); quickSync(); }
+                }).show();
+    }
 
     void applyLyricsNow() {
         handler.removeCallbacks(applyLyrics);
@@ -1233,9 +1260,8 @@ public class MainActivity extends Activity {
             for (Lyrics.Line l : project.lyrics.lines) work.lines.add(new Lyrics.Line(l.text, -1));
             final AutoTiming.Result[] result = {null};
             withHeard("Listening to the song", h -> result[0] = AutoSync.timeLyrics(work, h), () -> {
-                project.lyrics.lines.clear();
-                project.lyrics.lines.addAll(work.lines);
-                aiCheck.clear(); aiCheck.addAll(result[0].check);
+                replaceLyrics(work.lines);
+                aiCheck.addAll(result[0].check);
                 changed(); tab(2);
                 AutoTiming.Result r = result[0];
                 new AlertDialog.Builder(this).setTitle("Synced by listening 🎧")
@@ -1320,12 +1346,11 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
         new AlertDialog.Builder(this).setTitle(title).setView(sv).setNegativeButton("Discard", null).setPositiveButton(project.lyrics.lines.isEmpty() ? "Use these lyrics" : "Replace my lyrics", (d, w) -> {
-            project.lyrics.lines.clear();
-            project.lyrics.lines.addAll(found.lines);
-            aiCheck.clear();
+            replaceLyrics(found.lines);
             changed();
             tab(1);
-            toast("Lyrics added — correct any words, then check the timing in Sync.");
+            toast(found.lines.size() + " lines added" + (found.syncedCount() > 0 ? " with timings" : "") + " — correct any words, then check the timing in Sync.");
+            if (found.syncedCount() == 0) offerTiming();
         }).show();
     }
 
@@ -1594,6 +1619,7 @@ public class MainActivity extends Activity {
     final class PreviewView extends View {
         final RectF frame = new RectF();
         final Path clip = new Path();
+        final Paint hint = new Paint(Paint.ANTI_ALIAS_FLAG), pillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         PreviewView() {
             super(MainActivity.this);
             setOnClickListener(v -> togglePlay());
@@ -1617,6 +1643,20 @@ public class MainActivity extends Activity {
             c.translate(frame.left, frame.top);
             renderer.draw(c, Math.round(w), Math.round(h), now());
             c.restore();
+            // Preview-only hint (never in the export): lyrics exist but have no times, so the video cannot show them yet.
+            Lyrics l = project.lyrics;
+            if (!l.lines.isEmpty() && l.syncedCount() == 0) {
+                hint.setTextSize(dp(11));
+                hint.setColor(0xffffffff);
+                String msg = l.lines.size() + " lines added, not timed yet · open Sync to place them";
+                float tw = Math.min(hint.measureText(msg), frame.width() - dp(16));
+                RectF pill = new RectF(frame.centerX() - tw / 2 - dp(10), frame.bottom - dp(40), frame.centerX() + tw / 2 + dp(10), frame.bottom - dp(14));
+                pillPaint.setColor(0xcc000000);
+                c.drawRoundRect(pill, dp(13), dp(13), pillPaint);
+                c.save(); c.clipRect(pill);
+                c.drawText(msg, pill.centerX() - hint.measureText(msg) / 2, pill.centerY() + dp(4), hint);
+                c.restore();
+            }
             if (playing) postInvalidateOnAnimation();
         }
     }
