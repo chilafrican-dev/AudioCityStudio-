@@ -37,6 +37,48 @@ final class AutoTiming {
         return r;
     }
 
+    /**
+     * AI fine-tune inside the user's own timings: each line that already has a time (held, tapped or quick-synced) is
+     * matched only against its own stretch of the song (plus a margin), so the AI just places the words within it —
+     * a much easier, more reliable job than searching the whole song.
+     */
+    static Result alignWithin(Lyrics lyrics, float[] lp, int frames, Ctc.Vocab v, int frameMs, long songMs) {
+        Result r = new Result();
+        int V = v.size();
+        for (int li = 0; li < lyrics.lines.size(); li++) {
+            Lyrics.Line line = lyrics.lines.get(li);
+            if (line.start < 0) continue;
+            long next = -1;
+            for (int k = li + 1; k < lyrics.lines.size(); k++) if (lyrics.lines.get(k).start >= 0) { next = lyrics.lines.get(k).start; break; }
+            long endGuess = line.end > line.start ? line.end : next >= 0 ? Math.min(next, line.start + 9000) : Math.min(songMs > 0 ? songMs : line.start + 9000, line.start + 9000);
+            int a = (int) Math.max(0, (line.start - 700) / frameMs), b = (int) Math.min(frames, (endGuess + 700) / frameMs);
+            if (b - a < 5) continue;
+            float[] slice = java.util.Arrays.copyOfRange(lp, a * V, b * V);
+            List<String[]> one = new ArrayList<>();
+            one.add(line.words());
+            Ctc.Word[] w = Ctc.align(slice, b - a, v, one, 2.5f)[0];
+            int n = w.length, placed = 0;
+            float score = 0;
+            for (Ctc.Word x : w) if (x.start >= 0) { placed++; score += x.score; }
+            if (placed == 0) { r.unplaced++; continue; }
+            long[] starts = new long[n], ends = new long[n];
+            for (int k = 0; k < n; k++) {
+                starts[k] = w[k].start >= 0 ? (long) (w[k].start + a) * frameMs : -1;
+                ends[k] = w[k].end >= 0 ? (long) (w[k].end + 1 + a) * frameMs : -1;
+            }
+            fillGaps(starts, ends, line.words());
+            line.start = starts[0];
+            line.wordTimes = starts;
+            long lastEnd = ends[n - 1] >= 0 ? ends[n - 1] : starts[n - 1] + 300;
+            if (line.end > 0 || lastEnd > 0) line.end = Math.max(lastEnd, starts[n - 1] + 150);
+            r.lines++;
+            r.words += n;
+            if (score / placed < CHECK_BELOW || placed < n) r.check.add(li);
+        }
+        lyrics.repairOrder();
+        return r;
+    }
+
     /** Words the model could not place (numbers, symbols) get times between their neighbours, by syllables. */
     static void fillGaps(long[] starts, long[] ends, String[] words) {
         int n = starts.length;

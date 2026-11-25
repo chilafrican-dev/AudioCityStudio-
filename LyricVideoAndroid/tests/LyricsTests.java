@@ -7,7 +7,7 @@ public final class LyricsTests {
     static void eq(Object a, Object b, String what) { check(a == null ? b == null : a.equals(b), what + ": expected " + b + ", got " + a); }
 
     public static void main(String[] args) {
-        plainText(); words(); wordTapping(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
+        plainText(); words(); wordTapping(); lineEnds(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
         System.out.println("LyricsTests: " + checks + " checks passed");
     }
 
@@ -53,6 +53,30 @@ public final class LyricsTests {
         Lyrics keep = Lyrics.parseLrc(lrc, null);
         keep.setText("Nkwagala nnyo mukwano\nA new line\nLine without word tags");
         check(keep.lines.get(0).wordTimed(), "editing other lines keeps word times");
+    }
+
+    static void lineEnds() {
+        Lyrics l = Lyrics.parse("Nkwagala nnyo\nTuli wamu", null);
+        l.lines.get(0).start = 5000; l.lines.get(0).end = 7000;   // held from 5.0 to 7.0 s
+        l.lines.get(1).start = 20000; l.lines.get(1).end = 22000; // after a 13-second break
+        check(l.frame(6000, 60000).index == 0, "held line on screen while sung");
+        check(l.frame(8500, 60000).index == -1, "screen clear during the break after a held line");
+        check(l.frame(6900, 60000).wipe > .9f, "words spread over the held time");
+        Lyrics.Frame f = l.frame(7400, 60000);
+        check(f.index == 0 && f.out > 0, "line fades out just after it ends");
+        String lrc = l.toLrc(null, null);
+        check(lrc.contains("[00:07.00]\n"), "end mark written as an empty timed row: " + lrc);
+        Lyrics back = Lyrics.parseLrc(lrc, null);
+        check(back.lines.size() == 2 && back.lines.get(0).end == 7000 && back.lines.get(1).end == 22000, "end marks read back");
+        Lyrics.moveLine(l.lines.get(0), 6000);
+        eq(l.lines.get(0).end, 8000L, "moving a line moves its end");
+        l.shift(-1000);
+        eq(l.lines.get(1).end, 21000L, "shift moves ends");
+        l.lines.get(1).end = 100; l.repairOrder();
+        eq(l.lines.get(1).end, -1L, "an end before the start is dropped");
+        Lyrics close = Lyrics.parse("a b\nc d", null);
+        close.lines.get(0).start = 1000; close.lines.get(0).end = 2900; close.lines.get(1).start = 3000;
+        check(close.frame(2950, 60000).index == 0, "a line ending just before the next one stays until it");
     }
 
     static void wordTapping() {

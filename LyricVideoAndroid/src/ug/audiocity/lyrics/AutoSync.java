@@ -58,6 +58,11 @@ final class AutoSync {
         return AutoTiming.apply(lyrics, aligned, SpeechModel.FRAME_MS);
     }
 
+    /** Places the words inside each line's own time (held, tapped or estimated) — the reliable AI step. */
+    static AutoTiming.Result fineTune(Lyrics lyrics, Heard h, long songMs) {
+        return AutoTiming.alignWithin(lyrics, h.lp, h.frames, h.vocab, SpeechModel.FRAME_MS, songMs);
+    }
+
     /** Times a text that has no line breaks yet (e.g. from Sunbird) and splits it into screen lines at the singer's pauses. */
     static Lyrics timeAndSplit(String text, Heard h) {
         List<String[]> one = AutoTiming.asOneLine(text);

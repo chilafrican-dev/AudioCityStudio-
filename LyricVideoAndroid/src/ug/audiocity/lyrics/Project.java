@@ -97,6 +97,7 @@ final class Project {
             JSONArray ls = new JSONArray();
             for (Lyrics.Line l : lyrics.lines) {
                 JSONObject j = new JSONObject().put("text", l.text).put("start", l.start);
+                if (l.end > l.start) j.put("end", l.end);
                 if (l.wordTimed()) { JSONArray w = new JSONArray(); for (long t : l.wordTimes) w.put(t); j.put("words", w); }
                 ls.put(j);
             }
@@ -129,6 +130,7 @@ final class Project {
             if (ls != null) for (int i = 0; i < ls.length(); i++) {
                 JSONObject l = ls.getJSONObject(i);
                 Lyrics.Line line = new Lyrics.Line(l.optString("text", ""), l.optLong("start", -1));
+                line.end = l.optLong("end", -1);
                 JSONArray w = l.optJSONArray("words");
                 if (w != null) { line.wordTimes = new long[w.length()]; for (int k = 0; k < w.length(); k++) line.wordTimes[k] = w.optLong(k, -1); }
                 p.lyrics.lines.add(line);

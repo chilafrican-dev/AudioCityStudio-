@@ -18,11 +18,13 @@ public final class Lyrics {
         public long start;
         /** Start of each word in ms (same order as {@link #words()}), from the AI aligner or a word-timed LRC; null when not word-timed. */
         public long[] wordTimes;
+        /** When the singing of this line ends (ms), from "hold while sung" or an LRC end mark; -1 when unknown. */
+        public long end = -1;
         public Line(String text, long start) { this.text = text; this.start = start; }
         public String[] words() { return text.split(" "); }
         /** True when every word has its own time. */
         public boolean wordTimed() { return wordTimes != null && wordTimes.length == words().length && start >= 0; }
-        Line copy() { Line l = new Line(text, start); l.wordTimes = wordTimes == null ? null : wordTimes.clone(); return l; }
+        Line copy() { Line l = new Line(text, start); l.wordTimes = wordTimes == null ? null : wordTimes.clone(); l.end = end; return l; }
     }
 
     /** What the renderer needs to know about one moment of the song. */
@@ -105,8 +107,9 @@ public final class Lyrics {
     public void repairOrder() {
         long last = -1;
         for (Line l : lines) {
-            if (l.start < 0) { l.wordTimes = null; continue; }
-            if (l.start < last) { l.start = -1; l.wordTimes = null; } else last = l.start;
+            if (l.start < 0) { l.wordTimes = null; l.end = -1; continue; }
+            if (l.start < last) { l.start = -1; l.wordTimes = null; l.end = -1; } else last = l.start;
+            if (l.end >= 0 && l.end <= l.start) l.end = -1;
             if (l.wordTimes != null && !l.wordTimed()) l.wordTimes = null;
         }
     }
@@ -224,7 +227,10 @@ public final class Lyrics {
             String body = row.substring(end);
             String words = clean(WORD_TIME.matcher(body).replaceAll(""));
             if (times.isEmpty()) { if (!words.isEmpty()) l.lines.add(new Line(words, -1)); continue; }
-            if (words.isEmpty()) continue; // an empty timed row only marks the end of the previous line
+            if (words.isEmpty()) { // an empty timed row marks the end of the previous line
+                if (!l.lines.isEmpty()) { Line prev = l.lines.get(l.lines.size() - 1); if (prev.start >= 0 && times.get(0) > prev.start) prev.end = times.get(0); }
+                continue;
+            }
             long[] wt = wordTags(body, words);
             for (long t : times) {
                 Line line = new Line(words, t);
@@ -236,6 +242,7 @@ public final class Lyrics {
         // LRC offset: positive values make lyrics appear sooner.
         for (Line x : l.lines) if (x.start >= 0) {
             x.start = Math.max(0, x.start - offset);
+            if (x.end >= 0) x.end = Math.max(x.start + 1, x.end - offset);
             if (x.wordTimes != null) for (int k = 0; k < x.wordTimes.length; k++) x.wordTimes[k] = Math.max(x.start, x.wordTimes[k] - offset);
         }
         l.sortByTime();
@@ -283,6 +290,12 @@ public final class Lyrics {
                 for (int k = 0; k < w.length; k++) { if (k > 0) b.append(' '); b.append('<').append(stamp(l.wordTimes[k])).append('>').append(w[k]); }
             } else b.append(l.text);
             b.append('\n');
+            // End mark (empty timed row) when the line ends well before the next one: keeps breaks in LRC players.
+            if (l.start >= 0 && l.end > l.start) {
+                long next = -1;
+                for (int k = lines.indexOf(l) + 1; k < lines.size(); k++) if (lines.get(k).start >= 0) { next = lines.get(k).start; break; }
+                if (next < 0 || next - l.end > 1000) b.append('[').append(stamp(l.end)).append("]\n");
+            }
         }
         return b.toString();
     }
@@ -321,20 +334,23 @@ public final class Lyrics {
     public boolean fullySynced() { return !lines.isEmpty() && syncedCount() == lines.size(); }
     /** First line without a time, or -1. */
     public int nextUnsynced() { for (int i = 0; i < lines.size(); i++) if (lines.get(i).start < 0) return i; return -1; }
-    public void clearTimes() { for (Line l : lines) { l.start = -1; l.wordTimes = null; } }
+    public void clearTimes() { for (Line l : lines) { l.start = -1; l.wordTimes = null; l.end = -1; } }
     public int wordTimedCount() { int n = 0; for (Line l : lines) if (l.wordTimed()) n++; return n; }
     public void shift(long ms) {
         for (Line l : lines) if (l.start >= 0) {
             long d = Math.max(0, l.start + ms) - l.start;
             l.start += d;
+            if (l.end >= 0) l.end += d;
             if (l.wordTimes != null) for (int k = 0; k < l.wordTimes.length; k++) l.wordTimes[k] = Math.max(0, l.wordTimes[k] + d);
         }
     }
 
     /** Moves a line to a new start time, carrying its word times along. */
     public static void moveLine(Line l, long start) {
-        if (l.wordTimes != null && l.start >= 0 && start >= 0) for (int k = 0; k < l.wordTimes.length; k++) l.wordTimes[k] += start - l.start;
-        else if (start < 0) l.wordTimes = null;
+        if (l.start >= 0 && start >= 0) {
+            if (l.wordTimes != null) for (int k = 0; k < l.wordTimes.length; k++) l.wordTimes[k] += start - l.start;
+            if (l.end >= 0) l.end += start - l.start;
+        } else if (start < 0) { l.wordTimes = null; l.end = -1; }
         l.start = start;
     }
 
@@ -384,7 +400,12 @@ public final class Lyrics {
     public long endOf(int i, long songEnd) {
         Line l = lines.get(i);
         long next = nextStart(i), hold = holdFor(l.text);
-        long end = next < 0 ? l.start + hold : (next - l.start > MAX_HOLD_MS + 1500 ? l.start + hold : next);
+        long end;
+        if (l.end > l.start) {
+            // Known end of singing: stay a moment longer, but leave when the next line starts or after a clear gap.
+            end = l.end + 600;
+            if (next >= 0 && (end > next || next - end < 400)) end = next;
+        } else end = next < 0 ? l.start + hold : (next - l.start > MAX_HOLD_MS + 1500 ? l.start + hold : next);
         if (songEnd > 0) end = Math.min(end, Math.max(l.start + 500, songEnd));
         return end;
     }
@@ -426,7 +447,7 @@ public final class Lyrics {
         boolean gapAfter = f.next < 0 || lines.get(f.next).start > end;
         f.out = gapAfter ? clamp(1 - (end - t) / (float) FADE_MS) : 0;
         String[] w = l.words();
-        long singEnd = l.start + singFor(l.text, span);
+        long singEnd = l.end > l.start ? l.end : l.start + singFor(l.text, span);
         long[] starts = l.wordTimed() ? l.wordTimes : estimateWords(w, l.start, singEnd);
         int k = -1;
         for (int j = 0; j < starts.length; j++) if (starts[j] <= t) k = j;

@@ -53,7 +53,7 @@ public final class AlignTests {
     static void gap(List<Object[]> parts, String sym, int frames, int[] clock) { parts.add(new Object[]{sym, frames}); clock[0] += frames; }
 
     public static void main(String[] args) {
-        tokens(); planted(false); planted(true); transcribe(); resample(); applyAndBlocks(); pieces();
+        tokens(); planted(false); planted(true); transcribe(); resample(); applyAndBlocks(); pieces(); within();
         System.out.println("AlignTests: " + checks + " checks passed");
     }
 
@@ -148,6 +148,42 @@ public final class AlignTests {
         check(b.lines.get(1).wordTimed() && b.lines.get(1).wordTimes[2] == 4800, "blocks keep word times");
         Lyrics c = AutoTiming.blocks(words, st, en, 20, 5000);
         for (Lyrics.Line x : c.lines) check(x.text.length() <= 20, "blocks respect the length limit: " + x.text);
+    }
+
+    /** Hold-to-sync then AI fine-tune: rough user times (up to ±0.4 s off) are refined word by word. */
+    static void within() {
+        Random rnd = new Random(21);
+        String[][] lyrics = {{"nkwagala", "nnyo"}, {"tuli", "wamu", "bulijjo"}, {"mukwano", "gwange"}};
+        List<Object[]> parts = new ArrayList<>();
+        int[] clock = {0};
+        int[][] truth = new int[3][];
+        int[] lineEnd = new int[3];
+        gap(parts, null, 200, clock); // long intro
+        for (int li = 0; li < 3; li++) {
+            truth[li] = new int[lyrics[li].length];
+            for (int wi = 0; wi < lyrics[li].length; wi++) {
+                truth[li][wi] = sing(parts, lyrics[li][wi], clock, rnd);
+                if (wi < lyrics[li].length - 1) gap(parts, null, 4, clock);
+            }
+            lineEnd[li] = clock[0];
+            gap(parts, li == 1 ? "?" : null, li == 1 ? 90 : 150, clock); // a break, with ad-libs after line 2
+            gap(parts, null, 40, clock);
+        }
+        int[] T = new int[1];
+        float[] lp = plant(parts, T, rnd, true);
+        StringBuilder text = new StringBuilder();
+        for (String[] l : lyrics) text.append(String.join(" ", l)).append('\n');
+        Lyrics l = Lyrics.parse(text.toString(), null);
+        int[] err = {300, -400, 250};
+        for (int li = 0; li < 3; li++) { l.lines.get(li).start = truth[li][0] * 20L + err[li]; l.lines.get(li).end = lineEnd[li] * 20L - err[li]; }
+        AutoTiming.Result r = AutoTiming.alignWithin(l, lp, T[0], V, 20, 0);
+        check(r.lines == 3, "every held line fine-tuned: " + r.lines);
+        int worst = 0;
+        for (int li = 0; li < 3; li++) for (int wi = 0; wi < lyrics[li].length; wi++) worst = (int) Math.max(worst, Math.abs(l.lines.get(li).wordTimes[wi] - truth[li][wi] * 20L));
+        check(worst <= 40, "words placed within 40 ms despite rough holds (worst " + worst + " ms)");
+        check(l.lines.get(1).end > 0 && l.lines.get(1).end < (lineEnd[1] + 10) * 20L, "line end moved to where the singing stops, before the ad-lib");
+        Lyrics.Frame f = l.frame(lineEnd[0] * 20L + 1500, 0);
+        check(f.index == -1, "nothing on screen during the break after a held line");
     }
 
     static void pieces() {

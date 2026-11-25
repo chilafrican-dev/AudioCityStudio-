@@ -868,6 +868,10 @@ public class MainActivity extends Activity {
             listen.setTextSize(16);
             LinearLayout.LayoutParams lpl = new LinearLayout.LayoutParams(-1, dp(56)); lpl.topMargin = dp(8);
             ai.addView(listen, lpl);
+            if (l.syncedCount() > 0) {
+                ai.addView(row(button("🎧  AI fine-tune the words inside my timings", this::aiFineTune)));
+                ai.addView(label("Most reliable: after you hold or tap the lines, the AI only places the words within each line's own part of the song.", 11, DIM, false));
+            }
             if (!aiCheck.isEmpty()) ai.addView(label("⚠ " + aiCheck.size() + " line(s) the AI was unsure about are marked below — play them and adjust if needed.", 12, 0xffffb703, false));
         } else ai.addView(row(button("⬇  Download AI model (355 MB)", this::downloadModel, ACCENT, 0xff1a1a1a)));
         addCard(page, ai);
@@ -880,6 +884,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, dp(64)); fp.topMargin = dp(4);
         page.addView(full, fp);
         page.addView(label("Big text, tap anywhere on the screen, slow-down playback and quick undo. The easiest way to sync.", 12, DIM, false));
+        Button holdBtn = button("✋  Hold while each line is sung (easiest)", () -> { openSyncMode(); setHoldMode(); }, ACCENT, 0xff1a1a1a);
+        holdBtn.setTextSize(16);
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, dp(58)); hp.topMargin = dp(6);
+        page.addView(holdBtn, hp);
+        page.addView(label("Press and hold when a line starts, let go when it ends. Intros and breaks are simply the time you are not holding. The words inside are spread by syllables — or placed exactly by the AI below.", 12, DIM, false));
         Button wordsBtn = button("👆  Tap word by word (exact, any song)", () -> { openSyncMode(); setWordMode(true); }, PANEL2, TEXT);
         LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-1, dp(52)); wp.topMargin = dp(6);
         page.addView(wordsBtn, wp);
@@ -926,7 +935,11 @@ public class MainActivity extends Activity {
 
     FrameLayout syncOverlay;
     TextView ovPrev, ovNext, ovAfter, ovCount, ovHint, ovTag;
-    Button ovLines, ovWords;
+    Button ovLines, ovWords, ovHold;
+    /** Hold mode: press when a line starts, let go when it ends. */
+    boolean holdMode;
+    int holding = -1;
+    boolean ignoreRelease;
     /** Word-by-word tapping in sync mode (null in line mode). */
     WordTapper tapper;
     Button ovSpeed, ovPlay;
@@ -949,9 +962,10 @@ public class MainActivity extends Activity {
         Button undo = button("Undo", this::undoTap);
         for (Button b : new Button[]{done, ovSpeed, back, undo}) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(46), 1); p.rightMargin = dp(6); top.addView(b, p); }
         col.addView(top);
-        ovLines = button("Tap lines", () -> setWordMode(false));
-        ovWords = button("Tap word by word", () -> setWordMode(true));
-        col.addView(row(ovLines, ovWords));
+        ovHold = button("✋ Hold lines", () -> setHoldMode());
+        ovLines = button("Tap lines", () -> { holdMode = false; setWordMode(false); });
+        ovWords = button("Tap words", () -> { holdMode = false; setWordMode(true); });
+        col.addView(row(ovHold, ovLines, ovWords));
 
         ovCount = label("", 13, DIM, true);
         ovCount.setGravity(Gravity.CENTER);
@@ -979,7 +993,16 @@ public class MainActivity extends Activity {
         col.addView(ovPlay, pp);
 
         // Anywhere that is not a button is the tap area.
-        o.setOnTouchListener((v, e) -> { if (e.getActionMasked() == MotionEvent.ACTION_DOWN) { tap(); v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); } return true; });
+        o.setOnTouchListener((v, e) -> {
+            int a = e.getActionMasked();
+            if (holdMode && tapper == null) {
+                if (a == MotionEvent.ACTION_DOWN) { holdStart(); v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); }
+                else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) holdEnd();
+                return true;
+            }
+            if (a == MotionEvent.ACTION_DOWN) { tap(); v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); }
+            return true;
+        });
         syncOverlay = o;
         addContentView(o, new ViewGroup.LayoutParams(-1, -1));
         o.requestApplyInsets();
@@ -994,6 +1017,7 @@ public class MainActivity extends Activity {
         ((ViewGroup) syncOverlay.getParent()).removeView(syncOverlay);
         syncOverlay = null;
         tapper = null;
+        holdMode = false; holding = -1;
         tab(2);
     }
 
@@ -1003,6 +1027,40 @@ public class MainActivity extends Activity {
         speed = s;
         if (ovSpeed != null) ovSpeed.setText("Speed " + (s == 1f ? "1" : s == .75f ? "0.75" : "0.5") + "×");
         if (player != null && prepared && playing) try { player.setPlaybackParams(player.getPlaybackParams().setSpeed(s)); } catch (Exception ignored) {}
+    }
+
+    void setHoldMode() {
+        tapper = null;
+        holdMode = true;
+        holding = -1;
+        refreshOverlay();
+    }
+
+    /** Hold mode: the finger goes down as a line starts. */
+    void holdStart() {
+        if (!playing) { play(); ignoreRelease = true; refreshOverlay(); return; }
+        Lyrics l = project.lyrics;
+        int next = l.nextUnsynced();
+        if (next < 0) { ignoreRelease = true; togglePlay(); return; }
+        long t = Math.max(0, now() - Math.round(tapOffset() * speed));
+        for (int k = next - 1; k >= 0; k--) { Lyrics.Line p = l.lines.get(k); if (p.start >= 0) { t = Math.max(t, Math.max(p.start, p.end) + 50); break; } }
+        Lyrics.Line line = l.lines.get(next);
+        line.start = t; line.end = -1; line.wordTimes = null;
+        holding = next;
+        refreshOverlay();
+    }
+
+    /** Hold mode: the finger comes up as the line ends. */
+    void holdEnd() {
+        if (ignoreRelease) { ignoreRelease = false; return; }
+        if (holding < 0 || holding >= project.lyrics.lines.size()) { holding = -1; return; }
+        Lyrics.Line line = project.lyrics.lines.get(holding);
+        // Letting go is a quicker reaction than starting: a smaller correction.
+        line.end = Math.max(line.start + 300, now() - Math.round(tapOffset() * speed * .6f));
+        holding = -1;
+        changed();
+        refreshSync();
+        if (project.lyrics.nextUnsynced() < 0) toast("Every line is placed ✓ For exact words, use “AI fine-tune” or drag words in a line.");
     }
 
     /** Switches sync mode between tapping lines and tapping every word. */
@@ -1055,7 +1113,9 @@ public class MainActivity extends Activity {
 
     void refreshOverlay() {
         if (syncOverlay == null) return;
-        ovLines.setBackground(round(tapper == null ? ACCENT : PANEL2, 12)); ovLines.setTextColor(tapper == null ? 0xff1a1a1a : TEXT);
+        boolean hold = holdMode && tapper == null;
+        ovHold.setBackground(round(hold ? ACCENT : PANEL2, 12)); ovHold.setTextColor(hold ? 0xff1a1a1a : TEXT);
+        ovLines.setBackground(round(tapper == null && !hold ? ACCENT : PANEL2, 12)); ovLines.setTextColor(tapper == null && !hold ? 0xff1a1a1a : TEXT);
         ovWords.setBackground(round(tapper != null ? ACCENT : PANEL2, 12)); ovWords.setTextColor(tapper != null ? 0xff1a1a1a : TEXT);
         ovPlay.setText(playing ? "❚❚  Pause" : "▶  Play");
         if (tapper != null) {
@@ -1070,7 +1130,8 @@ public class MainActivity extends Activity {
             ovHint.setText(tapper.done() ? "Tap Done, then play the song to check it." : playing ? "Tap anywhere as each word starts — wait through intros and breaks" : "Press Play, then tap anywhere as each word starts");
             return;
         }
-        ovTag.setText("TAP WHEN THIS STARTS");
+        ovTag.setText(hold ? (holding >= 0 ? "● SINGING — LET GO WHEN THE LINE ENDS" : "HOLD WHILE THIS LINE IS SUNG") : "TAP WHEN THIS STARTS");
+        ovTag.setTextColor(hold && holding >= 0 ? 0xff7ee0a1 : ACCENT);
         Lyrics l = project.lyrics;
         int next = l.nextUnsynced(), prev = -1;
         for (int i = (next < 0 ? l.lines.size() : next) - 1; i >= 0; i--) if (l.lines.get(i).start >= 0) { prev = i; break; }
@@ -1079,7 +1140,9 @@ public class MainActivity extends Activity {
         ovNext.setText(next >= 0 ? l.lines.get(next).text : "All lines synced ✓");
         ovNext.setTextColor(next >= 0 ? ACCENT : 0xff7ee0a1);
         ovAfter.setText(next >= 0 && next + 1 < l.lines.size() ? l.lines.get(next + 1).text : "");
-        ovHint.setText(next < 0 ? "Tap Done, then play the song to check it." : playing ? "Tap anywhere on the screen as the highlighted line begins" : "Press Play, then tap anywhere as each line begins");
+        ovHint.setText(next < 0 ? "Tap Done, then play the song to check it." : hold ? (playing ? "Press and hold anywhere while the line is sung · let go when it ends · wait through breaks" : "Press Play (or touch the screen) to start the song")
+                : playing ? "Tap anywhere on the screen as the highlighted line begins" : "Press Play, then tap anywhere as each line begins");
+        if (hold && holding >= 0) { ovNext.setText(l.lines.get(holding).text); ovNext.setTextColor(0xff7ee0a1); ovAfter.setText(holding + 1 < l.lines.size() ? l.lines.get(holding + 1).text : ""); }
     }
 
     void quickSync() {
@@ -1176,7 +1239,7 @@ public class MainActivity extends Activity {
         Lyrics l = project.lyrics;
         for (int i = l.lines.size() - 1; i >= 0; i--) if (l.lines.get(i).start >= 0) {
             long t = l.lines.get(i).start;
-            l.lines.get(i).start = -1;
+            l.lines.get(i).start = -1; l.lines.get(i).end = -1; l.lines.get(i).wordTimes = null;
             changed(); refreshSync();
             if (playing) seekTo((int) Math.max(0, t - 2500));
             return;
@@ -1353,6 +1416,25 @@ public class MainActivity extends Activity {
         };
         if (project.lyrics.syncedCount() == 0) go.run();
         else new AlertDialog.Builder(this).setTitle("Replace the current timings?").setMessage("The AI will time every line and word again from the song.").setNegativeButton("Cancel", null).setPositiveButton("Listen & sync", (d, w) -> go.run()).show();
+    }
+
+    void aiFineTune() {
+        applyLyricsNow();
+        if (!ModelStore.ready(this)) { downloadModel(); return; }
+        if (project.lyrics.syncedCount() == 0) { toast("Hold or tap the lines first."); return; }
+        final Lyrics work = new Lyrics();
+        for (Lyrics.Line l : project.lyrics.lines) work.lines.add(l.copy());
+        final long song = project.durationMs;
+        final AutoTiming.Result[] result = {null};
+        withHeard("Placing the words", h -> result[0] = AutoSync.fineTune(work, h, song), () -> {
+            replaceLyrics(work.lines);
+            aiCheck.addAll(result[0].check);
+            changed(); tab(2);
+            AutoTiming.Result r = result[0];
+            new AlertDialog.Builder(this).setTitle("Words placed 🎧")
+                    .setMessage(r.words + " words placed inside " + r.lines + " of your lines." + (r.check.isEmpty() ? "" : "\n\n" + r.check.size() + " line(s) marked ⚠ — check them and drag any word that is off.") + "\n\nLines you had not timed were left as they are.")
+                    .setPositiveButton("OK", null).show();
+        });
     }
 
     String sunbirdKey() { return prefs().getString("sunbirdKey", ""); }
