@@ -2221,80 +2221,64 @@ public class MainActivity extends Activity {
     }
 
     void render() {
-        if (busy) return;
-        busy = true;
-        final Project p = project;
-        try { p.save(); } catch (IOException ignored) {}
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        final boolean[] cancelled = {false};
-        LinearLayout box = column();
-        box.setPadding(dp(22), dp(16), dp(22), dp(6));
-        TextView stage = label("Starting…", 15, 0xff222222, false);
-        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setMax(1000);
-        TextView pct = label("0 %", 13, 0xff555555, false);
-        box.addView(stage); box.addView(bar, new LinearLayout.LayoutParams(-1, dp(28))); box.addView(pct);
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Rendering lyric video").setView(box).setCancelable(false)
-                .setNegativeButton("Cancel", (d, w) -> cancelled[0] = true).create();
-        dialog.show();
-        final long started = System.currentTimeMillis();
-        jobs.execute(() -> {
-            File out = new File(getCacheDir(), "render.mp4");
-            Throwable fail = null;
-            Uri saved = null;
-            try {
-                PhotoSet set = new PhotoSet(p.style.background == 2 ? p.photos() : null, Math.max(p.style.width(), p.style.height()));
-                Bitmap coverFull = p.style.cover || p.style.background == 3 ? PhotoSet.decode(p.cover(), 1600) : null;
-                LyricRenderer r = LyricRenderer.snapshot(p, set, LyricRenderer.loadFont(p.font()), coverFull);
-                VideoExporter.export(r, p.audio(), out, new VideoExporter.Listener() {
-                    long lastUi;
-                    public void progress(float f, String text) {
-                        long t = System.currentTimeMillis();
-                        if (t - lastUi < 150 && f < 1) return;
-                        lastUi = t;
-                        long elapsed = t - started;
-                        String eta = f > .2f ? "  ·  about " + clock((long) (elapsed / f - elapsed)) + " left" : "";
-                        runOnUiThread(() -> { stage.setText(text); bar.setProgress(Math.round(f * 1000)); pct.setText(Math.round(f * 100) + " %" + eta); });
-                    }
-                    public boolean cancelled() { return cancelled[0]; }
-                }, p.video());
-                runOnUiThread(() -> stage.setText("Saving to your gallery…"));
-                saved = publish(out, safeName(p.title) + (p.artist.isEmpty() ? "" : " - " + safeName(p.artist)) + " (lyric video).mp4");
-            } catch (Throwable e) { fail = e; }
-            finally { out.delete(); }
-            final Throwable f = fail;
-            final Uri video = saved;
-            final long took = System.currentTimeMillis() - started;
-            runOnUiThread(() -> {
-                busy = false;
-                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                try { dialog.dismiss(); } catch (Exception ignored) {}
-                if (f instanceof CancellationException) toast("Export cancelled.");
-                else if (f != null) error("Export failed", f instanceof OutOfMemoryError ? "Not enough memory. Try 720p." : f.getMessage());
-                else done(video, took);
-            });
-        });
+        if (ExportService.running()) { showExportProgress(); return; }
+        saveNow();
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 3);
+        ExportService.start(this, project.dir, project.title);
+        showExportProgress();
     }
 
-    /** Copies the finished MP4 into the shared Movies collection (no storage permission needed on Android 10+). */
-    Uri publish(File file, String name) throws IOException {
-        ContentValues v = new ContentValues();
-        v.put(MediaStore.Video.Media.DISPLAY_NAME, name);
-        v.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
-        v.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Pearl Lyrics");
-        v.put(MediaStore.Video.Media.IS_PENDING, 1);
-        Uri collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
-        Uri uri = getContentResolver().insert(collection, v);
-        if (uri == null) throw new IOException("Cannot create the video in your gallery.");
-        try (InputStream in = new FileInputStream(file); OutputStream o = getContentResolver().openOutputStream(uri, "w")) {
-            if (o == null) throw new IOException("Cannot write the video.");
-            byte[] b = new byte[1 << 16]; int n;
-            while ((n = in.read(b)) != -1) o.write(b, 0, n);
-        } catch (IOException e) { getContentResolver().delete(uri, null, null); throw e; }
-        v.clear();
-        v.put(MediaStore.Video.Media.IS_PENDING, 0);
-        getContentResolver().update(uri, v, null, null);
-        return uri;
+    AlertDialog exportDialog;
+
+    /** Progress of the background export; it keeps going if this window is hidden or the app is left. */
+    void showExportProgress() {
+        final ExportService.State st = ExportService.state;
+        if (st == null || dead) return;
+        if (exportDialog != null) { try { exportDialog.dismiss(); } catch (Exception ignored) {} }
+        LinearLayout box = column();
+        box.setPadding(dp(22), dp(16), dp(22), dp(6));
+        TextView stage = label(st.stage, 15, 0xff222222, false);
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        TextView pct = label("", 13, 0xff555555, false);
+        TextView note = label("You can leave the app — the export continues and a notification tells you when it is ready.", 12, 0xff777777, false);
+        box.addView(stage); box.addView(bar, new LinearLayout.LayoutParams(-1, dp(28))); box.addView(pct); box.addView(note);
+        exportDialog = new AlertDialog.Builder(this).setTitle("Exporting your lyric video").setView(box).setCancelable(false)
+                .setPositiveButton("Hide", (d, w) -> {})
+                .setNegativeButton("Cancel export", (d, w) -> ExportService.cancel(this)).create();
+        exportDialog.show();
+        final AlertDialog shown = exportDialog;
+        ExportService.listener = s -> runOnUiThread(() -> {
+            if (dead || shown != exportDialog) return;
+            long el = System.currentTimeMillis() - s.started;
+            stage.setText(s.stage);
+            bar.setProgress(Math.round(s.progress * 1000));
+            pct.setText(Math.round(s.progress * 100) + " %" + (s.progress > .2f ? "  ·  about " + clock((long) (el / s.progress - el)) + " left" : ""));
+            if (!s.running) finishedExport();
+        });
+        ExportService.Listener l = ExportService.listener;
+        if (l != null) l.changed(st);
+    }
+
+    /** Shows the result once (the notification covers it when the app was not open). */
+    void finishedExport() {
+        ExportService.State s = ExportService.state;
+        if (exportDialog != null) { try { exportDialog.dismiss(); } catch (Exception ignored) {} exportDialog = null; }
+        if (s == null || s.running || s.seen || dead) return;
+        s.seen = true;
+        ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(ExportService.NOTE_DONE);
+        if ("cancelled".equals(s.error)) toast("Export cancelled.");
+        else if (s.error != null) error("Export failed", s.error);
+        else done(s.result, s.took);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        ExportService.State s = ExportService.state;
+        if (s == null) return;
+        if (s.running) showExportProgress();
+        else if (!s.seen) finishedExport();
     }
 
     void done(Uri video, long took) {
@@ -2317,6 +2301,8 @@ public class MainActivity extends Activity {
 
     @Override protected void onPause() {
         super.onPause();
+        ExportService.listener = null;
+        if (exportDialog != null) { try { exportDialog.dismiss(); } catch (Exception ignored) {} exportDialog = null; }
         applyLyricsNow();
         pause();
         if (project != null) prefs().edit().putLong("pos:" + project.dir.getName(), now()).apply();
