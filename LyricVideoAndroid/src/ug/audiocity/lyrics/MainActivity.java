@@ -880,6 +880,10 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, dp(64)); fp.topMargin = dp(4);
         page.addView(full, fp);
         page.addView(label("Big text, tap anywhere on the screen, slow-down playback and quick undo. The easiest way to sync.", 12, DIM, false));
+        Button wordsBtn = button("👆  Tap word by word (exact, any song)", () -> { openSyncMode(); setWordMode(true); }, PANEL2, TEXT);
+        LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-1, dp(52)); wp.topMargin = dp(6);
+        page.addView(wordsBtn, wp);
+        page.addView(label("Drop every word yourself while the song plays: wait through the intro and breaks, tap as each word is sung. Fix any word later by dragging it (tap a line below).", 12, DIM, false));
         page.addView(row(button("⚡  Quick sync", this::quickSync), button("⟲  Start over", this::syncFromStart)));
         page.addView(label("Quick sync spreads the lines across the song in seconds; then play it and fix the few lines that are off.", 12, DIM, false));
         page.addView(heading("Or tap here"));
@@ -921,7 +925,10 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ full-screen sync mode
 
     FrameLayout syncOverlay;
-    TextView ovPrev, ovNext, ovAfter, ovCount, ovHint;
+    TextView ovPrev, ovNext, ovAfter, ovCount, ovHint, ovTag;
+    Button ovLines, ovWords;
+    /** Word-by-word tapping in sync mode (null in line mode). */
+    WordTapper tapper;
     Button ovSpeed, ovPlay;
     float speed = 1f;
 
@@ -942,6 +949,9 @@ public class MainActivity extends Activity {
         Button undo = button("Undo", this::undoTap);
         for (Button b : new Button[]{done, ovSpeed, back, undo}) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(46), 1); p.rightMargin = dp(6); top.addView(b, p); }
         col.addView(top);
+        ovLines = button("Tap lines", () -> setWordMode(false));
+        ovWords = button("Tap word by word", () -> setWordMode(true));
+        col.addView(row(ovLines, ovWords));
 
         ovCount = label("", 13, DIM, true);
         ovCount.setGravity(Gravity.CENTER);
@@ -953,6 +963,7 @@ public class MainActivity extends Activity {
         ovPrev = label("", 18, 0xff6f6f80, false);
         TextView nextTag = label("TAP WHEN THIS STARTS", 11, ACCENT, true);
         nextTag.setLetterSpacing(.2f);
+        ovTag = nextTag;
         ovNext = label("", 30, TEXT, true);
         ovAfter = label("", 18, 0xff8a8a99, false);
         for (TextView t : new TextView[]{ovPrev, nextTag, ovNext, ovAfter}) { t.setGravity(Gravity.CENTER); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.topMargin = dp(12); middle.addView(t, p); }
@@ -982,6 +993,7 @@ public class MainActivity extends Activity {
         setSpeed(1f);
         ((ViewGroup) syncOverlay.getParent()).removeView(syncOverlay);
         syncOverlay = null;
+        tapper = null;
         tab(2);
     }
 
@@ -993,8 +1005,72 @@ public class MainActivity extends Activity {
         if (player != null && prepared && playing) try { player.setPlaybackParams(player.getPlaybackParams().setSpeed(s)); } catch (Exception ignored) {}
     }
 
+    /** Switches sync mode between tapping lines and tapping every word. */
+    void setWordMode(boolean words) {
+        if (!words) { tapper = null; refreshOverlay(); return; }
+        if (tapper != null) return;
+        Lyrics l = project.lyrics;
+        int cont = WordTapper.firstUntimed(l);
+        Runnable fromStart = () -> { pause(); tapper = new WordTapper(l, 0); changed(); seekTo(0); refreshOverlay(); };
+        if (cont == 0 || cont >= l.lines.size()) {
+            if (l.syncedCount() == 0) { fromStart.run(); return; }
+            new AlertDialog.Builder(this).setTitle("Tap word by word").setMessage("Start again from the first word? The current timings are replaced as you tap.")
+                    .setNegativeButton("Cancel", null).setPositiveButton("Start from the beginning", (d, w) -> fromStart.run()).show();
+            return;
+        }
+        new AlertDialog.Builder(this).setTitle("Tap word by word").setItems(new String[]{"Continue from line " + (cont + 1) + " (“" + l.lines.get(cont).text + "”)", "Start from the beginning"}, (d, i) -> {
+            if (i == 1) { fromStart.run(); return; }
+            pause();
+            tapper = new WordTapper(l, cont);
+            changed();
+            long back = tapper.lastTime();
+            seekTo((int) Math.max(0, back - 2500));
+            refreshOverlay();
+        }).show();
+    }
+
+    void wordTap() {
+        if (tapper.done()) { togglePlay(); return; }
+        if (!playing) { play(); return; }
+        tapper.tap(Math.max(0, now() - Math.round(tapOffset() * speed)));
+        changed();
+        refreshOverlay();
+        if (tapper.done()) toast("Every word is placed ✓ Tap Done, then play to check it.");
+    }
+
+    /** The line being tapped, word by word: done words gold, the next word underlined, the rest dim. */
+    CharSequence wordLine() {
+        String[] w = tapper.words();
+        android.text.SpannableStringBuilder b = new android.text.SpannableStringBuilder();
+        for (int k = 0; k < w.length; k++) {
+            if (k > 0) b.append(' ');
+            int s0 = b.length();
+            b.append(w[k]);
+            int color = k < tapper.word() ? ACCENT : k == tapper.word() ? 0xffffffff : 0xff6f6f80;
+            b.setSpan(new android.text.style.ForegroundColorSpan(color), s0, b.length(), 0);
+            if (k == tapper.word()) { b.setSpan(new android.text.style.UnderlineSpan(), s0, b.length(), 0); b.setSpan(new android.text.style.RelativeSizeSpan(1.12f), s0, b.length(), 0); }
+        }
+        return b;
+    }
+
     void refreshOverlay() {
         if (syncOverlay == null) return;
+        ovLines.setBackground(round(tapper == null ? ACCENT : PANEL2, 12)); ovLines.setTextColor(tapper == null ? 0xff1a1a1a : TEXT);
+        ovWords.setBackground(round(tapper != null ? ACCENT : PANEL2, 12)); ovWords.setTextColor(tapper != null ? 0xff1a1a1a : TEXT);
+        ovPlay.setText(playing ? "❚❚  Pause" : "▶  Play");
+        if (tapper != null) {
+            Lyrics l = project.lyrics;
+            int li = tapper.line();
+            ovTag.setText("TAP EACH WORD AS IT IS SUNG");
+            ovCount.setText(tapper.done() ? "All " + l.lines.size() + " lines placed word by word" : "Line " + (li + 1) + " of " + l.lines.size() + "  ·  word " + (tapper.word() + 1) + " of " + tapper.words().length);
+            ovPrev.setText(li > 0 && li - 1 < l.lines.size() ? "✓ " + l.lines.get(li - 1).text : "");
+            if (tapper.done()) { ovNext.setText("All words placed ✓"); ovNext.setTextColor(0xff7ee0a1); }
+            else { ovNext.setText(wordLine()); ovNext.setTextColor(TEXT); }
+            ovAfter.setText(!tapper.done() && li + 1 < l.lines.size() ? l.lines.get(li + 1).text : "");
+            ovHint.setText(tapper.done() ? "Tap Done, then play the song to check it." : playing ? "Tap anywhere as each word starts — wait through intros and breaks" : "Press Play, then tap anywhere as each word starts");
+            return;
+        }
+        ovTag.setText("TAP WHEN THIS STARTS");
         Lyrics l = project.lyrics;
         int next = l.nextUnsynced(), prev = -1;
         for (int i = (next < 0 ? l.lines.size() : next) - 1; i >= 0; i--) if (l.lines.get(i).start >= 0) { prev = i; break; }
@@ -1004,7 +1080,6 @@ public class MainActivity extends Activity {
         ovNext.setTextColor(next >= 0 ? ACCENT : 0xff7ee0a1);
         ovAfter.setText(next >= 0 && next + 1 < l.lines.size() ? l.lines.get(next + 1).text : "");
         ovHint.setText(next < 0 ? "Tap Done, then play the song to check it." : playing ? "Tap anywhere on the screen as the highlighted line begins" : "Press Play, then tap anywhere as each line begins");
-        ovPlay.setText(playing ? "❚❚  Pause" : "▶  Play");
     }
 
     void quickSync() {
@@ -1074,6 +1149,7 @@ public class MainActivity extends Activity {
     }
 
     void tap() {
+        if (tapper != null && syncOverlay != null) { wordTap(); return; }
         Lyrics l = project.lyrics;
         int next = l.nextUnsynced();
         if (next < 0) { togglePlay(); return; }
@@ -1090,6 +1166,13 @@ public class MainActivity extends Activity {
     }
 
     void undoTap() {
+        if (tapper != null && syncOverlay != null) {
+            long t = tapper.undo();
+            if (t < 0) { toast("Nothing to undo."); return; }
+            changed(); refreshOverlay();
+            if (playing) seekTo((int) Math.max(0, t - 2000));
+            return;
+        }
         Lyrics l = project.lyrics;
         for (int i = l.lines.size() - 1; i >= 0; i--) if (l.lines.get(i).start >= 0) {
             long t = l.lines.get(i).start;
@@ -1122,40 +1205,37 @@ public class MainActivity extends Activity {
         box.addView(row(button("−0.1 s", nudgeMinus), button("+0.1 s", nudgePlus), button("= playhead", () -> time.setText(Lyrics.stamp(now())))));
         box.addView(row(button("▶ Play from here", () -> { long t = Lyrics.parseStamp(time.getText().toString()); seekTo((int) Math.max(0, (t < 0 ? now() : t) - 1500)); play(); }),
                 button("Clear time", () -> time.setText(""))));
-        final long[] words = line.wordTimed() ? line.wordTimes.clone() : null;
-        if (words != null) {
-            box.addView(label("Words (● timed by AI) — tap a word to set it to the playhead", 12, 0xff555555, true));
-            HorizontalScrollView sv = new HorizontalScrollView(this);
-            LinearLayout chips = new LinearLayout(this);
-            sv.addView(chips);
+        // Drag-and-drop word timing over the song's sound wave (for any line that has a time).
+        final long[] words;
+        final boolean[] wordsEdited = {false};
+        if (line.start >= 0) {
             String[] w = line.words();
-            for (int k = 0; k < w.length; k++) {
-                final int wk = k;
-                Button chip = button(w[k] + "\n" + Lyrics.stamp(words[k]), () -> {}, PANEL2, TEXT);
-                chip.setTextSize(12);
-                chip.setOnClickListener(v -> {
-                    long t = now();
-                    long lo = wk > 0 ? words[wk - 1] + 20 : 0, hi = wk + 1 < words.length ? words[wk + 1] - 20 : Long.MAX_VALUE;
-                    words[wk] = Math.max(lo, Math.min(hi, t));
-                    ((Button) v).setText(w[wk] + "\n" + Lyrics.stamp(words[wk]));
-                    if (wk == 0) time.setText(Lyrics.stamp(words[0]));
-                });
-                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(52)); cp.rightMargin = dp(6);
-                chips.addView(chip, cp);
-            }
-            box.addView(sv);
-        }
+            long end = project.lyrics.endOf(i, project.durationMs);
+            words = line.wordTimed() ? line.wordTimes.clone() : Lyrics.estimateWords(w, line.start, line.start + Lyrics.singFor(line.text, Math.max(1, end - line.start)));
+            long from = Math.max(0, line.start - 1500), to = Math.min(project.durationMs > 0 ? project.durationMs : end + 1500, Math.max(end, words[words.length - 1] + 1200) + 1500);
+            box.addView(label(line.wordTimed() ? "Words — drag a word to where it is sung (the wave shows the singing)" : "Words (estimated) — drag them to where they are sung", 12, 0xff555555, true));
+            WordTimeline tl = new WordTimeline(this, w, words, from, to, project.envelope, this::now, (k, t) -> {
+                wordsEdited[0] = true;
+                if (k == 0) time.setText(Lyrics.stamp(t));
+            });
+            LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(120)); tp.topMargin = dp(4);
+            box.addView(tl, tp);
+            box.addView(row(button("◀ 0.05 s", () -> tl.nudge(-50)), button("0.05 s ▶", () -> tl.nudge(50)), button("Word = playhead", () -> tl.setSelected(now()))));
+            box.addView(row(button("▶ Play this line", () -> { seekTo((int) from); play(); }), button("❚❚", this::pause)));
+        } else words = null;
         AlertDialog[] dialog = {null};
         box.addView(row(button("Delete line", () -> {
             project.lyrics.lines.remove(i); changed(); dialog[0].dismiss(); tab(2);
         }, 0xff4a2028, TEXT), button("Insert line after", () -> {
             project.lyrics.lines.add(i + 1, new Lyrics.Line("New line", -1)); changed(); dialog[0].dismiss(); tab(2); editLine(i + 1);
         })));
-        dialog[0] = new AlertDialog.Builder(this).setTitle("Line " + (i + 1)).setView(box).setNegativeButton("Cancel", null).setPositiveButton("Save", (d, w) -> {
+        ScrollView lineScroll = new ScrollView(this);
+        lineScroll.addView(box);
+        dialog[0] = new AlertDialog.Builder(this).setTitle("Line " + (i + 1)).setView(lineScroll).setNegativeButton("Cancel", null).setPositiveButton("Save", (d, w) -> {
             String t = Lyrics.clean(text.getText().toString());
             boolean sameWords = t.isEmpty() || t.equals(line.text);
             if (!t.isEmpty()) line.text = t;
-            if (words != null && sameWords) { line.wordTimes = words; line.start = words[0]; }
+            if (words != null && sameWords && (wordsEdited[0] || line.wordTimed())) { line.wordTimes = words; line.start = words[0]; }
             if (!sameWords) line.wordTimes = null;
             String ts = time.getText().toString().trim();
             long st = ts.isEmpty() ? -1 : Lyrics.parseStamp(ts);

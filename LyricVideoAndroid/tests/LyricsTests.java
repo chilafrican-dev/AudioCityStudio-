@@ -7,7 +7,7 @@ public final class LyricsTests {
     static void eq(Object a, Object b, String what) { check(a == null ? b == null : a.equals(b), what + ": expected " + b + ", got " + a); }
 
     public static void main(String[] args) {
-        plainText(); words(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
+        plainText(); words(); wordTapping(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
         System.out.println("LyricsTests: " + checks + " checks passed");
     }
 
@@ -53,6 +53,35 @@ public final class LyricsTests {
         Lyrics keep = Lyrics.parseLrc(lrc, null);
         keep.setText("Nkwagala nnyo mukwano\nA new line\nLine without word tags");
         check(keep.lines.get(0).wordTimed(), "editing other lines keeps word times");
+    }
+
+    static void wordTapping() {
+        Lyrics l = Lyrics.parse("Nkwagala nnyo\nTuli wamu bulijjo\nOmukwano", null);
+        l.lines.get(2).start = 99999; // old time, cleared when tapping starts before it
+        WordTapper w = new WordTapper(l, 0);
+        check(l.lines.get(2).start == -1, "lines being re-tapped lose old times");
+        w.tap(5000);
+        eq(l.lines.get(0).start, 5000L, "first word sets the line start (intro skipped by just waiting)");
+        check(!l.lines.get(0).wordTimed(), "line not complete yet");
+        w.tap(5600);
+        check(l.lines.get(0).wordTimed() && l.lines.get(0).wordTimes[1] == 5600, "line complete after its last word");
+        eq(w.line(), 1, "cursor moves to the next line");
+        w.tap(15000); // after an instrumental break
+        w.tap(15010); // a double tap: kept apart, in order
+        eq(l.lines.get(1).start, 15000L, "line after the break starts where tapped");
+        check(w.lastTime() == 15000 + WordTapper.MIN_GAP, "taps too close are moved apart: " + w.lastTime());
+        eq(w.undo(), 15040L, "undo the last word");
+        eq(w.word(), 1, "back to the second word");
+        w.undo();
+        eq(l.lines.get(1).start, -1L, "undoing the first word un-syncs the line");
+        eq(w.undo(), 5600L, "undo goes back into the previous line");
+        check(!l.lines.get(0).wordTimed() && l.lines.get(0).start == 5000, "previous line reopened at its last word");
+        w.tap(5700); w.tap(15000); w.tap(15500); w.tap(16000); w.tap(20000);
+        check(w.done() && l.fullySynced() && l.wordTimedCount() == 3, "all lines timed word by word");
+        eq(l.lines.get(0).wordTimes[1], 5700L, "re-tapped word kept");
+        eq(WordTapper.firstUntimed(l), 3, "nothing left to continue");
+        Lyrics.Frame f = l.frame(15600, 60000);
+        check(f.index == 1 && f.wordPos >= 1 && f.wordPos < 2, "playback follows tapped words: " + f.wordPos);
     }
 
     static void cleanUp() {
