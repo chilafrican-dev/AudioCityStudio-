@@ -399,9 +399,11 @@ public class MainActivity extends Activity {
         LinearLayout typeBar = new LinearLayout(this);
         typeBar.setGravity(Gravity.CENTER_VERTICAL);
         typeBar.setPadding(dp(14), dp(4), dp(14), dp(4));
-        TextView tl = label("✍️  Typing lyrics — one line per row", 13, DIM, true);
+        TextView tl = label("✍️  Listen & type · one line per row", 13, DIM, true);
         typeBar.addView(tl, new LinearLayout.LayoutParams(0, -2, 1));
-        typeBar.addView(button("✓ Done typing", this::doneTyping, ACCENT, 0xff1a1a1a), new LinearLayout.LayoutParams(-2, dp(40)));
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-2, dp(40)); rp.rightMargin = dp(6);
+        typeBar.addView(button("⟲ 5 s", () -> seekTo((int) Math.max(0, now() - 5000))), rp);
+        typeBar.addView(button("✓ Done", this::doneTyping, ACCENT, 0xff1a1a1a), new LinearLayout.LayoutParams(-2, dp(40)));
         typeBar.setVisibility(View.GONE);
         root.addView(typeBar, 1);
         typingBar = typeBar;
@@ -427,7 +429,7 @@ public class MainActivity extends Activity {
     void setTyping(boolean on) {
         typing = on;
         if (previewArea != null) previewArea.setVisibility(on ? View.GONE : View.VISIBLE);
-        if (transportArea != null) transportArea.setVisibility(on ? View.GONE : View.VISIBLE);
+        // The play controls stay: people listen to the song while they write the words.
         if (tabsArea != null) tabsArea.setVisibility(on ? View.GONE : View.VISIBLE);
         if (typingBar != null) typingBar.setVisibility(on ? View.VISIBLE : View.GONE);
         if (lyricsSteps != null) lyricsSteps.setVisibility(on ? View.GONE : View.VISIBLE);
