@@ -3,3 +3,4 @@ build/
 *.idsig
 *.keystore
 *.jks
+__pycache__/
