@@ -7,7 +7,7 @@ public final class LyricsTests {
     static void eq(Object a, Object b, String what) { check(a == null ? b == null : a.equals(b), what + ": expected " + b + ", got " + a); }
 
     public static void main(String[] args) {
-        plainText(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
+        plainText(); words(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
         System.out.println("LyricsTests: " + checks + " checks passed");
     }
 
@@ -17,6 +17,42 @@ public final class LyricsTests {
         eq(l.lines.get(1).text, "Second line", "whitespace cleaned");
         check(!l.fullySynced() && l.nextUnsynced() == 0, "new lines are unsynced");
         eq(l.toText(), "First line\nSecond line", "toText");
+    }
+
+    static void words() {
+        eq(Lyrics.syllables("tukwagala"), 4, "Luganda syllables tu-kwa-ga-la");
+        eq(Lyrics.syllables("nnyabo"), 2, "nnya-bo");
+        eq(Lyrics.syllables("Kampala"), 3, "Kam-pa-la");
+        check(Lyrics.singWeight("mukwano") < Lyrics.singWeight("mukwaano"), "long vowel sings longer");
+        String lrc = "[00:10.00]<00:10.00>Nkwagala <00:11.20>nnyo <00:12.00>mukwano\n[00:15.00]Line without word tags";
+        Lyrics l = Lyrics.parseLrc(lrc, null);
+        check(l.lines.get(0).wordTimed(), "enhanced LRC word tags parsed");
+        eq(l.lines.get(0).text, "Nkwagala nnyo mukwano", "word tags removed from text");
+        eq(l.lines.get(0).wordTimes[1], 11200L, "second word time");
+        check(!l.lines.get(1).wordTimed(), "plain line has no word times");
+        Lyrics back = Lyrics.parseLrc(l.toLrc(null, null), null);
+        eq(back.lines.get(0).wordTimes[2], 12000L, "word times survive an LRC round trip");
+        Lyrics.Frame f = l.frame(11600, 60000);
+        check(f.wordPos > 1 && f.wordPos < 2, "inside the second word: " + f.wordPos);
+        eq(f.words, 3, "word count");
+        float charsBefore = "Nkwagala".length() / (float) "Nkwagalannyomukwano".length();
+        check(f.wipe > charsBefore && f.wipe < charsBefore + 4f / 19, "wipe follows the word times: " + f.wipe);
+        f = l.frame(10500, 60000);
+        check(f.wordPos < 1, "first word still singing");
+        l.shift(1000);
+        eq(l.lines.get(0).wordTimes[0], 11000L, "shift moves word times");
+        Lyrics.moveLine(l.lines.get(0), 20000);
+        eq(l.lines.get(0).wordTimes[2], 22000L, "moving a line carries its words");
+        l.lines.get(0).text = "edited line";
+        l.repairOrder();
+        check(l.lines.get(0).wordTimes == null, "word times dropped when the words change");
+        Lyrics est = Lyrics.parse("tu tukwagala", null);
+        est.lines.get(0).start = 0;
+        Lyrics.Frame e = est.frame(300, 60000);
+        check(e.wordPos > 1, "short Luganda word sung quickly, long word takes longer (syllable estimate): " + e.wordPos);
+        Lyrics keep = Lyrics.parseLrc(lrc, null);
+        keep.setText("Nkwagala nnyo mukwano\nA new line\nLine without word tags");
+        check(keep.lines.get(0).wordTimed(), "editing other lines keeps word times");
     }
 
     static void cleanUp() {

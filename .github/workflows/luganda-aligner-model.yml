@@ -1,0 +1,47 @@
+name: Luganda speech model (for Lyric Video Studio)
+
+# Converts an openly licensed Luganda speech model to int8 ONNX for the phone, checks it on real Luganda speech,
+# and publishes it as the release "luganda-aligner-v1", which the app downloads once on request.
+on:
+  push:
+    paths:
+      - "LyricVideoAndroid/tools/export_aligner.py"
+      - ".github/workflows/luganda-aligner-model.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TAG: luganda-aligner-v1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install converters
+        run: |
+          pip install --quiet torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet "numpy<2" transformers==4.44.2 onnx==1.16.2 onnxruntime==1.19.2 huggingface_hub==0.24.6 soundfile==0.12.1
+
+      - name: Convert and check the model
+        run: python LyricVideoAndroid/tools/export_aligner.py model-out
+
+      - name: Publish as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la model-out
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" model-out/aligner_int8.onnx model-out/aligner.json model-out/MODEL_LICENSE.md --clobber
+          else
+            gh release create "$TAG" model-out/aligner_int8.onnx model-out/aligner.json model-out/MODEL_LICENSE.md \
+              --target "$GITHUB_SHA" --title "Luganda speech model for Lyric Video Studio" \
+              --notes-file model-out/MODEL_LICENSE.md
+          fi

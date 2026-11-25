@@ -556,12 +556,12 @@ final class LyricRenderer {
         boxes(c, rows, w, y, alpha * Math.min(1, f.in * 3));
         for (int i = 0; i < n; i++) {
             Piece p = words.get(i);
-            float local = Lyrics.clamp((f.wipe - i / (float) n) * n / 1.3f);
+            float local = Lyrics.clamp((f.wordPos - i) / 1.3f + (i == 0 ? .25f * f.in : 0));
             if (local <= 0) continue;
             float scale = easeOutBack(local);
             c.save();
             c.scale(scale, scale, p.x + p.w / 2, p.y - sz * .35f);
-            glyphs(c, p.s, p.start, p.end, p.x, p.y, local < 1 && f.wipe < 1 ? style.highlight : style.textColor, alpha * Math.min(1, local * 2));
+            glyphs(c, p.s, p.start, p.end, p.x, p.y, local < 1 && f.wordPos < n ? style.highlight : style.textColor, alpha * Math.min(1, local * 2));
             c.restore();
         }
     }
@@ -580,7 +580,7 @@ final class LyricRenderer {
         text.clearShadowLayer();
         for (int i = 0; i < n; i++) {
             Piece p = words.get(i);
-            boolean lit = f.wipe * n >= i + .3f;
+            boolean lit = f.wordPos >= i + .3f;
             float a = alpha * (lit ? 1 : .55f);
             fx.set(text); fx.setMaskFilter(blur(sz * (.28f + .3f * lv)));
             fx.setColor(applyAlpha(style.highlight, a));
@@ -620,7 +620,7 @@ final class LyricRenderer {
         ArrayList<String> rows = fit(shown(f.index), maxW, size, 3);
         float sz = text.getTextSize();
         ArrayList<Piece> words = pieces(rows, w, y, false);
-        int n = words.size(), singing = f.wipe >= 1 ? -1 : (int) (f.wipe * n);
+        int n = words.size(), singing = f.wordPos >= n ? -1 : (int) f.wordPos;
         boxes(c, rows, w, y, alpha * Math.min(1, f.in * 3));
         for (int i = 0; i < n; i++) {
             Piece p = words.get(i);
@@ -723,7 +723,7 @@ final class LyricRenderer {
         int n = words.size();
         if (n == 0) return;
         boxes(c, rows, w, y + rise, alpha);
-        float p = Math.min(n - .001f, f.wipe * n);
+        float p = Math.min(n - .001f, f.wordPos);
         int k = (int) p;
         Piece cur = words.get(k);
         float e = k > 0 ? Lyrics.ease(Lyrics.clamp((p - k) / .25f)) : 1;

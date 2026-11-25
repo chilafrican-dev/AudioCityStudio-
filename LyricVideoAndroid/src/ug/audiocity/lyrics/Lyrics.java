@@ -16,7 +16,13 @@ public final class Lyrics {
         public String text;
         /** Start time in ms, or -1 while the line has not been synced. */
         public long start;
+        /** Start of each word in ms (same order as {@link #words()}), from the AI aligner or a word-timed LRC; null when not word-timed. */
+        public long[] wordTimes;
         public Line(String text, long start) { this.text = text; this.start = start; }
+        public String[] words() { return text.split(" "); }
+        /** True when every word has its own time. */
+        public boolean wordTimed() { return wordTimes != null && wordTimes.length == words().length && start >= 0; }
+        Line copy() { Line l = new Line(text, start); l.wordTimes = wordTimes == null ? null : wordTimes.clone(); return l; }
     }
 
     /** What the renderer needs to know about one moment of the song. */
@@ -27,8 +33,12 @@ public final class Lyrics {
         public int previous = -1;
         /** Next line that will appear, or -1. */
         public int next = -1;
-        /** 0..1 progress of the sung part of the line (karaoke wipe, typewriter, word pop). */
+        /** 0..1 progress of the sung part of the line, by characters (karaoke wipe, typewriter). */
         public float wipe;
+        /** Position in the line by words: 2.5 means half-way through the third word (word pop, highlighter, neon). */
+        public float wordPos;
+        /** Number of words in the current line. */
+        public int words;
         /** 0..1 fade-in over the first moments of the line. */
         public float in;
         /** 0..1 fade-out before a gap (stays 0 when the next line follows straight on). */
@@ -82,7 +92,7 @@ public final class Lyrics {
         boolean[] matched = new boolean[m];
         int i = 0, j = 0;
         while (i < n && j < m) {
-            if (old.get(i).text.equals(fresh.get(j).text)) { fresh.get(j).start = old.get(i).start; matched[j] = true; i++; j++; }
+            if (old.get(i).text.equals(fresh.get(j).text)) { fresh.set(j, old.get(i).copy()); matched[j] = true; i++; j++; }
             else if (lcs[i + 1][j] >= lcs[i][j + 1]) i++; else j++;
         }
         // An edited line that replaces exactly one old line at the same place keeps its old time.
@@ -94,7 +104,11 @@ public final class Lyrics {
     /** Un-syncs any line whose time is earlier than a synced line before it. */
     public void repairOrder() {
         long last = -1;
-        for (Line l : lines) { if (l.start < 0) continue; if (l.start < last) l.start = -1; else last = l.start; }
+        for (Line l : lines) {
+            if (l.start < 0) { l.wordTimes = null; continue; }
+            if (l.start < last) { l.start = -1; l.wordTimes = null; } else last = l.start;
+            if (l.wordTimes != null && !l.wordTimed()) l.wordTimes = null;
+        }
     }
 
     // ------------------------------------------------------------------ typing helpers
@@ -207,15 +221,46 @@ public final class Lyrics {
             Matcher m = TIME.matcher(row);
             int end = 0;
             while (m.find() && m.start() == end) { times.add(time(m)); end = m.end(); }
-            String words = clean(WORD_TIME.matcher(row.substring(end)).replaceAll(""));
+            String body = row.substring(end);
+            String words = clean(WORD_TIME.matcher(body).replaceAll(""));
             if (times.isEmpty()) { if (!words.isEmpty()) l.lines.add(new Line(words, -1)); continue; }
             if (words.isEmpty()) continue; // an empty timed row only marks the end of the previous line
-            for (long t : times) l.lines.add(new Line(words, t));
+            long[] wt = wordTags(body, words);
+            for (long t : times) {
+                Line line = new Line(words, t);
+                // Word tags belong to the first time of a repeated row; later repeats are shifted by the same amount.
+                if (wt != null) { line.wordTimes = new long[wt.length]; for (int k = 0; k < wt.length; k++) line.wordTimes[k] = wt[k] - times.get(0) + t; }
+                l.lines.add(line);
+            }
         }
         // LRC offset: positive values make lyrics appear sooner.
-        for (Line x : l.lines) if (x.start >= 0) x.start = Math.max(0, x.start - offset);
+        for (Line x : l.lines) if (x.start >= 0) {
+            x.start = Math.max(0, x.start - offset);
+            if (x.wordTimes != null) for (int k = 0; k < x.wordTimes.length; k++) x.wordTimes[k] = Math.max(x.start, x.wordTimes[k] - offset);
+        }
         l.sortByTime();
         return l;
+    }
+
+    static final Pattern WORD_TAG = Pattern.compile("<(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?>");
+
+    /** Times from enhanced-LRC word tags ("<00:12.30>word"), or null unless every word has one. */
+    static long[] wordTags(String body, String words) {
+        String[] w = words.split(" ");
+        long[] out = new long[w.length];
+        int k = 0;
+        Matcher m = WORD_TAG.matcher(body);
+        while (m.find()) {
+            String after = body.substring(m.end());
+            Matcher next = WORD_TAG.matcher(after);
+            String chunk = clean(next.find() ? after.substring(0, next.start()) : after);
+            if (chunk.isEmpty()) continue;
+            long t = time(m);
+            for (String piece : chunk.split(" ")) { if (k >= w.length) return null; out[k++] = t; }
+        }
+        if (k != w.length) return null;
+        for (int i = 1; i < out.length; i++) if (out[i] < out[i - 1]) return null;
+        return out;
     }
 
     static long time(Matcher m) {
@@ -230,7 +275,15 @@ public final class Lyrics {
         if (title != null && !title.isEmpty()) b.append("[ti:").append(title).append("]\n");
         if (artist != null && !artist.isEmpty()) b.append("[ar:").append(artist).append("]\n");
         b.append("[re:Audio City Lyrics]\n");
-        for (Line l : lines) { if (l.start >= 0) b.append('[').append(stamp(l.start)).append(']'); b.append(l.text).append('\n'); }
+        for (Line l : lines) {
+            if (l.start >= 0) b.append('[').append(stamp(l.start)).append(']');
+            if (l.wordTimed()) {
+                // Enhanced LRC (word-by-word): [mm:ss.xx]<mm:ss.xx>word <mm:ss.xx>word …
+                String[] w = l.words();
+                for (int k = 0; k < w.length; k++) { if (k > 0) b.append(' '); b.append('<').append(stamp(l.wordTimes[k])).append('>').append(w[k]); }
+            } else b.append(l.text);
+            b.append('\n');
+        }
         return b.toString();
     }
 
@@ -268,8 +321,59 @@ public final class Lyrics {
     public boolean fullySynced() { return !lines.isEmpty() && syncedCount() == lines.size(); }
     /** First line without a time, or -1. */
     public int nextUnsynced() { for (int i = 0; i < lines.size(); i++) if (lines.get(i).start < 0) return i; return -1; }
-    public void clearTimes() { for (Line l : lines) l.start = -1; }
-    public void shift(long ms) { for (Line l : lines) if (l.start >= 0) l.start = Math.max(0, l.start + ms); }
+    public void clearTimes() { for (Line l : lines) { l.start = -1; l.wordTimes = null; } }
+    public int wordTimedCount() { int n = 0; for (Line l : lines) if (l.wordTimed()) n++; return n; }
+    public void shift(long ms) {
+        for (Line l : lines) if (l.start >= 0) {
+            long d = Math.max(0, l.start + ms) - l.start;
+            l.start += d;
+            if (l.wordTimes != null) for (int k = 0; k < l.wordTimes.length; k++) l.wordTimes[k] = Math.max(0, l.wordTimes[k] + d);
+        }
+    }
+
+    /** Moves a line to a new start time, carrying its word times along. */
+    public static void moveLine(Line l, long start) {
+        if (l.wordTimes != null && l.start >= 0 && start >= 0) for (int k = 0; k < l.wordTimes.length; k++) l.wordTimes[k] += start - l.start;
+        else if (start < 0) l.wordTimes = null;
+        l.start = start;
+    }
+
+    // ------------------------------------------------------------------ Luganda syllables
+
+    /**
+     * Syllables in a word, Luganda-style: every syllable has one vowel nucleus (Luganda syllables are open, CV or V),
+     * a doubled vowel ("aa", "ee") is one long syllable, and "y"/"w" glides belong to the next vowel. Works well enough
+     * for English words too. Returns at least 1.
+     */
+    public static int syllables(String word) {
+        int n = 0;
+        boolean inVowel = false;
+        String w = word.toLowerCase(Locale.ROOT);
+        for (int i = 0; i < w.length(); i++) {
+            boolean v = "aeiouáéíóú".indexOf(w.charAt(i)) >= 0;
+            if (v && !inVowel) n++;
+            inVowel = v;
+        }
+        return Math.max(1, n);
+    }
+
+    /** Relative singing time of a word: syllables, with long (doubled) vowels and long consonants ("kk", "tt") a little longer. */
+    public static double singWeight(String word) {
+        String w = word.toLowerCase(Locale.ROOT);
+        double weight = syllables(word);
+        for (int i = 1; i < w.length(); i++) if (w.charAt(i) == w.charAt(i - 1) && Character.isLetter(w.charAt(i))) weight += .5;
+        return weight;
+    }
+
+    /** Estimated word starts for a line sung from start to end, shared by syllable weight. */
+    static long[] estimateWords(String[] words, long start, long end) {
+        double total = 0;
+        for (String w : words) total += singWeight(w);
+        long[] out = new long[words.length];
+        double acc = 0;
+        for (int k = 0; k < words.length; k++) { out[k] = start + Math.round((end - start) * acc / total); acc += singWeight(words[k]); }
+        return out;
+    }
 
     // ------------------------------------------------------------------ timing
 
@@ -321,7 +425,26 @@ public final class Lyrics {
         f.change = joined ? ease(clamp(since / (float) FADE_MS)) : 1;
         boolean gapAfter = f.next < 0 || lines.get(f.next).start > end;
         f.out = gapAfter ? clamp(1 - (end - t) / (float) FADE_MS) : 0;
-        f.wipe = clamp(since / (float) singFor(l.text, span));
+        String[] w = l.words();
+        long singEnd = l.start + singFor(l.text, span);
+        long[] starts = l.wordTimed() ? l.wordTimes : estimateWords(w, l.start, singEnd);
+        int k = -1;
+        for (int j = 0; j < starts.length; j++) if (starts[j] <= t) k = j;
+        float pos = 0;
+        if (k >= 0) {
+            long a = starts[k], b = k + 1 < starts.length ? starts[k + 1] : (l.wordTimed() ? Math.min(end, a + 180 + Math.round(170 * singWeight(w[k]))) : singEnd);
+            pos = k + clamp((t - a) / (float) Math.max(1, b - a));
+        }
+        f.words = w.length;
+        f.wordPos = Math.min(w.length, pos);
+        // Character-based progress for the wipe, following the word timing.
+        int total = 0;
+        for (String x : w) total += x.length();
+        float chars = 0;
+        int whole = (int) f.wordPos;
+        for (int j = 0; j < whole && j < w.length; j++) chars += w[j].length();
+        if (whole < w.length) chars += (f.wordPos - whole) * w[whole].length();
+        f.wipe = total == 0 ? 1 : clamp(chars / total);
         return f;
     }
 

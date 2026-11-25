@@ -86,7 +86,11 @@ final class Project {
             if (audioFile != null) o.put("audioFile", audioFile);
             if (audioName != null) o.put("audioName", audioName);
             JSONArray ls = new JSONArray();
-            for (Lyrics.Line l : lyrics.lines) ls.put(new JSONObject().put("text", l.text).put("start", l.start));
+            for (Lyrics.Line l : lyrics.lines) {
+                JSONObject j = new JSONObject().put("text", l.text).put("start", l.start);
+                if (l.wordTimed()) { JSONArray w = new JSONArray(); for (long t : l.wordTimes) w.put(t); j.put("words", w); }
+                ls.put(j);
+            }
             o.put("lines", ls);
             Style s = style;
             o.put("style", new JSONObject().put("aspect", s.aspect).put("animation", s.animation).put("fontName", Style.FONT_NAMES[s.font]).put("background", s.background)
@@ -112,7 +116,13 @@ final class Project {
             p.audioFile = o.has("audioFile") ? o.getString("audioFile") : null; p.audioName = o.has("audioName") ? o.getString("audioName") : null;
             p.durationMs = o.optLong("durationMs", 0); p.updated = o.optLong("updated", dir.lastModified());
             JSONArray ls = o.optJSONArray("lines");
-            if (ls != null) for (int i = 0; i < ls.length(); i++) { JSONObject l = ls.getJSONObject(i); p.lyrics.lines.add(new Lyrics.Line(l.optString("text", ""), l.optLong("start", -1))); }
+            if (ls != null) for (int i = 0; i < ls.length(); i++) {
+                JSONObject l = ls.getJSONObject(i);
+                Lyrics.Line line = new Lyrics.Line(l.optString("text", ""), l.optLong("start", -1));
+                JSONArray w = l.optJSONArray("words");
+                if (w != null) { line.wordTimes = new long[w.length()]; for (int k = 0; k < w.length(); k++) line.wordTimes[k] = w.optLong(k, -1); }
+                p.lyrics.lines.add(line);
+            }
             p.lyrics.repairOrder();
             JSONObject s = o.optJSONObject("style");
             if (s != null) {
