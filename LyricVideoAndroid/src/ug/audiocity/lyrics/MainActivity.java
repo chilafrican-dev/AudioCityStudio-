@@ -645,9 +645,10 @@ public class MainActivity extends Activity {
     void lyricsTab(LinearLayout page) {
         LinearLayout steps = card();
         steps.addView(label("Add the words in three easy ways", 15, TEXT, true));
-        steps.addView(label("1. Copy the lyrics from anywhere and tap Paste.\n2. Or type them: press Enter for each new line on screen.\n3. Or import a .lrc / .txt file (LRC keeps its timings).\n\nTip: Clean up removes labels like [Chorus], stray symbols and timestamps, and splits long rows so they fit on screen.", 13, DIM, false));
+        steps.addView(label("0. Don't have them? “Write the lyrics for me” listens to the song (Luganda) and drafts them for you to correct.\n1. Copy the lyrics from anywhere and tap Paste.\n2. Or type them: press Enter for each new line on screen.\n3. Or import a .lrc / .txt file (LRC keeps its timings).\n\nTip: Clean up removes labels like [Chorus], stray symbols and timestamps, and splits long rows so they fit on screen.", 13, DIM, false));
         addCard(page, steps);
         page.addView(row(button("📋  Paste", this::pasteLyrics, ACCENT, 0xff1a1a1a), button("✨  Clean up", this::cleanLyrics), button("Import file", () -> pick("*/*", REQ_LYRICS))));
+        page.addView(row(button("✍️  Write the lyrics for me (AI)", this::writeLyricsMenu)));
         lyricsCount = label("", 12, DIM, false);
         lyricsCount.setPadding(0, dp(10), 0, dp(4));
         page.addView(lyricsCount);
@@ -734,10 +735,24 @@ public class MainActivity extends Activity {
             addCard(page, c);
             return;
         }
+        boolean ready = ModelStore.ready(this);
+        LinearLayout ai = card();
+        ai.addView(label("🎧  AI listens · Luganda", 16, TEXT, true));
+        ai.addView(label(ready ? "The app listens to the song and finds when every line and every word is sung, block by block, word by word. Your lyrics stay on the phone. It takes a few minutes for a full song — keep the app open."
+                : "Let the app listen to the song and time every line and word for you. First download the Luganda listening model once (355 MB — Wi-Fi recommended). After that it works offline and your songs never leave the phone.", 12, DIM, false));
+        if (ready) {
+            Button listen = button("🎧  Listen & sync every word", this::aiSync, ACCENT, 0xff1a1a1a);
+            listen.setTextSize(16);
+            LinearLayout.LayoutParams lpl = new LinearLayout.LayoutParams(-1, dp(56)); lpl.topMargin = dp(8);
+            ai.addView(listen, lpl);
+            if (!aiCheck.isEmpty()) ai.addView(label("⚠ " + aiCheck.size() + " line(s) the AI was unsure about are marked below — play them and adjust if needed.", 12, 0xffffb703, false));
+        } else ai.addView(row(button("⬇  Download AI model (355 MB)", this::downloadModel, ACCENT, 0xff1a1a1a)));
+        addCard(page, ai);
         syncStatus = label("", 13, DIM, false);
         syncStatus.setPadding(0, dp(10), 0, dp(4));
         page.addView(syncStatus);
-        Button full = button("🎤  Sync mode (full screen)", this::openSyncMode, ACCENT, 0xff1a1a1a);
+        page.addView(heading("Or sync by tapping"));
+        Button full = button("🎤  Sync mode (full screen)", this::openSyncMode, PANEL2, TEXT);
         full.setTextSize(17);
         LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, dp(64)); fp.topMargin = dp(4);
         page.addView(full, fp);
@@ -904,8 +919,8 @@ public class MainActivity extends Activity {
         tapButton.setBackground(round(next < 0 ? PANEL2 : 0xff3b3520, 12));
         for (int i = 0; i < syncRows.size() && i < l.lines.size(); i++) {
             Lyrics.Line line = l.lines.get(i);
-            syncRows.get(i).setText((line.start < 0 ? "  –:––.––" : Lyrics.stamp(line.start)) + "    " + line.text);
-            syncRows.get(i).setTextColor(line.start < 0 ? DIM : TEXT);
+            syncRows.get(i).setText((line.start < 0 ? "  –:––.––" : Lyrics.stamp(line.start)) + (line.wordTimed() ? "  ●" : "    ") + "  " + line.text + (aiCheck.contains(i) ? "   ⚠" : ""));
+            syncRows.get(i).setTextColor(line.start < 0 ? DIM : aiCheck.contains(i) ? 0xffffcf70 : TEXT);
         }
         highlightedRow = -2;
         tickSync();
@@ -984,6 +999,29 @@ public class MainActivity extends Activity {
         box.addView(row(button("−0.1 s", nudgeMinus), button("+0.1 s", nudgePlus), button("= playhead", () -> time.setText(Lyrics.stamp(now())))));
         box.addView(row(button("▶ Play from here", () -> { long t = Lyrics.parseStamp(time.getText().toString()); seekTo((int) Math.max(0, (t < 0 ? now() : t) - 1500)); play(); }),
                 button("Clear time", () -> time.setText(""))));
+        final long[] words = line.wordTimed() ? line.wordTimes.clone() : null;
+        if (words != null) {
+            box.addView(label("Words (● timed by AI) — tap a word to set it to the playhead", 12, 0xff555555, true));
+            HorizontalScrollView sv = new HorizontalScrollView(this);
+            LinearLayout chips = new LinearLayout(this);
+            sv.addView(chips);
+            String[] w = line.words();
+            for (int k = 0; k < w.length; k++) {
+                final int wk = k;
+                Button chip = button(w[k] + "\n" + Lyrics.stamp(words[k]), () -> {}, PANEL2, TEXT);
+                chip.setTextSize(12);
+                chip.setOnClickListener(v -> {
+                    long t = now();
+                    long lo = wk > 0 ? words[wk - 1] + 20 : 0, hi = wk + 1 < words.length ? words[wk + 1] - 20 : Long.MAX_VALUE;
+                    words[wk] = Math.max(lo, Math.min(hi, t));
+                    ((Button) v).setText(w[wk] + "\n" + Lyrics.stamp(words[wk]));
+                    if (wk == 0) time.setText(Lyrics.stamp(words[0]));
+                });
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(52)); cp.rightMargin = dp(6);
+                chips.addView(chip, cp);
+            }
+            box.addView(sv);
+        }
         AlertDialog[] dialog = {null};
         box.addView(row(button("Delete line", () -> {
             project.lyrics.lines.remove(i); changed(); dialog[0].dismiss(); tab(2);
@@ -992,11 +1030,15 @@ public class MainActivity extends Activity {
         })));
         dialog[0] = new AlertDialog.Builder(this).setTitle("Line " + (i + 1)).setView(box).setNegativeButton("Cancel", null).setPositiveButton("Save", (d, w) -> {
             String t = Lyrics.clean(text.getText().toString());
+            boolean sameWords = t.isEmpty() || t.equals(line.text);
             if (!t.isEmpty()) line.text = t;
+            if (words != null && sameWords) { line.wordTimes = words; line.start = words[0]; }
+            if (!sameWords) line.wordTimes = null;
             String ts = time.getText().toString().trim();
             long st = ts.isEmpty() ? -1 : Lyrics.parseStamp(ts);
             if (!ts.isEmpty() && st < 0) toast("Time not understood; use m:ss.cc, for example 1:23.45.");
-            else line.start = st;
+            else if (st != line.start) Lyrics.moveLine(line, st);
+            aiCheck.remove(i);
             project.lyrics.sortByTime();
             changed();
             refreshSync();
@@ -1007,6 +1049,183 @@ public class MainActivity extends Activity {
         long t = Lyrics.parseStamp(time.getText().toString());
         if (t < 0) t = now();
         time.setText(Lyrics.stamp(Math.max(0, t + ms)));
+    }
+
+    // ------------------------------------------------------------------ AI: listening model, word sync, writing lyrics
+
+    /** Lines the AI was unsure about (indices), shown with ⚠ until edited. */
+    final java.util.HashSet<Integer> aiCheck = new java.util.HashSet<>();
+    /** What the model heard for the current song, kept so a second action does not listen again. */
+    AutoSync.Heard heard;
+    String heardFor;
+
+    interface ProgressJob { void run(VideoExporter.Listener l) throws Exception; }
+
+    /** Runs a long job with a progress bar and a Cancel button, keeping the screen on. */
+    void progressJob(String title, ProgressJob job, Runnable done) {
+        if (busy) return;
+        busy = true;
+        pause();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        final boolean[] cancelled = {false};
+        LinearLayout box = column();
+        box.setPadding(dp(22), dp(16), dp(22), dp(6));
+        TextView stage = label("Starting…", 15, 0xff222222, false);
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        TextView pct = label("", 13, 0xff555555, false);
+        box.addView(stage); box.addView(bar, new LinearLayout.LayoutParams(-1, dp(28))); box.addView(pct);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title).setView(box).setCancelable(false).setNegativeButton("Cancel", (d, w) -> cancelled[0] = true).create();
+        dialog.show();
+        final long started = System.currentTimeMillis();
+        jobs.execute(() -> {
+            Throwable fail = null;
+            try {
+                job.run(new VideoExporter.Listener() {
+                    long last;
+                    public void progress(float f, String text) {
+                        long t = System.currentTimeMillis();
+                        if (t - last < 150 && f < 1) return;
+                        last = t;
+                        long el = t - started;
+                        String eta = f > .1f ? "  ·  about " + clock((long) (el / f - el)) + " left" : "";
+                        runOnUiThread(() -> { stage.setText(text); bar.setProgress(Math.round(f * 1000)); pct.setText(Math.round(f * 100) + " %" + eta); });
+                    }
+                    public boolean cancelled() { return cancelled[0]; }
+                });
+            } catch (Throwable e) { fail = e; }
+            final Throwable f = fail;
+            runOnUiThread(() -> {
+                busy = false;
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                try { dialog.dismiss(); } catch (Exception ignored) {}
+                if (f instanceof CancellationException) toast("Cancelled.");
+                else if (f != null) error(title, f instanceof OutOfMemoryError ? "Not enough memory on this phone for that." : f.getMessage());
+                else if (done != null) done.run();
+            });
+        });
+    }
+
+    void downloadModel() {
+        new AlertDialog.Builder(this).setTitle("Download the Luganda listening model?")
+                .setMessage("355 MB, downloaded once from this app's release page. Wi-Fi recommended.\n\nThe model (wav2vec2 Luganda, Apache-2.0 licence) runs entirely on your phone: songs are never uploaded for word timing.")
+                .setNegativeButton("Not now", null)
+                .setPositiveButton("Download", (d, w) -> progressJob("Downloading the AI model", l -> ModelStore.download(this, l), () -> { toast("AI model ready ✓"); tab(tab); })).show();
+    }
+
+    /** Listens to the current song (or reuses what was heard), then hands the result over on the background thread. */
+    void withHeard(String title, java.util.function.Consumer<AutoSync.Heard> then, Runnable done) {
+        final Project p = project;
+        final String key = p.dir.getAbsolutePath() + "/" + p.audioFile + "/" + p.durationMs;
+        progressJob(title, l -> {
+            AutoSync.Heard h = key.equals(heardFor) ? heard : null;
+            if (h == null) {
+                h = AutoSync.listen(ModelStore.dir(this), p.audio(), p.durationMs, l);
+                heard = h; heardFor = key;
+            }
+            l.progress(.98f, "Matching words…");
+            then.accept(h);
+        }, done);
+    }
+
+    void aiSync() {
+        applyLyricsNow();
+        if (!project.hasAudio() || project.lyrics.lines.isEmpty()) { toast("Add the song and the lyrics first."); return; }
+        if (!ModelStore.ready(this)) { downloadModel(); return; }
+        Runnable go = () -> {
+            final Lyrics work = new Lyrics();
+            for (Lyrics.Line l : project.lyrics.lines) work.lines.add(new Lyrics.Line(l.text, -1));
+            final AutoTiming.Result[] result = {null};
+            withHeard("Listening to the song", h -> result[0] = AutoSync.timeLyrics(work, h), () -> {
+                project.lyrics.lines.clear();
+                project.lyrics.lines.addAll(work.lines);
+                aiCheck.clear(); aiCheck.addAll(result[0].check);
+                changed(); tab(2);
+                AutoTiming.Result r = result[0];
+                new AlertDialog.Builder(this).setTitle("Synced by listening 🎧")
+                        .setMessage(r.lines + " lines and " + r.words + " words timed." + (r.unplaced > 0 ? "\n" + r.unplaced + " line(s) could not be found in the song and keep no time." : "")
+                                + (r.check.isEmpty() ? "\n\nEverything matched clearly." : "\n\n" + r.check.size() + " line(s) are marked ⚠ — the AI was less sure there (fast singing, backing vocals or words spelled differently). Play them and adjust if needed.")
+                                + "\n\nPress play to watch it word by word.")
+                        .setPositiveButton("OK", null).show();
+            });
+        };
+        if (project.lyrics.syncedCount() == 0) go.run();
+        else new AlertDialog.Builder(this).setTitle("Replace the current timings?").setMessage("The AI will time every line and word again from the song.").setNegativeButton("Cancel", null).setPositiveButton("Listen & sync", (d, w) -> go.run()).show();
+    }
+
+    String sunbirdKey() { return prefs().getString("sunbirdKey", ""); }
+
+    void writeLyricsMenu() {
+        applyLyricsNow();
+        if (!project.hasAudio()) { toast("Choose the song first (Song tab)."); return; }
+        String[] items = {"Sunbird AI · Luganda (online, best words)", "On-phone AI · Luganda (offline, rough draft)", "Sunbird API key…"};
+        new AlertDialog.Builder(this).setTitle("Write the lyrics for me").setItems(items, (d, i) -> {
+            if (i == 0) { if (sunbirdKey().isEmpty()) sunbirdKeyDialog(this::sunbirdWrite); else sunbirdWrite(); }
+            else if (i == 1) { if (!ModelStore.ready(this)) downloadModel(); else offlineWrite(); }
+            else sunbirdKeyDialog(null);
+        }).show();
+    }
+
+    void sunbirdKeyDialog(Runnable then) {
+        LinearLayout box = column();
+        box.setPadding(dp(20), dp(4), dp(20), 0);
+        box.addView(label("Sunbird AI (Uganda) writes Luganda from audio. Create a free account and API key at api.sunbird.ai, then paste the key here. It is stored only on this phone.\n\nWith Sunbird, the song is uploaded to Sunbird's servers for transcription.", 13, 0xff444444, false));
+        EditText key = field(sunbirdKey(), "Paste your Sunbird API key");
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        box.addView(key);
+        box.addView(row(button("Open api.sunbird.ai", () -> { try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(Sunbird.SIGNUP))); } catch (Exception e) { toast("No browser found."); } })));
+        new AlertDialog.Builder(this).setTitle("Sunbird API key").setView(box).setNegativeButton("Cancel", null).setPositiveButton("Save", (d, w) -> {
+            String k = key.getText().toString().trim();
+            prefs().edit().putString("sunbirdKey", k).apply();
+            if (!k.isEmpty() && then != null) then.run();
+        }).show();
+    }
+
+    void sunbirdWrite() {
+        final Project p = project;
+        if (p.durationMs > 10 * 60_000) toast("Sunbird may only transcribe the first 10 minutes.");
+        final String[] text = {null};
+        final Lyrics[] timed = {null};
+        final boolean canTime = ModelStore.ready(this);
+        progressJob("Sunbird AI is writing the lyrics", l -> {
+            l.progress(.05f, "Uploading the song to Sunbird…");
+            text[0] = Sunbird.transcribe(p.audio(), sunbirdKey(), "lug");
+            if (canTime) {
+                final String key = p.dir.getAbsolutePath() + "/" + p.audioFile + "/" + p.durationMs;
+                AutoSync.Heard h = key.equals(heardFor) ? heard : null;
+                if (h == null) { h = AutoSync.listen(ModelStore.dir(this), p.audio(), p.durationMs, AutoSync.scaled(l, .3f, 1f)); heard = h; heardFor = key; }
+                timed[0] = AutoSync.timeAndSplit(text[0], h);
+            }
+        }, () -> offerLyrics("Lyrics from Sunbird AI", timed[0] != null ? timed[0] : Lyrics.parse(Lyrics.cleanUp(text[0].replaceAll("([.!?])\\s+", "$1\n"), Lyrics.LONG_LINE), null),
+                timed[0] != null ? "Split into lines at the singer's pauses and timed word by word on the phone." : "Download the AI model (Sync tab) to time these word by word automatically."));
+    }
+
+    void offlineWrite() {
+        final Lyrics[] out = {null};
+        withHeard("Listening to the song", h -> out[0] = AutoSync.transcribe(h),
+                () -> offerLyrics("Lyrics heard on the phone", out[0], "A rough draft: singing over music is hard to read. Correct the words, then use “Listen & sync every word” to time the corrected lyrics."));
+    }
+
+    /** Shows written lyrics and lets the user use them (replacing what is there). */
+    void offerLyrics(String title, Lyrics found, String note) {
+        if (found == null || found.lines.isEmpty()) { error(title, "No words were recognised. Try the other option, or paste the lyrics."); return; }
+        TextView t = label(found.toText(), 15, 0xff222222, false);
+        t.setTextIsSelectable(true);
+        LinearLayout box = column();
+        box.setPadding(dp(20), dp(6), dp(20), 0);
+        box.addView(label(found.lines.size() + " lines. " + note, 12, 0xff666666, false));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(10);
+        box.addView(t, lp);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        new AlertDialog.Builder(this).setTitle(title).setView(sv).setNegativeButton("Discard", null).setPositiveButton(project.lyrics.lines.isEmpty() ? "Use these lyrics" : "Replace my lyrics", (d, w) -> {
+            project.lyrics.lines.clear();
+            project.lyrics.lines.addAll(found.lines);
+            aiCheck.clear();
+            changed();
+            tab(1);
+            toast("Lyrics added — correct any words, then check the timing in Sync.");
+        }).show();
     }
 
     // ------------------------------------------------------------------ Style tab

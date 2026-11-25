@@ -16,6 +16,8 @@ It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and in
    - **Sync mode** fills the screen with big text showing the line to tap, the one before and the one after. Tap anywhere as each line begins; the tap counts the moment your finger lands. It also has slow-down playback (1×, 0.75×, 0.5×), a back-5-seconds button and Undo.
    - **Quick sync** spreads every untimed line between a start and end time in proportion to its length, in seconds; you then fix only the lines that are off.
    - Tap any line in the list to fine-tune it: ±0.1 s, set it to the playhead, play from there, edit the text, or insert or delete lines. **Shift all…** moves every timing at once. A reaction-compensation slider corrects for late taps and scales with playback speed.
+   - **🎧 AI listens (Luganda):** the app listens to the song and finds when every line and every word is sung ("block by block, word by word"). It runs a Luganda speech model on the phone: download it once (355 MB) from the Sync tab, then it works offline and songs never leave the phone. Lines it is unsure about are marked ⚠. Word times can be adjusted in the line editor by tapping a word at the playhead.
+   - **✍️ Write the lyrics for me (Lyrics tab):** drafts Luganda lyrics from the song, using either Sunbird AI (online; needs your own free Sunbird API key, and the song is uploaded to Sunbird) or the on-phone model (offline, rough draft). Sunbird's text is then split into lines at the singer's pauses and timed word by word on the phone. The lyrics are shown for review before they replace anything.
 4. **Style tab.**
    - **One-tap looks:** Clean pop, Neon night, Cinematic, Karaoke classic, Minimal, Social captions, Handwritten, Bold poster.
    - **Format:** portrait 9:16, 4:5 or 1:1; landscape 16:9, 21:9 cinema or 4:3. Optional cinematic black bars.
@@ -47,11 +49,24 @@ Requirements: JDK 17+, Android SDK Platform 35 and Build Tools 35.0.0.
 
 ```bash
 export ANDROID_SDK_ROOT=/path/to/Android/Sdk
-./run-tests.sh   # lyric timing / LRC tests, plain Java
+./run-tests.sh   # lyric timing, LRC, alignment and audio-conversion tests, plain Java
 ./build.sh       # → LyricVideoStudio.apk
 ```
 
 Requires Android 10 (API 29) or later, with OpenGL ES 2.0 (every Android 10 phone has it).
+
+## The Luganda speech model
+
+- **Model:** [`indonesian-nlp/wav2vec2-luganda`](https://huggingface.co/indonesian-nlp/wav2vec2-luganda), a wav2vec2 XLS-R model fine-tuned on Mozilla Common Voice Luganda. Its licence is **Apache-2.0**, so it can be used commercially.
+- **Conversion:** `tools/export_aligner.py`, run by `.github/workflows/luganda-aligner-model.yml`, converts it to int8 ONNX (355 MB). The script refuses any model whose licence does not allow commercial use, and checks the converted model against the original on Google FLEURS Luganda speech: 99.1% frame agreement and a character error rate of 17.6%, mostly from numbers written as words and foreign names. It then publishes the model as the release [`luganda-aligner-v1`](https://github.com/chilafrican-dev/AudioCityStudio-/releases/tag/luganda-aligner-v1).
+- **On the phone:**
+  1. The song is decoded and mixed to mono. Rumble and kick drum below about 100 Hz are removed, and the audio is resampled to 16 kHz.
+  2. The model runs in 15-second chunks with overlap, using ONNX Runtime (MIT licence).
+  3. A forced alignment (CTC Viterbi) matches the lyrics letter by letter. It can skip ad-libs, intros and repeats that are not in the lyrics, and allows words that run together.
+- **Accuracy so far:**
+  - On a synthetic Luganda test song over a drum and bass beat, every word was placed within 0.1 s, and an ad-lib that was not in the lyrics was skipped.
+  - On a real 3-minute Luganda song, listening took 19 s on a desktop CPU; expect about 1–2 minutes on a phone.
+  - Writing lyrics from scratch is much weaker than timing known lyrics: the draft has real Luganda words and phrases, but singing over a full beat garbles some of them. Treat it as a draft to correct.
 
 ## Code map
 
@@ -65,10 +80,16 @@ Requires Android 10 (API 29) or later, with OpenGL ES 2.0 (every Android 10 phon
 | `PcmDecoder.java` | Decodes any supported audio to PCM (MediaExtractor + MediaCodec); builds the loudness envelope. |
 | `LyricRenderer.java` | Draws one frame on any Canvas: background (gradient, colour, photo slideshow with filters), visualizer, letterbox, title card, the 13 word effects and the text effects. |
 | `VideoExporter.java` | AAC audio encode, then a frame-by-frame render through EGL into the H.264 encoder, muxed to MP4. |
+| `Ctc.java` | Forced alignment of lyrics to the model's per-frame letter probabilities (with skippable ad-libs and word gaps) and greedy transcription. Plain Java, tested in `tests/AlignTests.java`. |
+| `Audio16k.java` | Song audio to 16 kHz mono for the model (high-pass, windowed-sinc resampling). Plain Java, tested. |
+| `AutoTiming.java` | Applies alignment results to lines and words, fills unplaceable words, and splits a transcript into screen lines at pauses. Plain Java, tested. |
+| `SpeechModel.java`, `ModelStore.java`, `AutoSync.java` | Run the ONNX model in chunks; download and store the model; tie decoding, listening, timing and writing together. |
+| `Sunbird.java` | Sunbird AI speech-to-text upload (Luganda, `lug`). |
 | `MainActivity.java` | Home screen, editor tabs, playback, full-screen sync mode, font picker and export UI. |
 
 ## Status and limits
 
+- Sunbird's API was integrated from its public documentation (endpoint `POST /tasks/audio/transcriptions`, fields `audio` and `language=lug`, reply field `audio_transcription`), but it could not be called from the development environment. The first real call needs a check with your key.
 - The Java sources type-check against the Android 14 framework API, the host tests pass, and sample frames of every effect, font, photo layout and format have been rendered through Android's graphics stack and checked. On-device playback, sync timing and video export have **not yet been tested on a phone**.
 - The export runs while the app stays open (the screen is kept on). Leaving the app for a long time may let Android stop the render; it can then simply be restarted.
 - A full song at 1080p/30 fps typically takes a few minutes to render, depending on the phone. 720p is roughly twice as fast; 4K takes several times longer.

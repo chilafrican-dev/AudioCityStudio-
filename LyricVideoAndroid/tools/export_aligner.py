@@ -58,7 +58,8 @@ print(f"Using {chosen} ({licence})")
 processor = Wav2Vec2Processor.from_pretrained(chosen)
 model = Wav2Vec2ForCTC.from_pretrained(chosen).eval()
 vocab = processor.tokenizer.get_vocab()
-tokens = [None] * len(vocab)
+# Only the symbols the model actually outputs (the tokenizer may list extra ones such as <s> and </s>).
+tokens = [None] * int(model.config.vocab_size)
 for tok, idx in vocab.items():
     if idx < len(tokens):
         tokens[idx] = tok
