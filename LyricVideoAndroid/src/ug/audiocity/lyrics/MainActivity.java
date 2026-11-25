@@ -244,7 +244,16 @@ public class MainActivity extends Activity {
 
     // ================================================================== home
 
+    /** Saves right now (pending typing included): used when leaving a project and after clip changes. */
+    void saveNow() {
+        if (project == null) return;
+        applyLyricsNow();
+        handler.removeCallbacks(saveLater);
+        saveLater.run();
+    }
+
     void home() {
+        saveNow();
         releasePlayer();
         if (backdrop != null) { backdrop.release(); backdrop = null; }
         project = null;
@@ -316,6 +325,7 @@ public class MainActivity extends Activity {
     // ================================================================== editor
 
     void open(Project p) {
+        if (project != null && project != p) saveNow();
         releasePlayer();
         project = p;
         prefs().edit().putString("open", p.dir.getAbsolutePath()).apply();
@@ -490,7 +500,7 @@ public class MainActivity extends Activity {
             tabButtons[i].setTextColor(i == k ? 0xff1a1a1a : TEXT);
         }
         content.removeAllViews();
-        syncRows.clear(); tapButton = null; syncStatus = null; lyricsBox = null; highlightedRow = -2; timeline = null; timelineNote = null; lyricsSteps = null;
+        syncRows.clear(); tapButton = null; syncStatus = null; lyricsBox = null; highlightedRow = -2; timeline = null; timelineNote = null; timelineSel = null; lyricsSteps = null;
         ScrollView scroll = new ScrollView(this);
         LinearLayout page = column();
         page.setPadding(dp(14), 0, dp(14), dp(40));
@@ -1389,6 +1399,7 @@ public class MainActivity extends Activity {
             box.addView(row(button("▶ Play this line", () -> { seekTo((int) from); play(); }), button("❚❚", this::pause)));
         } else words = null;
         AlertDialog[] dialog = {null};
+        if (line.words().length > 1) box.addView(row(button("✂ Split this line after a word…", () -> { dialog[0].dismiss(); splitAfterWordDialog(i, null); })));
         box.addView(row(button("Delete line", () -> {
             project.lyrics.lines.remove(i); changed(); dialog[0].dismiss(); tab(2);
         }, 0xff4a2028, TEXT), button("Insert line after", () -> {
@@ -1623,6 +1634,8 @@ public class MainActivity extends Activity {
     SongTimeline timeline;
     TextView timelineNote;
 
+    TextView timelineSel;
+
     void timelineTab(LinearLayout page) {
         timeline = null;
         if (!project.hasAudio() || project.lyrics.lines.isEmpty()) {
@@ -1631,48 +1644,115 @@ public class MainActivity extends Activity {
             addCard(page, c);
             return;
         }
-        page.addView(label("Swipe to move through the song · tap a line to select it · drag it, or drag its edges · tap it again to edit its words · tap an empty spot to drop the next line there · pinch to zoom", 12, DIM, false));
         final SongTimeline tl = new SongTimeline(this, project.lyrics, project.durationMs, project.envelope, new SongTimeline.Host() {
             public long now() { return MainActivity.this.now(); }
             public void seek(long ms) { seekTo((int) ms); }
-            public void changed() { MainActivity.this.changed(); updateTimelineNote(); }
+            public void changed() { MainActivity.this.changed(); saveNow(); updateTimelineNote(); }
             public void editLine(int index) { MainActivity.this.editLine(index); }
-            public void dropNextLine(long ms) { dropNextLineAt(ms); }
+            public void dropNextLine(long ms) { dropNextLineAt(ms); saveNow(); }
+            public void clipMenu(int index) { MainActivity.this.clipMenu(index); }
+            public void selectionChanged() { updateTimelineNote(); }
         });
         timeline = tl;
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(230)); tp.topMargin = dp(8);
-        page.addView(tl, tp);
+        // The clip tools sit right on top of the timeline, always in view.
+        HorizontalScrollView barScroll = new HorizontalScrollView(this);
+        barScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout bar = new LinearLayout(this);
+        bar.setPadding(0, dp(6), 0, dp(4));
+        barScroll.addView(bar);
+        bar.addView(tool("▶ ❚❚", this::togglePlay, true));
+        bar.addView(tool("↶ Undo", () -> { if (tl.canUndo()) { tl.undo(); saveNow(); updateTimelineNote(); } else toast("Nothing to undo."); }, false));
+        bar.addView(tool("↷ Redo", () -> { if (tl.canRedo()) { tl.redo(); saveNow(); updateTimelineNote(); } else toast("Nothing to redo."); }, false));
+        bar.addView(clipTool("✂ Split", tl, i -> splitClip(tl, i)));
+        bar.addView(tool("✎ Edit", () -> { if (tl.selected >= 0) editLine(tl.selected); else toast("Tap a clip on the timeline first."); }, false));
+        bar.addView(clipTool("⇆ Join", tl, i -> { if (!project.lyrics.joinWithNext(i, project.durationMs)) toast("There is no next line to join."); }));
+        bar.addView(clipTool("⧉ Copy here", tl, i -> { tl.selected = project.lyrics.copyTo(i, now()); toast("Copied to the playhead (great for a repeated chorus)."); }));
+        bar.addView(clipTool("🗑 Delete", tl, i -> { project.lyrics.lines.remove(i); tl.selected = -1; toast("Line deleted — the other clips stay where they are. ↶ Undo brings it back."); }));
+        bar.addView(clipTool("◀ 0.1s", tl, i -> project.lyrics.nudge(i, -100)));
+        bar.addView(clipTool("0.1s ▶", tl, i -> project.lyrics.nudge(i, 100)));
+        bar.addView(clipTool("− End", tl, i -> project.lyrics.changeEnd(i, -100, project.durationMs)));
+        bar.addView(clipTool("+ End", tl, i -> project.lyrics.changeEnd(i, 100, project.durationMs)));
+        bar.addView(clipTool("Unplace", tl, i -> { Lyrics.Line l = project.lyrics.lines.get(i); l.start = -1; l.end = -1; l.wordTimes = null; tl.selected = -1; }));
+        page.addView(barScroll);
+        timelineSel = label("", 12, TEXT, false);
+        timelineSel.setPadding(dp(2), dp(2), 0, dp(4));
+        page.addView(timelineSel);
+        page.addView(tl, new LinearLayout.LayoutParams(-1, dp(210)));
         timelineNote = label("", 12, 0xffffcf70, false);
         timelineNote.setPadding(0, dp(6), 0, dp(2));
         page.addView(timelineNote);
         updateTimelineNote();
-        // Clip tools: act on the selected clip (tap one first).
-        page.addView(row(button("▶ / ❚❚", this::togglePlay, ACCENT, 0xff1a1a1a),
-                button("↶ Undo", () -> { if (tl.canUndo()) { tl.undo(); updateTimelineNote(); } else toast("Nothing to undo."); }),
-                button("↷ Redo", () -> { if (tl.canRedo()) { tl.redo(); updateTimelineNote(); } else toast("Nothing to redo."); })));
-        page.addView(row(clipTool("✂ Split", tl, i -> {
-                    if (!project.lyrics.splitAt(i, now(), project.durationMs)) { toast("A line needs two or more words to split."); return; }
-                    tl.selected = i + 1; toast("Split at the playhead. The second part is selected.");
-                }),
-                clipTool("⇆ Join next", tl, i -> { if (!project.lyrics.joinWithNext(i, project.durationMs)) toast("There is no next line to join."); }),
-                clipTool("⧉ Copy here", tl, i -> { tl.selected = project.lyrics.copyTo(i, now()); toast("Copied to the playhead (great for a repeated chorus)."); })));
-        page.addView(row(clipTool("◀ 0.1 s", tl, i -> project.lyrics.nudge(i, -100)),
-                clipTool("0.1 s ▶", tl, i -> project.lyrics.nudge(i, 100)),
-                clipTool("− Shorter", tl, i -> project.lyrics.changeEnd(i, -100, project.durationMs)),
-                clipTool("+ Longer", tl, i -> project.lyrics.changeEnd(i, 100, project.durationMs))));
-        page.addView(row(button("✎ Edit", () -> { if (tl.selected >= 0) editLine(tl.selected); else toast("Tap a clip on the timeline first."); }),
-                clipTool("Remove time", tl, i -> { Lyrics.Line l = project.lyrics.lines.get(i); l.start = -1; l.end = -1; l.wordTimes = null; tl.selected = -1; }),
-                clipTool("🗑 Delete", tl, i -> { project.lyrics.lines.remove(i); tl.selected = -1; })));
+        if (project.lyrics.nextUnsynced() >= 0) page.addView(row(button("🧩 Lay out all lines as clips", () -> { tl.snapshot(); layOutClips(); saveNow(); }, ACCENT, 0xff1a1a1a)));
         page.addView(row(button("✂ Split long lines", () -> {
                     tl.snapshot();
                     int n = project.lyrics.splitLongLines(Lyrics.LONG_LINE, project.durationMs);
-                    changed(); updateTimelineNote();
+                    changed(); saveNow(); updateTimelineNote();
                     toast(n == 0 ? "No line is too long ✓" : n + " long line(s) split into readable parts (↶ Undo to take it back).");
                 }), button("−", () -> tl.zoomBy(.6f)), button("+", () -> tl.zoomBy(1.6f)), button("Whole song", tl::zoomToFit)));
-        if (project.lyrics.nextUnsynced() >= 0) page.addView(row(button("🧩 Lay out all lines as clips", () -> { tl.snapshot(); layOutClips(); }, ACCENT, 0xff1a1a1a)));
-        Switch snap = toggle("🧲 Snap clips to where singing starts", tl.snap, b -> tl.snap = b);
-        page.addView(snap);
-        page.addView(label("Blue/teal blocks are lines (teal = every word timed); the gold block is the one you selected. White marks inside a block are where words start.", 11, DIM, false));
+        page.addView(toggle("🧲 Snap clips to where singing starts", tl.snap, b -> tl.snap = b));
+        page.addView(label("How to: swipe to move through the song · tap a clip to select it · drag it, or drag its edges · press and hold a clip for all its tools · tap an empty spot to drop the next line · pinch to zoom. Everything saves by itself.", 11, DIM, false));
+    }
+
+    Button tool(String name, Runnable r, boolean accent) {
+        Button b = button(name, r, accent ? ACCENT : PANEL2, accent ? 0xff1a1a1a : TEXT);
+        b.setTextSize(12.5f);
+        b.setPadding(dp(10), 0, dp(10), 0);
+        b.setLayoutParams(toolParams());
+        return b;
+    }
+
+    LinearLayout.LayoutParams toolParams() { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(44)); p.rightMargin = dp(6); return p; }
+
+    /** Splits at the playhead when it is inside the clip, otherwise asks after which word. */
+    void splitClip(SongTimeline tl, int i) {
+        Lyrics.Line l = project.lyrics.lines.get(i);
+        long t = now();
+        if (l.words().length < 2) { toast("A line needs two or more words to split."); return; }
+        if (l.start >= 0 && t > l.start && t < project.lyrics.endOf(i, project.durationMs)) {
+            project.lyrics.splitAt(i, t, project.durationMs);
+            tl.selected = i + 1;
+            toast("Split at the playhead. The second part is selected.");
+        } else splitAfterWordDialog(i, () -> tl.selected = i + 1);
+    }
+
+    /** Lists the words of a line: tap the word the first part should end with. */
+    void splitAfterWordDialog(int i, Runnable after) {
+        String[] w = project.lyrics.lines.get(i).words();
+        if (w.length < 2) { toast("A line needs two or more words to split."); return; }
+        String[] items = new String[w.length - 1];
+        for (int k = 0; k < items.length; k++) items[k] = Lyrics.join(w, 0, k + 1) + "  ✂  " + Lyrics.join(w, k + 1, w.length);
+        new AlertDialog.Builder(this).setTitle("Split the line where?").setItems(items, (d, k) -> {
+            if (timeline != null) timeline.snapshot();
+            project.lyrics.splitAtWord(i, k + 1, project.durationMs);
+            if (after != null) after.run();
+            changed(); saveNow(); updateTimelineNote();
+            if (timeline != null) timeline.invalidate();
+            if (tab == 2) tab(2);
+        }).show();
+    }
+
+    /** Press and hold a clip: every tool for it in one list. */
+    void clipMenu(int i) {
+        if (i < 0 || i >= project.lyrics.lines.size()) return;
+        final SongTimeline tl = timeline;
+        Lyrics.Line l = project.lyrics.lines.get(i);
+        String[] items = {"✎ Edit the words / timing", "✂ Split at the playhead", "✂ Split after a word…", "⇆ Join with the next line", "⧉ Copy to the playhead", "◀ 0.1 s earlier", "0.1 s later ▶", "Unplace (keep the words)", "🗑 Delete the line"};
+        new AlertDialog.Builder(this).setTitle("Line " + (i + 1) + ": " + l.text).setItems(items, (d, k) -> {
+            if (k == 0) { editLine(i); return; }
+            if (k == 2) { splitAfterWordDialog(i, () -> { if (tl != null) tl.selected = i + 1; }); return; }
+            if (tl != null) tl.snapshot();
+            switch (k) {
+                case 1: if (!project.lyrics.splitAt(i, now(), project.durationMs)) toast("A line needs two or more words to split."); else if (tl != null) tl.selected = i + 1; break;
+                case 3: if (!project.lyrics.joinWithNext(i, project.durationMs)) toast("There is no next line to join."); break;
+                case 4: { int c = project.lyrics.copyTo(i, now()); if (tl != null) tl.selected = c; break; }
+                case 5: project.lyrics.nudge(i, -100); break;
+                case 6: project.lyrics.nudge(i, 100); break;
+                case 7: { l.start = -1; l.end = -1; l.wordTimes = null; if (tl != null) tl.selected = -1; break; }
+                default: { project.lyrics.lines.remove(i); if (tl != null) tl.selected = -1; toast("Line deleted — the other clips stay where they are. ↶ Undo brings it back."); break; }
+            }
+            changed(); saveNow(); updateTimelineNote();
+            if (tl != null) tl.invalidate();
+        }).show();
     }
 
     interface ClipAction { void run(int line); }
@@ -1684,15 +1764,23 @@ public class MainActivity extends Activity {
             tl.snapshot();
             action.run(tl.selected);
             changed();
+            saveNow();
             updateTimelineNote();
             tl.invalidate();
         });
         b.setTextSize(12.5f);
-        b.setPadding(dp(4), 0, dp(4), 0);
+        b.setPadding(dp(10), 0, dp(10), 0);
+        b.setLayoutParams(toolParams());
         return b;
     }
 
     void updateTimelineNote() {
+        if (timelineSel != null && timeline != null) {
+            int sel = timeline.selected;
+            timelineSel.setText(sel >= 0 && sel < project.lyrics.lines.size() ? "Selected: line " + (sel + 1) + " · “" + project.lyrics.lines.get(sel).text + "” — use the tools above, or press and hold the clip"
+                    : "Tap a clip to select it · press and hold a clip for all its tools");
+            timelineSel.setTextColor(sel >= 0 ? ACCENT : DIM);
+        }
         if (timelineNote == null) return;
         Lyrics l = project.lyrics;
         int next = l.nextUnsynced(), left = l.lines.size() - l.syncedCount();

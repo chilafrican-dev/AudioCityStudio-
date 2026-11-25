@@ -23,6 +23,9 @@ final class SongTimeline extends View {
         void changed();
         void editLine(int index);
         void dropNextLine(long ms);
+        /** Press and hold on a clip: show all tools for it. */
+        void clipMenu(int index);
+        void selectionChanged();
     }
 
     private final Lyrics lyrics;
@@ -47,6 +50,20 @@ final class SongTimeline extends View {
     private long downTime, grabStart, grabEnd;
     private boolean moved, scaling;
     private long viewCentre = -1; // when not following the playhead (while scrubbing)
+    private int pressLine = -1;
+    private boolean pressHandled;
+    private final Runnable longPress = this::onLongPress;
+
+    private void onLongPress() {
+        if (moved || pressLine < 0 || pressLine >= lyrics.lines.size()) return;
+        int i = pressLine;
+        selected = i;
+        mode = NONE; pending = null; pressHandled = true;
+        performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+        host.selectionChanged();
+        invalidate();
+        host.clipMenu(i);
+    }
 
     SongTimeline(Context c, Lyrics lyrics, long duration, float[] envelope, Host host) {
         super(c);
@@ -173,7 +190,9 @@ final class SongTimeline extends View {
         if (a == MotionEvent.ACTION_DOWN) {
             getParent().requestDisallowInterceptTouchEvent(true);
             downX = lastX = ex; moved = false; downTime = centre(); viewCentre = centre();
-            mode = SCRUB; touchLine = -1;
+            mode = SCRUB; touchLine = -1; pressHandled = false;
+            pressLine = ey >= lineTop() - 10 * d ? lineAt(ex) : -1;
+            if (pressLine >= 0) postDelayed(longPress, 500);
             if (ey >= lineTop() && selected >= 0 && startOf(selected) >= 0) {
                 float x0 = x(startOf(selected)), x1 = x(endOf(selected)), grab = 16 * d;
                 if (Math.abs(ex - x0) < grab) mode = LEFT;
@@ -185,6 +204,7 @@ final class SongTimeline extends View {
         }
         if (a == MotionEvent.ACTION_MOVE) {
             if (Math.abs(ex - downX) > 6 * d) {
+                removeCallbacks(longPress);
                 if (!moved && pending != null) { remember(pending); pending = null; } // a real drag: it can be undone
                 moved = true;
             }
@@ -196,6 +216,8 @@ final class SongTimeline extends View {
             return true;
         }
         if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+            removeCallbacks(longPress);
+            if (pressHandled) { pressHandled = false; viewCentre = -1; mode = NONE; touchLine = -1; return true; }
             if (mode == SCRUB && moved) host.seek(viewCentre);
             else if (!moved && a == MotionEvent.ACTION_UP) tapAt(ex, ey);
             else if (touchLine >= 0 && moved) { if (snap && (mode == MOVE || mode == LEFT)) snapStart(touchLine); host.changed(); }
@@ -211,12 +233,14 @@ final class SongTimeline extends View {
         int hit = ey >= lineTop() - 10 * d ? lineAt(ex) : -1;
         if (hit >= 0) {
             if (hit == selected) host.editLine(hit); else selected = hit;
+            host.selectionChanged();
         } else if (ey >= lineTop() - 10 * d && lyrics.nextUnsynced() >= 0) {
             snapshot();
             host.dropNextLine(Math.max(0, Math.min(duration - 500, time(ex))));
-            selected = -1;
+            host.selectionChanged();
         } else {
             selected = -1;
+            host.selectionChanged();
             host.seek(Math.max(0, Math.min(duration, time(ex))));
         }
         invalidate();
