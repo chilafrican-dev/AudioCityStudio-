@@ -403,6 +403,8 @@ public class MainActivity extends Activity {
         typeBar.addView(tl, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-2, dp(40)); rp.rightMargin = dp(6);
         typeBar.addView(button("⟲ 5 s", () -> seekTo((int) Math.max(0, now() - 5000))), rp);
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, dp(40)); sp.rightMargin = dp(6);
+        typeBar.addView(button("⏱ Time", this::stampCurrentLine, 0xff3b3520, ACCENT), sp);
         typeBar.addView(button("✓ Done", this::doneTyping, ACCENT, 0xff1a1a1a), new LinearLayout.LayoutParams(-2, dp(40)));
         typeBar.setVisibility(View.GONE);
         root.addView(typeBar, 1);
@@ -443,6 +445,29 @@ public class MainActivity extends Activity {
         int line = layout.getLineForOffset(Math.max(0, e.getSelectionStart()));
         int top = layout.getLineTop(line) + e.getPaddingTop(), bottom = layout.getLineBottom(line) + e.getPaddingTop();
         return new android.graphics.Rect(0, Math.max(0, top - e.getLineHeight()), e.getWidth(), bottom + e.getLineHeight());
+    }
+
+    /** Writes the song time in front of the line the cursor is on, then moves to the next line (tap again there). */
+    void stampCurrentLine() {
+        if (lyricsBox == null) return;
+        if (!playing) { toast("Play the song, then tap ⏱ as each line starts."); return; }
+        Editable e = lyricsBox.getText();
+        String txt = e.toString();
+        int cur = Math.max(0, lyricsBox.getSelectionStart());
+        int ls = txt.lastIndexOf('\n', Math.max(0, cur - 1)) + 1;
+        if (cur == 0) ls = 0;
+        int le = txt.indexOf('\n', ls);
+        if (le < 0) le = txt.length();
+        String row = txt.substring(ls, le);
+        String[] rest = new String[1];
+        long old = Lyrics.leadStamp(row, rest);
+        int stampEnd = old >= 0 ? ls + (row.length() - rest[0].length()) : ls;
+        String stamp = Lyrics.boxStamp(Math.max(0, now() - tapOffset())) + " ";
+        e.replace(ls, stampEnd, stamp);
+        String after = e.toString();
+        int nl = after.indexOf('\n', ls);
+        lyricsBox.setSelection(nl < 0 ? after.length() : nl + 1);
+        lyricsBox.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
     }
 
     void doneTyping() {
@@ -816,15 +841,15 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(applyLyrics);
         if (lyricsBox == null || project == null) return;
         String text = lyricsBox.getText().toString();
-        if (text.equals(project.lyrics.toText())) return;
-        if (Lyrics.looksLikeLrc(text)) {
+        if (text.equals(project.lyrics.toStampedText())) return;
+        if (Lyrics.isFullLrc(text)) {
             String[] meta = {null, null};
             Lyrics l = Lyrics.parseLrc(text, meta);
             project.lyrics.lines.clear(); project.lyrics.lines.addAll(l.lines);
             if (meta[1] != null && project.artist.isEmpty()) project.artist = meta[1];
-            settingLyricsText = true; lyricsBox.setText(project.lyrics.toText()); settingLyricsText = false;
+            settingLyricsText = true; lyricsBox.setText(project.lyrics.toStampedText()); settingLyricsText = false;
             toast("LRC timings kept for " + l.syncedCount() + " lines.");
-        } else project.lyrics.setText(text);
+        } else project.lyrics.setStampedText(text);
         changed();
     }
 
@@ -833,7 +858,7 @@ public class MainActivity extends Activity {
     void lyricsTab(LinearLayout page) {
         LinearLayout steps = card();
         steps.addView(label("Add the words in three easy ways", 15, TEXT, true));
-        steps.addView(label("0. Don't have them? “Write the lyrics for me” listens to the song (Luganda) and drafts them for you to correct.\n1. Copy the lyrics from anywhere and tap Paste.\n2. Or type them: press Enter for each new line on screen.\n3. Or import a .lrc / .txt file (LRC keeps its timings).\n\nTip: Clean up removes labels like [Chorus], stray symbols and timestamps, and splits long rows so they fit on screen.", 13, DIM, false));
+        steps.addView(label("⏱ Times: while the song plays, tap ⏱ in the typing bar as each line starts — the time is written in front of the line, like [0:15.20]. You can also type or change a time yourself.\n\n0. Don't have them? “Write the lyrics for me” listens to the song (Luganda) and drafts them for you to correct.\n1. Copy the lyrics from anywhere and tap Paste.\n2. Or type them: press Enter for each new line on screen.\n3. Or import a .lrc / .txt file (LRC keeps its timings).\n\nTip: Clean up removes labels like [Chorus], stray symbols and timestamps, and splits long rows so they fit on screen.", 13, DIM, false));
         addCard(page, steps);
         lyricsSteps = steps;
         page.addView(row(button("📋  Paste", this::pasteLyrics, ACCENT, 0xff1a1a1a), button("✨  Clean up", this::cleanLyrics), button("Import file", () -> pick("*/*", REQ_LYRICS))));
@@ -842,7 +867,7 @@ public class MainActivity extends Activity {
         lyricsCount.setPadding(0, dp(10), 0, dp(4));
         page.addView(lyricsCount);
         lyricsBox = new EditText(this);
-        lyricsBox.setText(project.lyrics.toText());
+        lyricsBox.setText(project.lyrics.toStampedText());
         lyricsBox.setHint("Type or paste the lyrics here…\n\nOne row = one line on screen.\nKeep each row to a short phrase for the best look.");
         lyricsBox.setHintTextColor(0xff6c6c7c);
         lyricsBox.setTextColor(TEXT);
@@ -866,7 +891,7 @@ public class MainActivity extends Activity {
         if (lyricsCount == null || lyricsBox == null) return;
         String t = lyricsBox.getText().toString();
         int lines = 0, longOnes = 0;
-        for (String r : t.split("\n")) { String x = r.trim(); if (x.isEmpty()) continue; lines++; if (x.length() > Lyrics.LONG_LINE) longOnes++; }
+        for (String r : t.split("\n")) { String[] rest = new String[1]; Lyrics.leadStamp(r, rest); String x = rest[0].trim(); if (x.isEmpty()) continue; lines++; if (x.length() > Lyrics.LONG_LINE) longOnes++; }
         lyricsCount.setText(lines == 0 ? "No lyrics yet." : lines + " lines" + (longOnes > 0 ? "  ·  " + longOnes + " long — Clean up can split them" : "") + "  ·  " + project.lyrics.syncedCount() + " synced");
     }
 
@@ -925,56 +950,64 @@ public class MainActivity extends Activity {
             return;
         }
         boolean ready = ModelStore.ready(this);
-        LinearLayout ai = card();
-        ai.addView(label("🎧  AI listens · Luganda", 16, TEXT, true));
-        ai.addView(label(ready ? "The app listens to the song and finds when every line and every word is sung, block by block, word by word. Your lyrics stay on the phone. It takes a few minutes for a full song — keep the app open."
-                : "Let the app listen to the song and time every line and word for you. First download the Luganda listening model once (355 MB — Wi-Fi recommended). After that it works offline and your songs never leave the phone.", 12, DIM, false));
-        if (ready) {
-            Button listen = button("🎧  Listen & sync every word", this::aiSync, ACCENT, 0xff1a1a1a);
-            listen.setTextSize(16);
-            LinearLayout.LayoutParams lpl = new LinearLayout.LayoutParams(-1, dp(56)); lpl.topMargin = dp(8);
-            ai.addView(listen, lpl);
-            if (l.syncedCount() > 0) {
-                ai.addView(row(button("🎧  AI fine-tune the words inside my timings", this::aiFineTune)));
-                ai.addView(label("Most reliable: after you hold or tap the lines, the AI only places the words within each line's own part of the song.", 11, DIM, false));
-            }
-            if (!aiCheck.isEmpty()) ai.addView(label("⚠ " + aiCheck.size() + " line(s) the AI was unsure about are marked below — play them and adjust if needed.", 12, 0xffffb703, false));
-        } else ai.addView(row(button("⬇  Download AI model (355 MB)", this::downloadModel, ACCENT, 0xff1a1a1a)));
-        addCard(page, ai);
         syncStatus = label("", 13, DIM, false);
-        syncStatus.setPadding(0, dp(10), 0, dp(4));
+        syncStatus.setPadding(0, dp(10), 0, dp(2));
         page.addView(syncStatus);
-        page.addView(heading("Or sync by tapping"));
-        Button full = button("🎤  Sync mode (full screen)", this::openSyncMode, PANEL2, TEXT);
-        full.setTextSize(17);
-        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, dp(64)); fp.topMargin = dp(4);
-        page.addView(full, fp);
-        page.addView(label("Big text, tap anywhere on the screen, slow-down playback and quick undo. The easiest way to sync.", 12, DIM, false));
-        page.addView(row(button("🎞  Open the timeline editor (see & fix everything)", () -> tab(TIMELINE))));
-        Button holdBtn = button("✋  Hold while each line is sung (easiest)", () -> { openSyncMode(); setHoldMode(); }, ACCENT, 0xff1a1a1a);
+
+        // Step 1 — place the lines.
+        LinearLayout s1 = card();
+        s1.addView(label("1 · Place the lines", 16, TEXT, true));
+        s1.addView(label("Play the song. Press and hold anywhere while a line is sung, let go when it ends. Wait through the intro and breaks.", 12, DIM, false));
+        Button holdBtn = button("✋  Hold while each line is sung", () -> { openSyncMode(); setHoldMode(); }, ACCENT, 0xff1a1a1a);
         holdBtn.setTextSize(16);
-        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, dp(58)); hp.topMargin = dp(6);
-        page.addView(holdBtn, hp);
-        page.addView(label("Press and hold when a line starts, let go when it ends. Intros and breaks are simply the time you are not holding. The words inside are spread by syllables — or placed exactly by the AI below.", 12, DIM, false));
-        Button wordsBtn = button("👆  Tap word by word (exact, any song)", () -> { openSyncMode(); setWordMode(true); }, PANEL2, TEXT);
-        LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-1, dp(52)); wp.topMargin = dp(6);
-        page.addView(wordsBtn, wp);
-        page.addView(label("Drop every word yourself while the song plays: wait through the intro and breaks, tap as each word is sung. Fix any word later by dragging it (tap a line below).", 12, DIM, false));
-        page.addView(row(button("⚡  Quick sync", this::quickSync), button("⟲  Start over", this::syncFromStart)));
-        page.addView(label("Quick sync spreads the lines across the song in seconds; then play it and fix the few lines that are off.", 12, DIM, false));
-        page.addView(heading("Or tap here"));
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, dp(58)); hp.topMargin = dp(8);
+        s1.addView(holdBtn, hp);
+        s1.addView(label("Other easy ways: tap ⏱ while typing the lyrics (Lyrics tab), or drag the lines as clips on the Timeline.", 11, DIM, false));
+        addCard(page, s1);
+
+        // Step 2 — check and fix on the timeline.
+        LinearLayout s2 = card();
+        s2.addView(label("2 · Check & fix", 16, TEXT, true));
+        s2.addView(label("See the whole song with your lines as clips. Drag any clip to where it is sung.", 12, DIM, false));
+        s2.addView(row(button("🎞  Open the timeline", () -> tab(TIMELINE), PANEL2, TEXT)));
+        addCard(page, s2);
+
+        // Step 3 — exact words with the AI (optional).
+        LinearLayout ai = card();
+        ai.addView(label("3 · Exact words (optional)", 16, TEXT, true));
+        if (!ready) {
+            ai.addView(label("The Luganda listening AI places every word inside your lines. Download it once (355 MB, Wi-Fi recommended); then it works offline.", 12, DIM, false));
+            ai.addView(row(button("⬇  Download the AI (355 MB)", this::downloadModel)));
+        } else {
+            ai.addView(label(l.syncedCount() > 0 ? "The AI places each word inside the lines you placed — fast and reliable." : "Place the lines first (step 1); then the AI places each word inside them.", 12, DIM, false));
+            if (l.syncedCount() > 0) ai.addView(row(button("🎧  AI: place the words", this::aiFineTune, PANEL2, TEXT)));
+            if (!aiCheck.isEmpty()) ai.addView(label("⚠ " + aiCheck.size() + " line(s) the AI was unsure about are marked in the list — check them on the timeline.", 12, 0xffffb703, false));
+        }
+        addCard(page, ai);
+
+        // Everything else, folded away.
+        Button moreBtn = button(showMoreSync ? "▲  Fewer options" : "▼  More ways to sync", () -> { showMoreSync = !showMoreSync; tab(2); });
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-1, dp(46)); mp.topMargin = dp(12);
+        page.addView(moreBtn, mp);
         tapButton = button("", () -> {}, PANEL2, TEXT);
-        tapButton.setTextSize(16);
-        tapButton.setPadding(dp(16), dp(12), dp(16), dp(12));
-        tapOnTouch(tapButton);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(100)); tp.topMargin = dp(6);
-        page.addView(tapButton, tp);
-        page.addView(row(button("▶  Continue", this::syncContinue), button("Undo last tap", this::undoTap), button("Shift all…", this::shiftAll)));
-        TextView offset = label("", 12, DIM, false);
-        Runnable showOffset = () -> offset.setText("Reaction compensation: taps count " + tapOffset() + " ms earlier.");
-        showOffset.run();
-        page.addView(offset);
-        page.addView(slider(0, 400, tapOffset(), v -> { prefs().edit().putInt("tapOffset", Math.round(v / 10) * 10).apply(); showOffset.run(); }));
+        if (showMoreSync) {
+            LinearLayout more = card();
+            more.addView(row(button("👆 Tap word by word", () -> { openSyncMode(); setWordMode(true); }), button("🎤 Tap lines", () -> { openSyncMode(); holdMode = false; refreshOverlay(); })));
+            if (ready) more.addView(row(button("🎧 AI listens to the whole song", this::aiSync)));
+            more.addView(row(button("⚡ Quick estimate", this::quickSync), button("⟲ Start over", this::syncFromStart)));
+            more.addView(row(button("▶ Continue", this::syncContinue), button("Undo last", this::undoTap), button("Shift all…", this::shiftAll)));
+            tapButton.setTextSize(15);
+            tapButton.setPadding(dp(16), dp(10), dp(16), dp(10));
+            tapOnTouch(tapButton);
+            LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(84)); tp.topMargin = dp(6);
+            more.addView(tapButton, tp);
+            TextView offset = label("", 12, DIM, false);
+            Runnable showOffset = () -> offset.setText("Reaction compensation: taps count " + tapOffset() + " ms earlier.");
+            showOffset.run();
+            more.addView(offset);
+            more.addView(slider(0, 400, tapOffset(), v -> { prefs().edit().putInt("tapOffset", Math.round(v / 10) * 10).apply(); showOffset.run(); }));
+            addCard(page, more);
+        }
         page.addView(heading("Lines · tap one to fine-tune"));
         for (int i = 0; i < l.lines.size(); i++) {
             final int k = i;
@@ -988,6 +1021,8 @@ public class MainActivity extends Activity {
         }
         refreshSync();
     }
+
+    boolean showMoreSync;
 
     /** Taps count the moment the finger lands (not when it lifts), so timings are tighter. */
     void tapOnTouch(View v) {
@@ -1622,6 +1657,9 @@ public class MainActivity extends Activity {
                     l.start = -1; l.end = -1; l.wordTimes = null;
                     tl.selected = -1; changed(); updateTimelineNote();
                 })));
+        if (project.lyrics.nextUnsynced() >= 0) page.addView(row(button("🧩 Lay out all lines as clips", () -> { tl.snapshot(); layOutClips(); }, ACCENT, 0xff1a1a1a)));
+        Switch snap = toggle("🧲 Snap clips to where singing starts", tl.snap, b -> tl.snap = b);
+        page.addView(snap);
         page.addView(label("Blue/teal blocks are lines (teal = every word timed); the gold block is the one you selected. White marks inside a block are where words start.", 11, DIM, false));
     }
 
@@ -1630,6 +1668,19 @@ public class MainActivity extends Activity {
         Lyrics l = project.lyrics;
         int next = l.nextUnsynced(), left = l.lines.size() - l.syncedCount();
         timelineNote.setText(next < 0 ? "Every line is on the timeline ✓" : left + " line(s) not placed yet. Tap an empty spot to drop line " + (next + 1) + " there: “" + l.lines.get(next).text + "”");
+    }
+
+    /** Puts every unplaced line on the timeline at once, spread over the song, ready to be dragged into place. */
+    void layOutClips() {
+        Lyrics l = project.lyrics;
+        long guess = 0;
+        float[] env = project.envelope;
+        for (int i = 0; i < env.length; i++) if (env[i] > .3f) { guess = i * 1000L / Project.ENVELOPE_RATE; break; }
+        int n = l.spread(l.firstStart() >= 0 ? l.firstStart() : guess, Math.max(guess + 5000, project.durationMs - 2000));
+        changed();
+        updateTimelineNote();
+        if (timeline != null) timeline.zoomToFit();
+        toast(n + " lines laid out as clips. Now drag each one to where it is sung (play to check).");
     }
 
     /** Drops the next unplaced line at a time on the timeline (if that keeps the lines in order). */

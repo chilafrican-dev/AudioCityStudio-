@@ -37,6 +37,8 @@ final class SongTimeline extends View {
     private final ArrayDeque<long[][]> undo = new ArrayDeque<>();
 
     int selected = -1;
+    /** Snap a dragged clip's start to the nearest place where the singing starts (a rise in loudness). */
+    boolean snap = true;
     // Touch state.
     private static final int NONE = 0, SCRUB = 1, MOVE = 2, LEFT = 3, RIGHT = 4;
     private int mode = NONE, touchLine = -1;
@@ -192,7 +194,7 @@ final class SongTimeline extends View {
         if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
             if (mode == SCRUB && moved) host.seek(viewCentre);
             else if (!moved && a == MotionEvent.ACTION_UP) tapAt(ex, ey);
-            else if (touchLine >= 0 && moved) host.changed();
+            else if (touchLine >= 0 && moved) { if (snap && (mode == MOVE || mode == LEFT)) snapStart(touchLine); host.changed(); }
             if (mode != SCRUB || !moved) { if (touchLine >= 0 && !moved && !undo.isEmpty()) undo.pop(); }
             viewCentre = -1; mode = NONE; touchLine = -1;
             invalidate();
@@ -214,6 +216,28 @@ final class SongTimeline extends View {
             host.seek(Math.max(0, Math.min(duration, time(ex))));
         }
         invalidate();
+    }
+
+    /** Moves a line's start to the strongest rise in loudness within ±0.35 s (where singing starts), if there is a clear one. */
+    void snapStart(int i) {
+        Lyrics.Line l = lyrics.lines.get(i);
+        if (envelope.length == 0 || l.start < 0) return;
+        int c = (int) (l.start * Project.ENVELOPE_RATE / 1000), best = -1;
+        float bestRise = .12f;
+        for (int k = Math.max(13, c - 35); k <= Math.min(envelope.length - 1, c + 35); k++) {
+            float low = Float.MAX_VALUE;
+            for (int j = k - 12; j < k; j++) low = Math.min(low, envelope[j]);
+            float rise = envelope[k] - low;
+            if (rise > bestRise) { bestRise = rise; best = k; }
+        }
+        if (best < 0) return;
+        long s = best * 1000L / Project.ENVELOPE_RATE - 30; // a hair before the loudness peak rises
+        long prevStart = -1, nextStart = Long.MAX_VALUE;
+        for (int k = i - 1; k >= 0; k--) if (lyrics.lines.get(k).start >= 0) { prevStart = lyrics.lines.get(k).start; break; }
+        for (int k = i + 1; k < lyrics.lines.size(); k++) if (lyrics.lines.get(k).start >= 0) { nextStart = lyrics.lines.get(k).start; break; }
+        if (s <= prevStart + 100 || s >= nextStart - 100 || (l.end > 0 && s >= l.end - 200)) return;
+        if (mode == MOVE) Lyrics.moveLine(l, s);
+        else { if (l.wordTimed() && l.wordTimes.length > 1 && s >= l.wordTimes[1]) return; if (l.wordTimed()) l.wordTimes[0] = s; l.start = s; }
     }
 
     /** Moves (or resizes) a line, keeping lines in order and at least 0.2 s long. */

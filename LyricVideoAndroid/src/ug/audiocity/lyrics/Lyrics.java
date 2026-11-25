@@ -103,6 +103,100 @@ public final class Lyrics {
         repairOrder();
     }
 
+    // ------------------------------------------------------------------ time stamps in the lyrics text
+
+    /** A time stamp at the start of a row: "[0:15.20] words", "[00:15] words" or "0:15 words". */
+    static final Pattern LEAD_STAMP = Pattern.compile("^\\s*(?:\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]|(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?(?=\\s))\\s*");
+
+    /** "[m:ss.cc]" as shown in the lyrics box. */
+    public static String boxStamp(long ms) {
+        long cs = (Math.max(0, ms) + 5) / 10;
+        return String.format(Locale.ROOT, "[%d:%02d.%02d]", cs / 6000, (cs / 100) % 60, cs % 100);
+    }
+
+    /** Text for the lyrics box: synced lines start with their time stamp, so people can see and edit where each line begins. */
+    public String toStampedText() {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < lines.size(); i++) {
+            if (i > 0) b.append('\n');
+            Line l = lines.get(i);
+            if (l.start >= 0) b.append(boxStamp(l.start)).append(' ');
+            b.append(l.text);
+        }
+        return b.toString();
+    }
+
+    /** Start time from a leading stamp of a row, or -1; out[0] receives the rest of the row. */
+    static long leadStamp(String row, String[] rest) {
+        Matcher m = LEAD_STAMP.matcher(row);
+        if (!m.lookingAt()) { rest[0] = row; return -1; }
+        boolean br = m.group(1) != null;
+        long ms = Long.parseLong(br ? m.group(1) : m.group(4)) * 60000 + Long.parseLong(br ? m.group(2) : m.group(5)) * 1000;
+        String frac = br ? m.group(3) : m.group(6);
+        if (frac != null) { long f = Long.parseLong(frac); for (int i = frac.length(); i < 3; i++) f *= 10; ms += f; }
+        rest[0] = row.substring(m.end());
+        return ms;
+    }
+
+    /**
+     * Reads the lyrics box with time stamps: a stamped row starts at its stamp, a row without one is not placed yet, a
+     * row with only a stamp marks where the previous line ends. Word timings stay with lines whose words are unchanged
+     * (moved along if their stamp was changed).
+     */
+    public void setStampedText(String text) {
+        ArrayList<Line> old = new ArrayList<>(lines);
+        ArrayList<Line> fresh = new ArrayList<>();
+        ArrayList<Long> stamps = new ArrayList<>();
+        String[] rest = new String[1];
+        for (String row : split(text)) {
+            long t = leadStamp(row, rest);
+            String words = clean(rest[0]);
+            if (words.isEmpty()) {
+                if (t >= 0 && !fresh.isEmpty()) { Line prev = fresh.get(fresh.size() - 1); prev.end = t; }
+                continue;
+            }
+            fresh.add(new Line(words, -1));
+            stamps.add(t);
+        }
+        int n = old.size(), m = fresh.size();
+        int[][] lcs = new int[n + 1][m + 1];
+        for (int i = n - 1; i >= 0; i--) for (int j = m - 1; j >= 0; j--)
+            lcs[i][j] = old.get(i).text.equals(fresh.get(j).text) ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+        int i = 0, j = 0;
+        while (i < n && j < m) {
+            if (old.get(i).text.equals(fresh.get(j).text)) {
+                long endMark = fresh.get(j).end;
+                Line kept = old.get(i).copy();
+                if (endMark >= 0) kept.end = endMark;
+                fresh.set(j, kept);
+                i++; j++;
+            } else if (lcs[i + 1][j] >= lcs[i][j + 1]) i++; else j++;
+        }
+        for (int k = 0; k < m; k++) {
+            Line l = fresh.get(k);
+            long t = stamps.get(k);
+            if (t < 0) { l.start = -1; l.wordTimes = null; l.end = -1; continue; }
+            if (l.start >= 0 && Math.abs(l.start - t) <= 15) continue; // unchanged (the box shows centiseconds)
+            if (l.start >= 0) moveLine(l, t); else { l.start = t; l.wordTimes = null; }
+        }
+        lines.clear();
+        lines.addAll(fresh);
+        repairOrder();
+    }
+
+    /** True when text is a full LRC file (meta tags, word tags or repeated stamps) rather than the lyrics box's own stamps. */
+    public static boolean isFullLrc(String text) {
+        if (text == null) return false;
+        for (String row : split(text)) {
+            String r = row.trim();
+            if (WORD_TIME.matcher(r).find()) return true;
+            if (META.matcher(r).matches() && !TIME.matcher(r).lookingAt()) return true;
+            Matcher t = TIME.matcher(r);
+            if (t.lookingAt() && t.find(t.end()) && t.start() == r.indexOf(']') + 1) return true;
+        }
+        return false;
+    }
+
     /** Un-syncs any line whose time is earlier than a synced line before it. */
     public void repairOrder() {
         long last = -1;
@@ -126,14 +220,23 @@ public final class Lyrics {
      */
     public static String cleanUp(String text, int maxChars) {
         StringBuilder b = new StringBuilder();
-        for (String raw : split(text)) {
+        for (String raw0 : split(text)) {
+            String[] rest = new String[1];
+            long stamp = leadStamp(raw0, rest);
+            String raw = stamp >= 0 ? rest[0] : raw0;
             String row = TIME.matcher(raw).replaceAll("");
             row = WORD_TIME.matcher(row).replaceAll("");
             if (META.matcher(raw.trim()).matches() && !TIME.matcher(raw.trim()).lookingAt()) continue;
             row = row.replace(' ', ' ').replaceAll("[\\u200b\\u200e\\u200f*_#~|]", "");
             row = clean(row);
             if (row.isEmpty() || SECTION.matcher(row).matches() || row.matches("^\\[.*\\]$")) continue; // [Verse 1: Artist]
-            for (String part : splitLong(row, maxChars)) { if (b.length() > 0) b.append('\n'); b.append(part); }
+            boolean first = true;
+            for (String part : splitLong(row, maxChars)) {
+                if (b.length() > 0) b.append('\n');
+                if (first && stamp >= 0) b.append(boxStamp(stamp)).append(' '); // a line's time stays with its first part
+                b.append(part);
+                first = false;
+            }
         }
         return b.toString();
     }

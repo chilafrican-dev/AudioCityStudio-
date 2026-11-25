@@ -7,7 +7,7 @@ public final class LyricsTests {
     static void eq(Object a, Object b, String what) { check(a == null ? b == null : a.equals(b), what + ": expected " + b + ", got " + a); }
 
     public static void main(String[] args) {
-        plainText(); words(); wordTapping(); lineEnds(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
+        plainText(); words(); wordTapping(); lineEnds(); stamps2(); cleanUp(); spread(); lrc(); stamps(); editingKeepsTimes(); timing(); gaps(); sorting(); style();
         System.out.println("LyricsTests: " + checks + " checks passed");
     }
 
@@ -53,6 +53,31 @@ public final class LyricsTests {
         Lyrics keep = Lyrics.parseLrc(lrc, null);
         keep.setText("Nkwagala nnyo mukwano\nA new line\nLine without word tags");
         check(keep.lines.get(0).wordTimed(), "editing other lines keeps word times");
+    }
+
+    static void stamps2() {
+        Lyrics l = Lyrics.parse("Nkwagala nnyo\nTuli wamu\nOmukwano", null);
+        l.setStampedText("[0:15.20] Nkwagala nnyo\n0:21 Tuli wamu\nOmukwano");
+        eq(l.lines.get(0).start, 15200L, "bracket stamp read");
+        eq(l.lines.get(1).start, 21000L, "plain m:ss stamp read");
+        eq(l.lines.get(2).start, -1L, "row without a stamp is not placed");
+        eq(l.toStampedText(), "[0:15.20] Nkwagala nnyo\n[0:21.00] Tuli wamu\nOmukwano", "box shows stamps");
+        l.lines.get(0).wordTimes = new long[]{15200, 15900};
+        l.setStampedText(l.toStampedText());
+        check(l.lines.get(0).wordTimed(), "unchanged box keeps word times");
+        l.setStampedText("[0:16.20] Nkwagala nnyo\n[0:21.00] Tuli wamu\n[0:30.00] Omukwano\n[0:33.50]");
+        eq(l.lines.get(0).wordTimes[1], 16900L, "changing a stamp moves the line's words with it");
+        eq(l.lines.get(2).end, 33500L, "a row with only a stamp marks where the line before ends");
+        l.setStampedText("[0:16.20] Nkwagala nnyo\n[0:18.00] A new line\n[0:21.00] Tuli wamu\n[0:30.00] Omukwano");
+        eq(l.lines.size(), 4, "new line inserted");
+        eq(l.lines.get(1).start, 18000L, "new line takes its typed stamp");
+        eq(l.lines.get(2).start, 21000L, "others keep theirs");
+        l.setStampedText("[0:16.20] Nkwagala nnyo\n[0:12.00] A new line");
+        eq(l.lines.get(1).start, -1L, "a stamp earlier than the line before is not accepted");
+        check(Lyrics.isFullLrc("[ti:Song]\n[00:01.00]a") && Lyrics.isFullLrc("[00:01.00]<00:01.00>a <00:01.50>b") && Lyrics.isFullLrc("[00:01.00][00:30.00]chorus"), "full LRC recognised");
+        check(!Lyrics.isFullLrc("[0:15.20] Nkwagala nnyo\n[0:21.00] Tuli wamu"), "box stamps are not a full LRC");
+        eq(Lyrics.cleanUp("[0:15.20] [Chorus]\n[0:15.20] Nkwagala nnyo mukwano gwange tuli wamu bulijjo naawe", 42).split("\n")[0], "[0:15.20] Nkwagala nnyo mukwano gwange", "clean-up keeps a line's stamp on its first part");
+        eq(Lyrics.boxStamp(75460), "[1:15.46]", "box stamp format");
     }
 
     static void lineEnds() {
@@ -113,13 +138,13 @@ public final class LyricsTests {
                 + "We were dancing through the night until the morning comes, and we never stopped\n";
         String c = Lyrics.cleanUp(raw, Lyrics.LONG_LINE);
         String[] rows = c.split("\n");
-        eq(rows[0], "City lights are calling out my name", "labels, timestamps and markdown removed");
+        eq(rows[0], "[0:12.00] City lights are calling out my name", "labels and markdown removed, the line's time kept as a box stamp");
         eq(rows[1], "Hook me up tonight", "a real lyric starting with a section word is kept");
         eq(rows[2], "(oh yeah)", "sung ad-libs in parentheses are kept");
         eq(rows[3], "We were dancing through the night until", "long row split near the middle");
         eq(rows[4], "the morning comes, and we never stopped", "second half");
         eq(rows.length, 5, "rows after clean-up");
-        for (String r : rows) check(r.length() <= Lyrics.LONG_LINE, "every row fits: " + r);
+        for (String r : rows) check(r.replaceFirst("^\\[[0-9:.]+\\] ", "").length() <= Lyrics.LONG_LINE, "every row fits: " + r);
         check(c.contains("morning comes,"), "punctuation kept with its words");
         check(Lyrics.needsCleanUp(raw), "suggests clean-up");
         check(!Lyrics.needsCleanUp("Short line\nAnother one"), "clean text needs nothing");
