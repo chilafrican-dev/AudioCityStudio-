@@ -35,7 +35,10 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     static final int BG = 0xff111116, PANEL = 0xff1d1d26, PANEL2 = 0xff272733, LINE = 0xff3a3a48, TEXT = 0xfff2f2f5, DIM = 0xff9b9bab, ACCENT = 0xffffd166;
     static final int REQ_AUDIO = 1, REQ_IMAGE = 2, REQ_LYRICS = 3, REQ_FONT = 4, REQ_SAVE_LRC = 5, REQ_COVER = 6, REQ_VIDEO = 7;
-    static final String[] TABS = {"Song", "Lyrics", "Sync", "Style"};
+    /** Tab numbers stay fixed (0 Song, 1 Lyrics, 2 Sync, 3 Style, 4 Timeline); TAB_ORDER is how they are shown. */
+    static final String[] TABS = {"Song", "Lyrics", "Sync", "Style", "Timeline"};
+    static final int[] TAB_ORDER = {0, 1, 2, 4, 3};
+    static final int TIMELINE = 4;
 
     final Handler handler = new Handler(Looper.getMainLooper());
     final ExecutorService jobs = Executors.newSingleThreadExecutor();
@@ -376,12 +379,14 @@ public class MainActivity extends Activity {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setPadding(dp(12), dp(4), dp(12), dp(4));
         tabButtons = new Button[TABS.length];
-        for (int i = 0; i < TABS.length; i++) {
-            final int k = i;
-            tabButtons[i] = button(TABS[i], () -> tab(k));
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(42), 1);
-            if (i > 0) p.leftMargin = dp(6);
-            tabs.addView(tabButtons[i], p);
+        for (int n = 0; n < TAB_ORDER.length; n++) {
+            final int k = TAB_ORDER[n];
+            tabButtons[k] = button(TABS[k], () -> tab(k));
+            tabButtons[k].setTextSize(12.5f);
+            tabButtons[k].setPadding(dp(2), 0, dp(2), 0);
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(42), k == TIMELINE ? 1.25f : 1);
+            if (n > 0) p.leftMargin = dp(4);
+            tabs.addView(tabButtons[k], p);
         }
         root.addView(tabs);
 
@@ -401,7 +406,7 @@ public class MainActivity extends Activity {
             tabButtons[i].setTextColor(i == k ? 0xff1a1a1a : TEXT);
         }
         content.removeAllViews();
-        syncRows.clear(); tapButton = null; syncStatus = null; lyricsBox = null; highlightedRow = -2;
+        syncRows.clear(); tapButton = null; syncStatus = null; lyricsBox = null; highlightedRow = -2; timeline = null; timelineNote = null;
         ScrollView scroll = new ScrollView(this);
         LinearLayout page = column();
         page.setPadding(dp(14), 0, dp(14), dp(40));
@@ -411,6 +416,7 @@ public class MainActivity extends Activity {
             case 0: songTab(page); break;
             case 1: lyricsTab(page); break;
             case 2: syncTab(page); break;
+            case TIMELINE: timelineTab(page); break;
             default: styleTab(page); break;
         }
     }
@@ -884,6 +890,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, dp(64)); fp.topMargin = dp(4);
         page.addView(full, fp);
         page.addView(label("Big text, tap anywhere on the screen, slow-down playback and quick undo. The easiest way to sync.", 12, DIM, false));
+        page.addView(row(button("🎞  Open the timeline editor (see & fix everything)", () -> tab(TIMELINE))));
         Button holdBtn = button("✋  Hold while each line is sung (easiest)", () -> { openSyncMode(); setHoldMode(); }, ACCENT, 0xff1a1a1a);
         holdBtn.setTextSize(16);
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, dp(58)); hp.topMargin = dp(6);
@@ -1514,6 +1521,73 @@ public class MainActivity extends Activity {
             toast(found.lines.size() + " lines added" + (found.syncedCount() > 0 ? " with timings" : "") + " — correct any words, then check the timing in Sync.");
             if (found.syncedCount() == 0) offerTiming();
         }).show();
+    }
+
+    // ------------------------------------------------------------------ Timeline tab
+
+    SongTimeline timeline;
+    TextView timelineNote;
+
+    void timelineTab(LinearLayout page) {
+        timeline = null;
+        if (!project.hasAudio() || project.lyrics.lines.isEmpty()) {
+            LinearLayout c = card();
+            c.addView(label(!project.hasAudio() ? "Choose a song first (Song tab)." : "Add lyrics first (Lyrics tab).", 16, TEXT, true));
+            addCard(page, c);
+            return;
+        }
+        page.addView(label("Swipe to move through the song · tap a line to select it · drag it, or drag its edges · tap it again to edit its words · tap an empty spot to drop the next line there · pinch to zoom", 12, DIM, false));
+        final SongTimeline tl = new SongTimeline(this, project.lyrics, project.durationMs, project.envelope, new SongTimeline.Host() {
+            public long now() { return MainActivity.this.now(); }
+            public void seek(long ms) { seekTo((int) ms); }
+            public void changed() { MainActivity.this.changed(); updateTimelineNote(); }
+            public void editLine(int index) { MainActivity.this.editLine(index); }
+            public void dropNextLine(long ms) { dropNextLineAt(ms); }
+        });
+        timeline = tl;
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(230)); tp.topMargin = dp(8);
+        page.addView(tl, tp);
+        timelineNote = label("", 12, 0xffffcf70, false);
+        timelineNote.setPadding(0, dp(6), 0, dp(2));
+        page.addView(timelineNote);
+        updateTimelineNote();
+        page.addView(row(button("↶ Undo", () -> { if (tl.canUndo()) { tl.undo(); updateTimelineNote(); } else toast("Nothing to undo."); }),
+                button("−", () -> tl.zoomBy(.6f)), button("+", () -> tl.zoomBy(1.6f)), button("Whole song", tl::zoomToFit)));
+        page.addView(row(button("▶ / ❚❚", this::togglePlay, ACCENT, 0xff1a1a1a),
+                button("Edit words", () -> { if (tl.selected >= 0) editLine(tl.selected); else toast("Tap a line on the timeline first."); }),
+                button("Remove time", () -> {
+                    if (tl.selected < 0) { toast("Tap a line on the timeline first."); return; }
+                    tl.snapshot();
+                    Lyrics.Line l = project.lyrics.lines.get(tl.selected);
+                    l.start = -1; l.end = -1; l.wordTimes = null;
+                    tl.selected = -1; changed(); updateTimelineNote();
+                })));
+        page.addView(label("Blue/teal blocks are lines (teal = every word timed); the gold block is the one you selected. White marks inside a block are where words start.", 11, DIM, false));
+    }
+
+    void updateTimelineNote() {
+        if (timelineNote == null) return;
+        Lyrics l = project.lyrics;
+        int next = l.nextUnsynced(), left = l.lines.size() - l.syncedCount();
+        timelineNote.setText(next < 0 ? "Every line is on the timeline ✓" : left + " line(s) not placed yet. Tap an empty spot to drop line " + (next + 1) + " there: “" + l.lines.get(next).text + "”");
+    }
+
+    /** Drops the next unplaced line at a time on the timeline (if that keeps the lines in order). */
+    void dropNextLineAt(long t) {
+        Lyrics l = project.lyrics;
+        int next = l.nextUnsynced();
+        if (next < 0) return;
+        for (int k = next - 1; k >= 0; k--) { Lyrics.Line p = l.lines.get(k); if (p.start >= 0) { if (t <= p.start) { toast("Line " + (next + 1) + " comes after line " + (k + 1) + " — drop it further right."); return; } break; } }
+        for (int k = next + 1; k < l.lines.size(); k++) { Lyrics.Line n = l.lines.get(k); if (n.start >= 0) { if (t >= n.start) { toast("Line " + (next + 1) + " comes before line " + (k + 1) + " — drop it further left."); return; } break; } }
+        Lyrics.Line line = l.lines.get(next);
+        long len = Lyrics.singFor(line.text, 8000);
+        for (int k = next + 1; k < l.lines.size(); k++) { Lyrics.Line n = l.lines.get(k); if (n.start >= 0) { len = Math.min(len, n.start - t - 100); break; } }
+        line.start = t;
+        line.end = t + Math.max(300, len);
+        line.wordTimes = null;
+        if (timeline != null) timeline.selected = next;
+        changed();
+        updateTimelineNote();
     }
 
     // ------------------------------------------------------------------ Style tab

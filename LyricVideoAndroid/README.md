@@ -22,7 +22,12 @@ It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and in
    - Tap any line in the list to fine-tune it: ±0.1 s, set it to the playhead, play from there, edit the text, or insert or delete lines. **Shift all…** moves every timing at once. A reaction-compensation slider corrects for late taps and scales with playback speed.
    - **🎧 AI listens (Luganda):** the app listens to the song and finds when every line and every word is sung ("block by block, word by word"). It runs a Luganda speech model on the phone: download it once (355 MB) from the Sync tab, then it works offline and songs never leave the phone. Lines it is unsure about are marked ⚠. Word times can be adjusted in the line editor by tapping a word at the playhead.
    - **✍️ Write the lyrics for me (Lyrics tab):** drafts Luganda lyrics from the song, using either Sunbird AI (online; needs your own free Sunbird API key; the song is sent to Sunbird in pieces of about 30 seconds, cut at quiet moments, with live progress and a working Cancel) or the on-phone model (offline, rough draft). Sunbird's text is then split into lines at the singer's pauses and timed word by word on the phone. The lyrics are shown for review before they replace anything.
-4. **Style tab.**
+4. **Timeline tab (see and fix everything).** The whole song's sound wave, where singing is tall and intros and breaks are flat, with every lyric line as a block on it. The playhead stays in the middle, and swiping moves through the song.
+   - Tap a line to select it. Drag it to move it, words and all, or drag its edges to set where it starts and ends.
+   - Tap the selected line again to drag single words.
+   - Tap an empty spot to drop the next unplaced line there.
+   - Pinch or use the buttons to zoom, or press *Whole song* to fit it all. *Undo* reverses any change, and *Remove time* takes a line off the timeline.
+5. **Style tab.**
    - **One-tap looks:** Clean pop, Neon night, Cinematic, Karaoke classic, Minimal, Social captions, Handwritten, Bold poster.
    - **Format:** portrait 9:16, 4:5 or 1:1; landscape 16:9, 21:9 cinema or 4:3. Optional cinematic black bars.
    - **13 words effects:** karaoke wipe, fade & rise, scrolling lyrics, typewriter, word pop, neon glow, blur focus, slide-up words, zoom burst, letter cascade, wave, cinematic, word highlighter.
@@ -41,7 +46,7 @@ It is separate from Audio City Studio (the DAW in `../CityStudioAndroid`) and in
    - **Background:** animated gradient (8 palettes), solid colour, or photos, or the cover photo blurred. Background photos have a blur slider from sharp to very soft (a smooth, Gaussian-like blur). Photos can be one photo or a cross-fading slideshow. They either fill the frame or show the whole photo on a blurred copy of itself. Colour filters: natural, black & white, warm, cool, vintage, dramatic. You can also set the slideshow timing, darkening, and slow zoom and pan.
    - **Extras:** audio visualizer, progress bar, title card.
    - **Video:** 720p, 1080p or 4K at 24, 30 or 60 fps. If the phone's encoder can't handle a size, such as 4K or 21:9 on older phones, the export uses the best size it supports.
-5. **Export video.** The app renders H.264 video with AAC audio on the phone's hardware encoder. The video is saved to **Movies/Lyric Videos**, and can then be shared or watched straight away.
+6. **Export video.** The app renders H.264 video with AAC audio on the phone's hardware encoder. The video is saved to **Movies/Lyric Videos**, and can then be shared or watched straight away.
 
 The live preview at the top uses the same drawing code as the exporter, so the exported video looks like the preview. Tap the preview to play or pause.
 
@@ -100,6 +105,8 @@ Requires Android 10 (API 29) or later, with OpenGL ES 2.0 (every Android 10 phon
 | `SpeechModel.java`, `ModelStore.java`, `AutoSync.java` | Run the ONNX model in chunks; download and store the model; tie decoding, listening, timing and writing together. |
 | `Sunbird.java` | Sunbird AI speech-to-text upload (Luganda, `lug`). |
 | `VideoLayer.java`, `VideoBackdrop.java` | Background video: decoded to an OpenGL texture for the export (looping, centre-cropped, colour filter and blur shader), and a muted TextureView player that follows the song in the preview. |
+| `SongTimeline.java`, `WordTimeline.java` | Whole-song timeline editor (move, resize and drop lines, scrub, zoom, undo) and the per-line drag-and-drop word editor. |
+| `WordTapper.java` | Word-by-word tap syncing logic. Plain Java, tested. |
 | `MainActivity.java` | Home screen, editor tabs, playback, full-screen sync mode, font picker and export UI. |
 
 ## Status and limits
