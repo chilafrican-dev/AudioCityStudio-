@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Builds AppVault.apk with the Android SDK command-line tools only (no Gradle), like Audio City Studio.
+set -euo pipefail
+cd "$(dirname "$0")"
+: "${ANDROID_SDK_ROOT:?Set ANDROID_SDK_ROOT to your Android SDK directory}"
+tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
+platform="$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
+rm -rf build/classes build/dex build/gen
+mkdir -p build/classes build/dex build/gen
+"$tools/aapt2" compile --dir res -o build/resources.zip
+"$tools/aapt2" link -o build/base.apk -I "$platform" --manifest AndroidManifest.xml --java build/gen build/resources.zip
+javac --release 8 -classpath "$platform" -d build/classes src/ug/audiocity/appvault/*.java $(find build/gen -name '*.java')
+rm -f build/classes.jar
+(cd build/classes && zip -qr ../classes.jar .)
+"$tools/d8" --lib "$platform" --min-api 30 --output build/dex build/classes.jar
+cp build/base.apk build/unsigned.apk
+(cd build/dex && zip -q ../unsigned.apk classes*.dex)
+"$tools/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
+if [ ! -f build/development.keystore ]; then
+keytool -genkeypair -keystore build/development.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=AppVault Development' >/dev/null 2>&1
+fi
+"$tools/apksigner" sign --ks build/development.keystore --ks-pass pass:android --key-pass pass:android --out AppVault.apk build/aligned.apk
+"$tools/apksigner" verify --verbose AppVault.apk

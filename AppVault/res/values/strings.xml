@@ -1,0 +1,5 @@
+<resources>
+<string name="app_name">AppVault</string>
+<string name="guard_name">AppVault App Guard</string>
+<string name="guard_description">App Guard asks for your fingerprint when an app you put in AppVault is opened from the home screen or recent apps. It reads only which app is on screen, never its content, and sends nothing anywhere.</string>
+</resources>
