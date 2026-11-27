@@ -1799,21 +1799,55 @@ public class CinemaActivity extends Activity {
     scopes.setOnTouchListener(this::onPreviewTouch);
 
     // ---- top status bar
-    topBar = row(); topBar.setBackgroundColor(BAR); topBar.setPadding(dp(10), 0, dp(10), 0); topBar.setGravity(Gravity.CENTER_VERTICAL);
+    // ---- top status bar: logo, then every recording setting as caption over value, then storage / battery / heat
+    topBar = row(); topBar.setBackgroundColor(BAR); topBar.setPadding(dp(8), 0, dp(8), 0); topBar.setGravity(Gravity.CENTER_VERTICAL);
     lensView = status("", v -> chooseLens());
-    formatView = status("", v -> showSettings());
-    tcView = mono("00:00:00:00", 18, TEXT); tcView.setGravity(Gravity.CENTER); tcView.setOnClickListener(v -> resetTimecode());
+    formatView = status("", v -> showSettings()); // kept for its text; the cells below show the same parts
+    tcView = mono("00:00:00:00", 14, TEXT); tcView.setOnClickListener(v -> resetTimecode());
     storageView = status("", null); batteryView = status("", null);
-    topBar.addView(lensView, wrap(dp(10)));
-    topBar.addView(formatView, new LinearLayout.LayoutParams(0, -1, 1));
-    topBar.addView(tcView, new LinearLayout.LayoutParams(-2, -1));
-    LinearLayout right = row(); right.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-    right.addView(storageView, wrap(dp(14))); right.addView(batteryView, wrap(0));
-    topBar.addView(right, new LinearLayout.LayoutParams(0, -1, 1));
-    root.addView(topBar, new FrameLayout.LayoutParams(-1, dp(34), Gravity.TOP));
+    LinearLayout logo = new LinearLayout(this); logo.setOrientation(LinearLayout.VERTICAL); logo.setGravity(Gravity.CENTER_VERTICAL);
+    TextView brand = label("CITY CINEMA", 14, ACCENT); brand.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD_ITALIC));
+    TextView ver = label("v" + appVersion(), 9, DIM);
+    logo.addView(brand); logo.addView(ver);
+    topBar.addView(logo, wrap(dp(10)));
+    topRes = mono("", 13, TEXT); topFps = mono("", 13, TEXT); topShutter = mono("", 13, TEXT); topIso = mono("", 13, TEXT);
+    topWb = mono("", 13, TEXT); topCodec = mono("", 13, TEXT); topBitrate = mono("", 13, TEXT);
+    lensView.setTextSize(13);
+    LinearLayout cells = row(); cells.setGravity(Gravity.CENTER_VERTICAL);
+    cells.addView(info("LENS", lensView, v -> chooseLens()), wrap(dp(10)));
+    cells.addView(info("RES", topRes, v -> togglePanel("format")), wrap(dp(10)));
+    cells.addView(info("FPS", topFps, v -> togglePanel("format")), wrap(dp(10)));
+    cells.addView(info("SHUTTER", topShutter, v -> togglePanel("shutter")), wrap(dp(10)));
+    cells.addView(info("ISO", topIso, v -> togglePanel("iso")), wrap(dp(10)));
+    cells.addView(info("WB", topWb, v -> togglePanel("wb")), wrap(dp(10)));
+    cells.addView(info("CODEC", topCodec, v -> showSettings()), wrap(dp(10)));
+    cells.addView(info("BITRATE", topBitrate, v -> showSettings()), wrap(dp(10)));
+    cells.addView(info("TIME CODE", tcView, v -> resetTimecode()), wrap(0));
+    android.widget.HorizontalScrollView cs = new android.widget.HorizontalScrollView(this); cs.setHorizontalScrollBarEnabled(false); cs.addView(cells);
+    topBar.addView(cs, new LinearLayout.LayoutParams(0, -1, 1));
+    LinearLayout right = new LinearLayout(this); right.setOrientation(LinearLayout.VERTICAL); right.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+    storageView.setTextSize(11); batteryView.setTextSize(11);
+    right.addView(storageView); right.addView(batteryView);
+    topBar.addView(right, wrap(0));
+    root.addView(topBar, new FrameLayout.LayoutParams(-1, dp(TOP_H), Gravity.TOP));
+
+    // ---- left rail: the app's pages
+    rail = new LinearLayout(this); rail.setOrientation(LinearLayout.VERTICAL); rail.setBackgroundColor(BG); rail.setGravity(Gravity.CENTER_HORIZONTAL);
+    rail.setPadding(0, dp(6), 0, dp(6));
+    rail.addView(railItem("◉", "CAMERA", true, () -> {}), new LinearLayout.LayoutParams(-1, 0, 1));
+    rail.addView(railItem("▶", "CLIPS", false, () -> {
+      if (recording) { message("Stop recording to open the clips."); return; }
+      startActivity(new Intent(this, ClipPlayerActivity.class));
+    }), new LinearLayout.LayoutParams(-1, 0, 1));
+    rail.addView(railItem("✂\uFE0E", "EDITOR", false, () -> {
+      if (recording) { message("Stop recording to open the editor."); return; }
+      startActivity(new Intent(this, EditorActivity.class));
+    }), new LinearLayout.LayoutParams(-1, 0, 1));
+    rail.addView(railItem("☰", "MENU", false, this::showSettings), new LinearLayout.LayoutParams(-1, 0, 1));
+    root.addView(rail, new FrameLayout.LayoutParams(dp(RAIL_W), -1, Gravity.START));
 
     recLabel = mono("", 12, REC); recLabel.setVisibility(View.INVISIBLE);
-    FrameLayout.LayoutParams rl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL); rl.topMargin = dp(38);
+    FrameLayout.LayoutParams rl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL); rl.topMargin = dp(TOP_H + 4);
     root.addView(recLabel, rl);
 
     // ---- bottom parameter bar
@@ -1827,7 +1861,13 @@ public class CinemaActivity extends Activity {
     lookCell = cell("LOOK", () -> togglePanel("look"));
     meter = new Meter(this);
     meter.setOnClickListener(v -> togglePanel("audio"));
-    for (Cell c : new Cell[] {fpsCell, shutterCell, isoCell, wbCell, focusCell, zoomCell, lookCell}) bottomBar.addView(c, new LinearLayout.LayoutParams(0, -1, 1));
+    fpsCell.mirror = topFps; shutterCell.mirror = topShutter; isoCell.mirror = topIso; wbCell.mirror = topWb;
+    lookCell.caption.setText("PROFILE");
+    bottomBar.addView(stepper(fpsCell, this::stepFps), new LinearLayout.LayoutParams(0, -1, 1.3f));
+    bottomBar.addView(stepper(shutterCell, this::stepShutter), new LinearLayout.LayoutParams(0, -1, 1.3f));
+    bottomBar.addView(stepper(isoCell, this::stepIso), new LinearLayout.LayoutParams(0, -1, 1.3f));
+    bottomBar.addView(stepper(wbCell, this::stepWb), new LinearLayout.LayoutParams(0, -1, 1.3f));
+    for (Cell c : new Cell[] {focusCell, zoomCell, lookCell}) bottomBar.addView(c, new LinearLayout.LayoutParams(0, -1, 1));
     bottomBar.addView(meter, new LinearLayout.LayoutParams(0, -1, 1.4f));
     root.addView(bottomBar, new FrameLayout.LayoutParams(-1, dp(50), Gravity.BOTTOM));
 
@@ -1858,20 +1898,6 @@ public class CinemaActivity extends Activity {
     toggles.add(stabToggle); stabToggle.sync();
     LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(-1, dp(30)); stp.bottomMargin = dp(5);
     togglesGrid.addView(stab, stp);
-    Button clips = chip("CLIPS", false, () -> {
-      if (recording) { message("Stop recording to open the clips."); return; }
-      startActivity(new Intent(this, ClipPlayerActivity.class));
-    });
-    LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, dp(30)); cp.bottomMargin = dp(5);
-    togglesGrid.addView(clips, cp);
-    Button edit = chip("EDIT", false, () -> {
-      if (recording) { message("Stop recording to open the editor."); return; }
-      startActivity(new Intent(this, EditorActivity.class));
-    });
-    LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, dp(30)); ep.bottomMargin = dp(5);
-    togglesGrid.addView(edit, ep);
-    Button settings = chip("MENU", false, this::showSettings);
-    togglesGrid.addView(settings, new LinearLayout.LayoutParams(-1, dp(30)));
     ScrollView sc = new ScrollView(this); sc.setVerticalScrollBarEnabled(false); sc.addView(togglesGrid);
     side.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1));
     side.addView(recButton, 0, rp);
@@ -1895,8 +1921,8 @@ public class CinemaActivity extends Activity {
 
   /** Sizes the preview to the recorded aspect ratio (times the anamorphic desqueeze), centred left of the side column. */
   private void layoutPreview() {
-    int sideW = dp(80);
-    int aw = root.getWidth() - sideW, ah = root.getHeight();
+    int sideW = dp(80), railW = dp(RAIL_W);
+    int aw = root.getWidth() - sideW - railW, ah = root.getHeight();
     if (aw <= 0 || ah <= 0) return;
     // the top and bottom bars float over the picture; keep the full height available
     double d = CinemaMath.DESQUEEZE[prefs.getInt("desqueeze", 0)];
@@ -1907,7 +1933,7 @@ public class CinemaActivity extends Activity {
     if (aw / (double) ah > shown) { h = ah; w = (int) Math.round(ah * shown); } else { w = aw; h = (int) Math.round(aw / shown); }
     int baseW = (int) Math.round(w / d);
     FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(baseW, h);
-    lp.leftMargin = (aw - baseW) / 2; lp.topMargin = (ah - h) / 2;
+    lp.leftMargin = railW + (aw - baseW) / 2; lp.topMargin = (ah - h) / 2;
     texture.setLayoutParams(lp);
     monitorView.setLayoutParams(new FrameLayout.LayoutParams(lp));
     monitorView.setPivotX(baseW / 2f); monitorView.setPivotY(h / 2f); monitorView.setScaleX((float) d);
@@ -1926,11 +1952,11 @@ public class CinemaActivity extends Activity {
     } else if (rotation == Surface.ROTATION_180) m.postRotate(180, cx, cy);
     texture.setTransform(m);
     scopes.frame.set(lp.leftMargin + baseW / 2f - w / 2f, lp.topMargin, lp.leftMargin + baseW / 2f + w / 2f, lp.topMargin + h);
-    scopes.insetTop = Math.max(0, dp(34) - lp.topMargin);
+    scopes.insetTop = Math.max(0, dp(TOP_H) - lp.topMargin);
     scopes.insetBottom = Math.max(0, dp(50) - (ah - lp.topMargin - h));
-    FrameLayout.LayoutParams tb = (FrameLayout.LayoutParams) topBar.getLayoutParams(); tb.rightMargin = sideW; topBar.setLayoutParams(tb);
-    FrameLayout.LayoutParams bb = (FrameLayout.LayoutParams) bottomBar.getLayoutParams(); bb.rightMargin = sideW; bottomBar.setLayoutParams(bb);
-    FrameLayout.LayoutParams pl = (FrameLayout.LayoutParams) panel.getLayoutParams(); pl.rightMargin = sideW; panel.setLayoutParams(pl);
+    FrameLayout.LayoutParams tb = (FrameLayout.LayoutParams) topBar.getLayoutParams(); tb.rightMargin = sideW; tb.leftMargin = railW; topBar.setLayoutParams(tb);
+    FrameLayout.LayoutParams bb = (FrameLayout.LayoutParams) bottomBar.getLayoutParams(); bb.rightMargin = sideW; bb.leftMargin = railW; bottomBar.setLayoutParams(bb);
+    FrameLayout.LayoutParams pl = (FrameLayout.LayoutParams) panel.getLayoutParams(); pl.rightMargin = sideW; pl.leftMargin = railW; panel.setLayoutParams(pl);
     scopes.invalidate();
   }
 
@@ -2003,6 +2029,10 @@ public class CinemaActivity extends Activity {
     else if (rawMode && rawSize != null) formatView.setText((rawOpt != null && rawOpt.is8k() ? "8K " : "") + "RAW " + rawSize.getWidth() + "×" + rawSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  CinemaDNG " + rawFormatName() + "  " + (rawCompressed() ? "~" : "") + rawBytesPerSecond() / 1_000_000 + " MB/s");
     else formatView.setText(resolutionName(videoSize) + "  " + CinemaMath.fpsLabel(fps) + speed + "p  " + codec + "  " + CinemaMath.formatBitrate(targetBitrate()));
     fpsCell.set(CinemaMath.fpsLabel(fps) + speed, false);
+    Size fsz = frameSize();
+    topRes.setText(rawMode ? "RAW " + fsz.getWidth() + "×" + fsz.getHeight() : proresMode ? proresSize.getWidth() + "×" + proresSize.getHeight() : resolutionName(videoSize));
+    topCodec.setText(rawMode ? "CinemaDNG" : proresMode ? ProRes.SHORT[proresProfile] : codec);
+    topBitrate.setText(rawMode ? (rawCompressed() ? "~" : "") + rawBytesPerSecond() / 1_000_000 + " MB/s" : proresMode ? CinemaMath.formatBitrate(ProRes.bitrate(proresSize.getWidth(), proresSize.getHeight(), fps, proresProfile)) : CinemaMath.formatBitrate(targetBitrate()));
     lookCell.set(rawMode ? "RAW" : curveIgnored && !tenBit && !"Rec.709".equals(CinemaMath.LOOKS[lookIndex]) ? "Phone look" : proresMode ? CinemaMath.LOOKS[lookIndex] : tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
     recButton.recording = recording; recButton.invalidate();
     updateClipLuma();
@@ -2618,13 +2648,106 @@ public class CinemaActivity extends Activity {
       setOnClickListener(v -> click.run());
       setBackground(null);
     }
+    TextView mirror; // the same value in the top bar
     void set(String v, boolean auto) {
       value.setText(v); value.setTextColor(auto ? 0xffc9d0d6 : ACCENT);
+      if (mirror != null) { mirror.setText(v + (auto ? " A" : "")); mirror.setTextColor(auto ? TEXT : ACCENT); }
       caption.setText(caption.getText().toString().replace(" · A", "") + (auto ? " · A" : ""));
     }
   }
 
   private Cell cell(String caption, Runnable click) { return new Cell(caption, click); }
+
+  static final int TOP_H = 42, RAIL_W = 64;
+  private LinearLayout rail;
+  private TextView topRes, topFps, topShutter, topIso, topWb, topCodec, topBitrate;
+
+  private String appVersion() {
+    try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return ""; }
+  }
+
+  /** A top-bar cell: small caption over the value. */
+  private LinearLayout info(String caption, TextView value, View.OnClickListener click) {
+    LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); l.setGravity(Gravity.CENTER_VERTICAL);
+    l.setPadding(dp(6), 0, dp(6), 0);
+    l.addView(label(caption, 8, DIM));
+    if (value.getParent() != null) ((android.view.ViewGroup) value.getParent()).removeView(value);
+    value.setSingleLine(); value.setPadding(0, 0, 0, 0);
+    l.addView(value);
+    l.setOnClickListener(click);
+    GradientDrawable d = new GradientDrawable(); d.setStroke(dp(1), 0x22ffffff); d.setCornerRadius(dp(4)); l.setBackground(d);
+    return l;
+  }
+
+  private View railItem(String glyph, String name, boolean active, Runnable action) {
+    LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); l.setGravity(Gravity.CENTER);
+    TextView g = label(glyph, 20, active ? ACCENT : TEXT); g.setGravity(Gravity.CENTER);
+    TextView n = label(name, 9, active ? ACCENT : DIM); n.setGravity(Gravity.CENTER);
+    l.addView(g); l.addView(n);
+    if (active) { GradientDrawable d = new GradientDrawable(); d.setColor(0xff1c2024); d.setCornerRadius(dp(8)); l.setBackground(d); }
+    l.setOnClickListener(v -> action.run());
+    return l;
+  }
+
+  interface Step { void step(int dir); }
+
+  /** ‹ value › : the arrows step the setting, tapping the value opens its full panel. */
+  private LinearLayout stepper(Cell c, Step step) {
+    LinearLayout l = row(); l.setGravity(Gravity.CENTER_VERTICAL);
+    TextView left = label("‹", 22, TEXT), right = label("›", 22, TEXT);
+    for (TextView t : new TextView[] {left, right}) { t.setGravity(Gravity.CENTER); t.setPadding(dp(4), 0, dp(4), dp(2)); }
+    left.setOnClickListener(v -> step.step(-1)); right.setOnClickListener(v -> step.step(1));
+    l.addView(left, new LinearLayout.LayoutParams(dp(24), -1));
+    l.addView(c, new LinearLayout.LayoutParams(0, -1, 1));
+    l.addView(right, new LinearLayout.LayoutParams(dp(24), -1));
+    return l;
+  }
+
+  /** Steps to the neighbouring frame rate this camera offers (not while recording). */
+  private void stepFps(int dir) {
+    if (recording) { message("Stop recording to change the frame rate."); return; }
+    List<Double> rates = new ArrayList<>(availableRates());
+    if (rates.isEmpty()) return;
+    java.util.Collections.sort(rates);
+    double next = CinemaMath.stepValue(rates, fps, dir);
+    if (Math.abs(next - fps) < 1e-6) return;
+    fps = next; if (fps <= 60) conformFps = 0;
+    reopen();
+  }
+
+  /** Steps the shutter: through the cinema angles (45 ... 360) or through shutter speeds. Switches to manual exposure. */
+  private void stepShutter(int dir) {
+    long exp = aeAuto ? liveExposure : exposureNs();
+    if (shutterAsAngle) {
+      List<Double> angles = new ArrayList<>();
+      for (double a : CinemaMath.CINE_ANGLES) angles.add(a);
+      setManualShutterAngle(CinemaMath.stepValue(angles, CinemaMath.angleForExposure(exp, fps), dir));
+    } else {
+      List<Double> d = new ArrayList<>();
+      for (int v : CinemaMath.SHUTTER_SPEEDS) d.add((double) v);
+      java.util.Collections.sort(d);
+      setManualShutterSpeed((int) Math.round(CinemaMath.stepValue(d, CinemaMath.NS / (double) exp, dir)));
+    }
+  }
+
+  /** Steps ISO (exposure index in the logs) by a third of a stop. Switches to manual exposure. */
+  private void stepIso(int dir) {
+    if (aeAuto) { setAeAuto(false); if (aeAuto) return; }
+    int eiShift = cityLogActive() ? CinemaMath.LOG_HEADROOM : 0;
+    List<Integer> stops = CinemaMath.isoStops(lens.isoRange.getLower(), lens.isoRange.getUpper() << eiShift);
+    List<Double> d = new ArrayList<>();
+    for (int v : stops) d.add((double) v);
+    iso = (int) Math.round(CinemaMath.stepValue(d, iso, dir));
+    applyRepeating(); refreshUi();
+  }
+
+  /** Steps white balance by 100 K (from what auto white balance was using). */
+  private void stepWb(int dir) {
+    if (lens == null || !lens.manualPost) { message("This camera doesn't allow manual white balance."); return; }
+    if (awbAuto) { float[] g = liveGains; if (g != null) kelvin = Math.round(CinemaMath.estimateKelvin(lens.wb, g[0], g[3]) / 100f) * 100; awbAuto = false; }
+    kelvin = Math.max(2000, Math.min(10000, Math.round((kelvin + dir * 100) / 100f) * 100));
+    applyRepeating(); refreshUi(); savePrefs();
+  }
 
   /** Stereo peak meter with hold and clip indicator, -60..0 dBFS. */
   final class Meter extends View {

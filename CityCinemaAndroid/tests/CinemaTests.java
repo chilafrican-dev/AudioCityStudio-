@@ -472,6 +472,12 @@ public class CinemaTests {
   }
 
   static void vectorAndLimiterTests() {
+    java.util.List<Double> ang = new java.util.ArrayList<>(); for (double a : CinemaMath.CINE_ANGLES) ang.add(a);
+    check(CinemaMath.stepValue(ang, 180, 1) == 270 && CinemaMath.stepValue(ang, 180, -1) == 172.8, "angle steps");
+    check(CinemaMath.stepValue(ang, 160, 1) == 172.8 && CinemaMath.stepValue(ang, 160, -1) == 144, "from between two angles");
+    check(CinemaMath.stepValue(ang, 360, 1) == 360 && CinemaMath.stepValue(ang, 45, -1) == 45, "ends stay");
+    java.util.List<Double> fpsList = java.util.Arrays.asList(23.976, 24.0, 25.0, 29.97, 30.0, 60.0);
+    check(CinemaMath.stepValue(fpsList, 24, 1) == 25 && CinemaMath.stepValue(fpsList, 24, -1) == 23.976, "fps steps");
     check(CinemaMath.formatBytes(98_400_000_000L).equals("98 GB") && CinemaMath.formatBytes(1_240_000_000_000L).equals("1.24 TB") && CinemaMath.formatBytes(3_500_000_000L).equals("3.5 GB") && CinemaMath.formatBytes(512_000_000L).equals("512 MB"), "storage sizes");
     int[] grey = CinemaMath.vectorPoint(128, 128, 128, 129);
     check(grey[0] == 64 && grey[1] == 64, "grey sits in the centre of the vectorscope");

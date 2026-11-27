@@ -75,6 +75,8 @@ Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra)
 
 **Tone-curve check.** Some phones claim to support custom tone curves but ignore them. City Cinema reads back what the camera actually applied. If the curve is ignored, it says so, shows *Phone look*, and turns off the log exposure offset, so log looks don't just record 2 stops dark.
 
+**Camera layout (4.0):** left rail with CAMERA, CLIPS, EDITOR and MENU; the top bar shows LENS, RES, FPS, SHUTTER, ISO, WB, CODEC, BITRATE and TIME CODE (tap one to change it), then recording time left, free storage, battery and battery temperature. In the bottom bar, **‹ ›** step FPS, SHUTTER (45, 90, 120, 144, 172.8, 180, 270, 360°, or speeds), ISO/EI (1/3 stops) and WB (100 K); tap the value for the full panel. Stepping shutter or ISO switches to manual exposure; stepping WB switches to manual white balance.
+
 **Scopes:** SCOPE cycles histogram, waveform, RGB parade and **vectorscope** (75% colour-bar targets and the skin-tone line); highlight-clip and shadow-crush percentages show on every scope. **LIMITER** in the audio panel holds peaks under -1 dBFS (off by default).
 
 **709 VIEW** (camera side panel, Android 13+): shows log and Flat looks in normal colour on the screen only, with the same conversion the editor uses. Recording, zebras, false colour, scopes and auto exposure keep working on the real log signal, and nothing changes in the file. To record normal colour instead, choose the Rec.709 or Film look.

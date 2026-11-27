@@ -68,7 +68,7 @@ behind it works. Mapping:
 | Mockup element | Status |
 |---|---|
 | Camera top bar: lens, res, fps, shutter, ISO, WB, codec, bitrate, timecode, storage free + time left, battery %, temperature | working (storage size and battery °C added in 3.9.1) |
-| Camera: REC.709 VIEW, zebra, peaking, false colour, grid, waveform, parade, histogram, vectorscope, stabilisation, AF/lock, lens, zoom, audio meters, USB mic | working; layout restyle (left rail, stepper controls, scope strip) pending |
+| Camera: REC.709 VIEW, zebra, peaking, false colour, grid, waveform, parade, histogram, vectorscope, stabilisation, AF/lock, lens, zoom, audio meters, USB mic | working; **restyled in 4.0**: left rail (Camera, Clips, Editor, Menu), labelled top-bar cells, ‹ › steppers for FPS, shutter (45–360°), ISO and WB. Scope strip (4 at once) still pending |
 | Camera: LUT dropdown (monitor creative LUT), 4-scope strip at once | not built |
 | Editor: media browser panel, V1-V3 + A1-A3 tracks | tracks working (3 layers + main, MUSIC/VOICE/FX); browser, track headers (eye/lock/M/S) pending |
 | Editor: thumbnails / waveforms in clips, keyframes, blend modes, effects & transitions browser, scopes in editor | not built (Phases 3-7) |

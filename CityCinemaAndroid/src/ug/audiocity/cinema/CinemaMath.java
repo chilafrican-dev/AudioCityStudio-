@@ -944,4 +944,19 @@ final class CinemaMath {
     if (b >= 1_000_000_000L) return String.format(Locale.US, "%.1f GB", b / 1e9);
     return String.format(Locale.US, "%.0f MB", b / 1e6);
   }
+
+  /** Professional shutter angles offered by the ‹ › stepper (172.8 = flicker-free at 25 fps under 50 Hz light). */
+  static final double[] CINE_ANGLES = {45, 90, 120, 144, 172.8, 180, 270, 360};
+
+  /**
+   * The next value up (dir > 0) or down from current in a sorted list: from a value between two entries the step
+   * goes to the neighbour on that side; at the ends it stays.
+   */
+  static double stepValue(java.util.List<Double> sorted, double current, int dir) {
+    if (sorted.isEmpty()) return current;
+    double eps = Math.max(1e-6, Math.abs(current) * 1e-4);
+    if (dir > 0) { for (double v : sorted) if (v > current + eps) return v; return sorted.get(sorted.size() - 1); }
+    for (int i = sorted.size() - 1; i >= 0; i--) if (sorted.get(i) < current - eps) return sorted.get(i);
+    return sorted.get(0);
+  }
 }
