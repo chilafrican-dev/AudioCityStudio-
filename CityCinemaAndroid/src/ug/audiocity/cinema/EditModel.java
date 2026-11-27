@@ -388,7 +388,8 @@ final class EditModel {
     sat /= argb.length;
     int lo = percentile(hist, argb.length, 0.01), hi = percentile(hist, argb.length, 0.99);
     if (hi - lo < 25) return false; // flat card or black frame: can't tell
-    return lo > 14 && hi < 236 && sat < 0.28;
+    // log has no true blacks and muted colour; overexposed log can still clip to white, so the top is not required
+    return lo > 14 && sat < 0.28;
   }
 
   private static int percentile(int[] hist, int n, double q) {

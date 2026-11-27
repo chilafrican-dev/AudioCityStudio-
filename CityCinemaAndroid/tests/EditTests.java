@@ -139,6 +139,14 @@ public class EditTests {
       slog[i] = argb(v * 1.02, v, v * 0.97);
     }
     check(EditModel.looksLikeLog(slog), "S-Log3 ramp detected");
+    // overexposed log: the sky clips to white but there are still no true blacks
+    int[] hot = slog.clone();
+    for (int i = 0; i < hot.length / 4; i++) hot[i] = argb(1, 1, 1);
+    check(EditModel.looksLikeLog(hot), "overexposed log detected");
+    // normal footage with a blown sky is still not log
+    int[] hotNormal = normal.clone();
+    for (int i = 0; i < hotNormal.length / 4; i++) hotNormal[i] = argb(1, 1, 1);
+    check(!EditModel.looksLikeLog(hotNormal), "normal footage with a blown sky is not log");
   }
 
   static int argb(double r, double g, double b) {
