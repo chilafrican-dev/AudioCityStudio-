@@ -227,7 +227,8 @@ public class EditorActivity extends Activity {
             int at = selected instanceof EditModel.Clip ? project.clips.indexOf(selected) + 1 : project.clips.size();
             project.clips.add(Math.max(0, Math.min(at, project.clips.size())), c);
             selected = c; changed(true);
-            checkForLog(c);
+            if (noSidecar.contains(c.id) && !c.name.contains("_Rec709")) checkForLog(c); // asks about log first, then auto colour
+            else autoColour(c, true);
           });
           else ui.post(() -> toast("Couldn't read that video."));
         } else {
@@ -351,7 +352,42 @@ public class EditorActivity extends Activity {
         bm.getPixels(px, 0, bm.getWidth(), 0, 0, bm.getWidth(), bm.getHeight());
         bm.recycle();
         if (EditModel.looksLikeLog(px)) ui.post(() -> askLog(c));
+        else if (c.grade.neutral()) ui.post(() -> autoColour(c, true));
       } catch (Exception e) { Log.w(TAG, "log check", e); }
+      finally { try { r.release(); } catch (Exception ignored) {} }
+    });
+  }
+
+  /**
+   * Automatic colour correction (exposure, white balance, contrast) from a frame in the middle of the clip, after its
+   * log conversion. Looks, LUTs and saturation are left as they are; RESET undoes it.
+   */
+  private void autoColour(EditModel.Clip c, boolean quiet) {
+    jobs.execute(() -> {
+      android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+      try {
+        r.setDataSource(this, Uri.parse(c.uri));
+        android.graphics.Bitmap bm = r.getScaledFrameAtTime((c.inUs + c.outUs) / 2, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 180);
+        if (bm == null) return;
+        int[] px = new int[bm.getWidth() * bm.getHeight()];
+        bm.getPixels(px, 0, bm.getWidth(), 0, 0, bm.getWidth(), bm.getHeight());
+        bm.recycle();
+        String look = c.look;
+        if (CinemaMath.convertsInPost(look)) {
+          for (int i = 0; i < px.length; i++) {
+            int p = px[i];
+            double[] o = CinemaMath.logToRec709(look, ((p >> 16) & 255) / 255.0, ((p >> 8) & 255) / 255.0, (p & 255) / 255.0);
+            px[i] = 0xff000000 | ((int) Math.round(CinemaMath.clamp01(o[0]) * 255) << 16) | ((int) Math.round(CinemaMath.clamp01(o[1]) * 255) << 8) | (int) Math.round(CinemaMath.clamp01(o[2]) * 255);
+          }
+        }
+        double[] a = EditModel.autoGrade(px);
+        ui.post(() -> {
+          if (!project.clips.contains(c) || !look.equals(c.look)) return;
+          EditModel.applyAuto(c.grade, a);
+          changed(true);
+          if (!quiet) toast(String.format(Locale.US, "Auto colour: exposure %+.1f, temperature %+.0f, tint %+.0f, contrast %+.0f. RESET undoes it.", a[0], a[2] * 100, a[3] * 100, a[1] * 100));
+        });
+      } catch (Exception e) { Log.w(TAG, "auto colour", e); if (!quiet) ui.post(() -> toast("Couldn't read a frame for auto colour.")); }
       finally { try { r.release(); } catch (Exception ignored) {} }
     });
   }
@@ -363,6 +399,7 @@ public class EditorActivity extends Activity {
         .setTitle("This clip looks like log footage")
         .setItems(logs, (d, i) -> {
           if (i < logs.length - 1) { c.look = logs[i].replace(" (not log)", ""); selected = c; clipTab = "Colour"; changed(true); toast(c.name + ": " + logs[i] + " → normal colour."); }
+          if (c.grade.neutral()) autoColour(c, true);
         })
         .setNegativeButton("Later", null).show();
     toast("No true blacks and washed-out colour: pick the log it was shot in to bring the colour back.");
@@ -531,6 +568,8 @@ public class EditorActivity extends Activity {
       inspector.addView(scroll(films));
       if (g.film > 0) slider("Look strength", 0, 100, Math.round(g.filmStrength * 100), v -> g.filmStrength = v / 100.0, x -> x + "%");
       LinearLayout r = row();
+      r.addView(chip("AUTO COLOUR", v -> autoColour(c, false)), lp(-2));
+      r.addView(chip("AUTO ALL", v -> { for (EditModel.Clip k : project.clips) autoColour(k, true); toast("Auto colour on every clip."); }), lp(-2));
       r.addView(chip("RESET", v -> { c.grade = new EditModel.Grade(); changed(true); }), lp(-2));
       r.addView(chip("COPY TO ALL CLIPS", v -> { for (EditModel.Clip k : project.clips) { k.grade = g.copy(); k.lut = c.lut; k.lutStrength = c.lutStrength; } changed(true); toast("Grade and LUT copied to every clip."); }), lp(-2));
       inspector.addView(r);

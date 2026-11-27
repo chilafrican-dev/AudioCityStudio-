@@ -20,6 +20,9 @@ final class EditModel {
   static final String[] TITLE_PLACES = {"Centre", "Lower third", "Top"};
 
   /** Colour grade, applied after the log LUT, in display (Rec.709) space. All neutral at 0. */
+  /** Temperature and tint at +-1 scale red/blue (and green) by this much: enough to correct a wrong white balance. */
+  static final double TEMP_RANGE = 0.25, TINT_RANGE = 0.15;
+
   static final class Grade {
     double exposure, contrast, saturation, temperature, tint, shadows, highlights; // stops; -1..1 for the rest
     int film; // index into FILM_LOOKS
@@ -303,7 +306,7 @@ final class EditModel {
    */
   static double[] grade(double[] rgb, Grade g) {
     double[] c = new double[3];
-    double[] wb = {1 + 0.12 * g.temperature, 1 - 0.08 * g.tint, 1 - 0.12 * g.temperature};
+    double[] wb = {1 + TEMP_RANGE * g.temperature, 1 - TINT_RANGE * g.tint, 1 - TEMP_RANGE * g.temperature};
     double gain = Math.pow(2, g.exposure);
     for (int i = 0; i < 3; i++) {
       double lin = Math.pow(Math.max(0, rgb[i]), 2.2) * gain * wb[i];
@@ -397,4 +400,59 @@ final class EditModel {
     for (int i = 0; i < 256; i++) { sum += hist[i]; if (sum > want) return i; }
     return 255;
   }
+
+  /**
+   * Automatic colour correction from one frame (ARGB, normal colour, i.e. after any log conversion), like the auto
+   * button in phone and desktop editors: white balance from the near-neutral mid tones (saturated colours such as
+   * foliage and sky are ignored), exposure so the middle of the picture sits at normal brightness without pushing
+   * highlights into clipping, and a little contrast for flat, hazy pictures. Returns {exposure, contrast, temperature,
+   * tint} in the Grade's units; the creative settings (looks, saturation) are left to the user.
+   */
+  static double[] autoGrade(int[] argb) {
+    double[] out = new double[4];
+    if (argb == null || argb.length < 100) return out;
+    // 1. white balance from near-neutral mid tones (linear light)
+    double sr = 0, sg = 0, sb = 0; int n = 0;
+    for (int p : argb) {
+      double r = ((p >> 16) & 255) / 255.0, g = ((p >> 8) & 255) / 255.0, b = (p & 255) / 255.0;
+      double mx = Math.max(r, Math.max(g, b)), mn = Math.min(r, Math.min(g, b));
+      double y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      if (y < 0.12 || mx > 0.94 || (mx - mn) / mx > 0.28) continue;
+      sr += Math.pow(r, 2.2); sg += Math.pow(g, 2.2); sb += Math.pow(b, 2.2); n++;
+    }
+    double t = 0, u = 0;
+    if (n > argb.length * 0.03 && sr > 0 && sg > 0 && sb > 0) {
+      double q = sb / sr; // (1 + 0.12t) r = (1 - 0.12t) b
+      t = (q - 1) / (TEMP_RANGE * (1 + q));
+      t = Math.max(-0.8, Math.min(0.8, t * 0.85)); // a touch short of fully neutral keeps the light's mood
+      double rr = sr * (1 + TEMP_RANGE * t), bb = sb * (1 - TEMP_RANGE * t);
+      u = (1 - Math.sqrt(rr * bb) / sg) / TINT_RANGE;
+      u = Math.max(-0.5, Math.min(0.5, u * 0.85));
+    }
+    out[2] = Math.abs(t) < 0.03 ? 0 : Math.round(t * 100) / 100.0;
+    out[3] = Math.abs(u) < 0.03 ? 0 : Math.round(u * 100) / 100.0;
+    // 2. exposure: median light to normal brightness, never pushing the bright 1% past white
+    double[] wb = {1 + TEMP_RANGE * out[2], 1 - TINT_RANGE * out[3], 1 - TEMP_RANGE * out[2]};
+    double[] lum = new double[argb.length];
+    for (int i = 0; i < argb.length; i++) {
+      int p = argb[i];
+      double r = Math.pow(((p >> 16) & 255) / 255.0, 2.2) * wb[0], g = Math.pow(((p >> 8) & 255) / 255.0, 2.2) * wb[1], b = Math.pow((p & 255) / 255.0, 2.2) * wb[2];
+      lum[i] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+    double[] sorted = lum.clone();
+    java.util.Arrays.sort(sorted);
+    double median = Math.max(1e-4, sorted[sorted.length / 2]), p99 = Math.max(1e-4, sorted[(int) (sorted.length * 0.99)]);
+    double stops = Math.log(0.16 / median) / Math.log(2);
+    if (stops > 0) stops = Math.min(stops, Math.max(0, Math.log(0.95 / p99) / Math.log(2))); // don't blow the highlights
+    stops = Math.max(-2, Math.min(2, stops));
+    out[0] = Math.abs(stops) < 0.15 ? 0 : Math.round(stops * 10) / 10.0;
+    // 3. contrast for flat pictures: widen a narrow range a little
+    double gain = Math.pow(2, out[0]);
+    double lo = Math.pow(Math.min(1, sorted[(int) (sorted.length * 0.02)] * gain), 1 / 2.2), hi = Math.pow(Math.min(1, sorted[(int) (sorted.length * 0.98)] * gain), 1 / 2.2);
+    double range = hi - lo;
+    out[1] = range < 0.75 ? Math.round(Math.min(0.25, (0.8 - range) * 0.5) * 100) / 100.0 : 0;
+    return out;
+  }
+
+  static void applyAuto(Grade g, double[] a) { g.exposure = a[0]; g.contrast = a[1]; g.temperature = a[2]; g.tint = a[3]; }
 }

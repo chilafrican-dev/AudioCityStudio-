@@ -101,6 +101,7 @@ public class EditTests {
     cubeTests();
     lutPackTests();
     logDetectTests();
+    autoGradeTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -109,6 +110,49 @@ public class EditTests {
 
   /** Every .cube shipped in assets/luts must load, be in range and produce a usable picture. */
   /** Log footage shown without conversion is recognised; normal and dark/flat frames are not. */
+  /** Auto colour: a dark, warm-cast frame comes out neutral and at normal brightness; a good frame is left alone. */
+  static void autoGradeTests() {
+    int w = 80, h = 45;
+    java.util.Random rnd = new java.util.Random(3);
+    double[][] scene = new double[w * h][];
+    for (int i = 0; i < scene.length; i++) {
+      double x = (i % w) / (double) w, yy = (i / w) / (double) h;
+      if (x < 0.35) scene[i] = new double[] {0.05 + 0.6 * yy, 0.05 + 0.6 * yy, 0.05 + 0.6 * yy}; // grey wall
+      else if (x < 0.7) scene[i] = new double[] {0.04, 0.10 + 0.1 * yy, 0.03};                 // foliage (saturated)
+      else scene[i] = new double[] {0.25 + 0.2 * rnd.nextDouble(), 0.18, 0.12};                 // soil
+    }
+    int[] good = new int[scene.length], bad = new int[scene.length];
+    double[] cast = {1.18, 1.0, 0.82}; // warm cast (white balance ~1000K off)
+    for (int i = 0; i < scene.length; i++) {
+      good[i] = px(scene[i], new double[] {1, 1, 1}, 1);
+      bad[i] = px(scene[i], cast, 0.3); // and ~1.7 stops dark
+    }
+    double[] a = EditModel.autoGrade(bad);
+    check(a[0] > 1.0 && a[0] <= 2, "auto brightens a dark picture: " + a[0]);
+    check(a[2] < -0.3, "auto cools a warm cast: " + a[2]);
+    EditModel.Grade g = new EditModel.Grade();
+    EditModel.applyAuto(g, a);
+    // the grey wall comes out neutral
+    double[] grey = EditModel.grade(rgbOf(px(new double[] {0.3, 0.3, 0.3}, cast, 0.3)), g);
+    check(Math.abs(grey[0] - grey[2]) < 0.06 && Math.abs(grey[1] - (grey[0] + grey[2]) / 2) < 0.05, "grey comes out neutral " + java.util.Arrays.toString(grey));
+    double[] ok = EditModel.autoGrade(good);
+    check(Math.abs(ok[2]) < 0.1 && Math.abs(ok[3]) < 0.1, "a neutral picture keeps its white balance");
+    check(Math.abs(ok[0]) <= 1.0, "a normal picture needs little exposure change: " + ok[0]);
+    // a bright picture is never pushed brighter into clipping
+    int[] bright = new int[scene.length];
+    for (int i = 0; i < scene.length; i++) bright[i] = px(scene[i], new double[] {1, 1, 1}, 3);
+    check(EditModel.autoGrade(bright)[0] <= 0, "bright picture is not brightened");
+    check(EditModel.autoGrade(null)[0] == 0, "no frame, no change");
+  }
+
+  static int px(double[] lin, double[] cast, double gain) {
+    int[] c = new int[3];
+    for (int k = 0; k < 3; k++) c[k] = (int) Math.round(Math.min(1, Math.pow(Math.max(0, lin[k] * cast[k] * gain), 1 / 2.2)) * 255);
+    return 0xff000000 | (c[0] << 16) | (c[1] << 8) | c[2];
+  }
+
+  static double[] rgbOf(int p) { return new double[] {((p >> 16) & 255) / 255.0, ((p >> 8) & 255) / 255.0, (p & 255) / 255.0}; }
+
   static void logDetectTests() {
     int w = 64, h = 36;
     int[] normal = new int[w * h], log = new int[w * h], black = new int[w * h], grey = new int[w * h];

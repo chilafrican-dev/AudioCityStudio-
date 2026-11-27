@@ -78,7 +78,7 @@ final class EditEngine {
               + "  if (uLutOn > 0.5) c = texture(uLut, c * (32.0 / 33.0) + 0.5 / 33.0).rgb;\n"
               + "  if (uLut2On > 0.5) { vec3 t = clamp((c - uDomMin) / max(uDomMax - uDomMin, vec3(1e-6)), 0.0, 1.0);\n"
               + "    c = mix(c, texture(uLut2, t * uL2Scale + uL2Off).rgb, uLut2Strength); }\n"
-              + "  vec3 wb = vec3(1.0 + 0.12 * uTemp, 1.0 - 0.08 * uTint, 1.0 - 0.12 * uTemp);\n"
+              + "  vec3 wb = vec3(1.0 + " + EditModel.TEMP_RANGE + " * uTemp, 1.0 - " + EditModel.TINT_RANGE + " * uTint, 1.0 - " + EditModel.TEMP_RANGE + " * uTemp);\n"
               + "  vec3 lin = pow(max(c, 0.0), vec3(2.2)) * exp2(uExposure) * wb;\n"
               + "  c = pow(min(lin, vec3(1.0)), vec3(1.0 / 2.2));\n"
               + "  c += uShadows * 0.35 * (1.0 - c) * (1.0 - c) * c * 2.0;\n"

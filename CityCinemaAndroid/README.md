@@ -85,6 +85,7 @@ Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra)
 
 *Colour*
 - City Cinema log clips get their LUT automatically, and any clip can be set to the log it was shot in.
+- **Auto colour:** every clip added gets automatic exposure, white balance and contrast (after its log conversion), from a frame in the middle of the clip. **AUTO COLOUR** / **AUTO ALL** redo it, **RESET** undoes it. Looks, LUTs and saturation stay your choice.
 - Exposure, contrast, saturation, temperature, tint, shadows and highlights.
 - Film looks with adjustable strength: Teal & Orange, Warm Film, Cool Night, Bleach Bypass, Mono.
 - **LUT import:** **IMPORT .cube** in a clip's Colour tab loads any `.cube` LUT: 3D up to 65³ (Resolve, Adobe, camera makers, LUT packs) or 1D, including DOMAIN and input-range keywords.
