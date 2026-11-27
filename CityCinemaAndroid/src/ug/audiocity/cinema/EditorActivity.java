@@ -125,6 +125,8 @@ public class EditorActivity extends Activity {
     actions.addView(chip("+ TITLE", v -> addTitle()), lp(-2));
     actions.addView(chip("+ MUSIC", v -> pick(PICK_MUSIC, "audio/*")), lp(-2));
     actions.addView(chip("SPLIT", v -> splitAtPlayhead()), lp(-2));
+    actions.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
+    actions.addView(chip("UNDO", v -> undo()), lp(-2));
     actions.addView(chip("PROJECT", v -> select(null)), lp(-2));
     actions.addView(chip("NEW", v -> newProject()), lp(-2));
     Button export = chip("EXPORT", v -> exportDialog());
@@ -528,10 +530,38 @@ public class EditorActivity extends Activity {
         .setPositiveButton("OK", (d, w) -> { t.text = e.getText().toString(); changed(true); }).setNegativeButton("Cancel", null).show();
   }
 
+  // ---- undo: snapshots of the project before each change that removes or cuts something
+  private final java.util.ArrayDeque<String> undoStack = new java.util.ArrayDeque<>();
+
+  private void snapshot() {
+    try { undoStack.push(project.json().toString()); while (undoStack.size() > 40) undoStack.removeLast(); }
+    catch (Exception e) { Log.w(TAG, "snapshot", e); }
+  }
+
+  private void undo() {
+    if (undoStack.isEmpty()) { toast("Nothing to undo."); return; }
+    try {
+      stopPlayback();
+      project = EditModel.Project.from(new JSONObject(undoStack.pop()));
+      selected = null; changed(true);
+      toast("Undone.");
+    } catch (Exception e) { Log.w(TAG, "undo", e); toast("Couldn't undo."); }
+  }
+
+  /** Deletes what is selected on the timeline: a clip, a title or the music. */
+  private void deleteSelected() {
+    if (selected instanceof EditModel.Clip) { snapshot(); project.clips.remove(selected); toast("Clip deleted. UNDO brings it back."); }
+    else if (selected instanceof EditModel.Title) { snapshot(); project.titles.remove(selected); toast("Title deleted. UNDO brings it back."); }
+    else if (selected instanceof EditModel.Music) { snapshot(); project.music = null; toast("Music removed. UNDO brings it back."); }
+    else { toast("Tap a clip, title or the music on the timeline first, then DELETE."); return; }
+    selected = null; changed(true);
+  }
+
   private void splitAtPlayhead() {
     long[] s = EditModel.starts(project);
     for (int i = 0; i < project.clips.size(); i++)
       if (playhead > s[i] && playhead < s[i] + project.clips.get(i).durationUs()) {
+        snapshot();
         if (EditModel.split(project, i, playhead)) { selected = project.clips.get(i + 1); changed(true); }
         return;
       }
@@ -566,8 +596,8 @@ public class EditorActivity extends Activity {
       r.addView(chip("MOVE ▶", v -> { if (i < project.clips.size() - 1) { project.clips.remove(i); project.clips.add(i + 1, c); changed(true); } }), lp(-2));
       inspector.addView(r);
       LinearLayout r2 = row();
-      r2.addView(chip("DUPLICATE", v -> { EditModel.Clip k = c.copy(); k.id = EditModel.NEXT_ID.incrementAndGet(); project.clips.add(i + 1, k); selected = k; changed(true); }), lp(-2));
-      r2.addView(chip("DELETE", v -> { project.clips.remove(c); selected = null; changed(true); }), lp(-2));
+      r2.addView(chip("DUPLICATE", v -> { snapshot(); EditModel.Clip k = c.copy(); k.id = EditModel.NEXT_ID.incrementAndGet(); project.clips.add(i + 1, k); selected = k; changed(true); }), lp(-2));
+      r2.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
       inspector.addView(r2);
       // speed (sound follows, with its pitch)
       label(String.format(Locale.US, "Speed: %sx%s", trimNum(c.speed), c.speed != 1 ? " · sound pitch follows; MUTE for silent slow motion" : ""));
@@ -664,7 +694,7 @@ public class EditorActivity extends Activity {
     inspector.addView(scroll(colours));
     LinearLayout r2 = row();
     r2.addView(chip(t.box ? "BOX ON" : "BOX OFF", v -> { t.box = !t.box; changed(true); }, t.box), lp(-2));
-    r2.addView(chip("DELETE", v -> { project.titles.remove(t); selected = null; changed(true); }), lp(-2));
+    r2.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
     inspector.addView(r2);
   }
 
@@ -675,7 +705,7 @@ public class EditorActivity extends Activity {
     slider("Fade out", 0, 10_000, m.fadeOutUs / 1000, v -> m.fadeOutUs = v * 1000, x -> String.format(Locale.US, "%.1f s", x / 1000.0));
     LinearLayout r = row();
     r.addView(chip("START AT PLAYHEAD", v -> { m.startUs = playhead; changed(true); }), lp(-2));
-    r.addView(chip("REMOVE", v -> { project.music = null; selected = null; changed(true); }), lp(-2));
+    r.addView(chip("REMOVE", v -> deleteSelected()), lp(-2));
     inspector.addView(r);
     label("Tip: lower the clips' volume (select a clip → Edit) to make the music the main sound.");
   }

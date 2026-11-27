@@ -86,6 +86,7 @@ Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra)
 *Colour*
 - City Cinema log clips get their LUT automatically, and any clip can be set to the log it was shot in.
 - **Log clips stay flat** in the editor by default, for your own grade: the timeline shows "RED Log3G10 (flat)". Tap the clip's log in Colour to convert it to normal colour, or switch **NEW LOG CLIPS: CONVERT** on to convert every log clip you add.
+- **DELETE** and **UNDO** in the top bar (delete the selected clip, title or music; undo deletes, splits and duplicates).
 - **Edit tools** (Edit tab): trim, split, move, duplicate, delete, volume and mute; **speed** 0.25x–4x (the sound's pitch follows); **framing**: FIT or FILL the frame, zoom/crop up to 400% with left/right and up/down position, ROTATE 90°, FLIP.
 - **Log check:** a clip named as log that goes brighter than that log can record wasn't recorded in log (the phone used its own processing); the camera says so after the take and the editor treats it as normal video.
 - **AUTO COLOUR** / **AUTO ALL** (only when you tap them): automatic exposure, white balance and contrast from a frame in the middle of the clip. **RESET** undoes it.
