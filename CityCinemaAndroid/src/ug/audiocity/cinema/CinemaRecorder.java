@@ -49,6 +49,8 @@ final class CinemaRecorder {
   /** What the hardware encoder can do, used to clamp UI choices. */
   static final class EncoderCaps {
     String mime; String name = "none"; long maxBitrate = 20_000_000L; boolean main10, cbr, vbr; boolean available;
+    /** Highest level the encoder supports for HEVC Main, HEVC Main10 and AVC High (0 = unknown). */
+    int levelMain, levelMain10, levelHigh;
     MediaCodecInfo.VideoCapabilities video;
 
     boolean supports(int w, int h, double fps) {
@@ -78,8 +80,11 @@ final class CinemaRecorder {
       MediaCodecInfo.EncoderCapabilities e = c.getEncoderCapabilities();
       out.cbr = e.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
       out.vbr = e.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);
-      for (MediaCodecInfo.CodecProfileLevel p : c.profileLevels)
-        if (MediaFormat.MIMETYPE_VIDEO_HEVC.equals(mime) && p.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10) out.main10 = true;
+      for (MediaCodecInfo.CodecProfileLevel p : c.profileLevels) {
+        if (MediaFormat.MIMETYPE_VIDEO_HEVC.equals(mime) && p.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10) { out.main10 = true; out.levelMain10 = Math.max(out.levelMain10, p.level); }
+        if (MediaFormat.MIMETYPE_VIDEO_HEVC.equals(mime) && p.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain) out.levelMain = Math.max(out.levelMain, p.level);
+        if (MediaFormat.MIMETYPE_VIDEO_AVC.equals(mime) && p.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileHigh) out.levelHigh = Math.max(out.levelHigh, p.level);
+      }
       break; // first hardware encoder is the platform's preferred one
     }
     return out;
@@ -137,6 +142,9 @@ final class CinemaRecorder {
       f.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
     }
     EncoderCaps caps = caps(mime);
+    // Ask for the encoder's highest level: some encoders otherwise pick a level whose bitrate cap is far below ours.
+    int level = c.tenBitHlg ? caps.levelMain10 : c.hevc ? caps.levelMain : caps.levelHigh;
+    if (level > 0) f.setInteger(MediaFormat.KEY_LEVEL, level);
     if (caps.available && (c.cbr ? caps.cbr : caps.vbr))
       f.setInteger(MediaFormat.KEY_BITRATE_MODE, c.cbr ? MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR : MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);
     String name = new MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(f);
@@ -146,7 +154,7 @@ final class CinemaRecorder {
       video.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
     } catch (RuntimeException e) {
       if (c.tenBitHlg) { video.release(); video = null; throw new IOException("This encoder can't record 10-bit HLG at this size and frame rate.", e); }
-      f.removeKey(MediaFormat.KEY_PROFILE); f.removeKey(MediaFormat.KEY_BITRATE_MODE);
+      f.removeKey(MediaFormat.KEY_PROFILE); f.removeKey(MediaFormat.KEY_LEVEL); f.removeKey(MediaFormat.KEY_BITRATE_MODE);
       video.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
     }
     video.setInputSurface(persistentSurface);

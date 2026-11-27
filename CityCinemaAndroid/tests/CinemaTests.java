@@ -155,7 +155,10 @@ public class CinemaTests {
 
   static void bitrate() {
     long uhd = CinemaMath.bitrate(3840, 2160, 24, 2, true, false, false), hd = CinemaMath.bitrate(1920, 1080, 24, 2, true, false, false);
-    check(uhd > hd * 3, "4K needs about four times the data of 1080p");
+    check(uhd > hd * 2, "4K needs much more data than 1080p");
+    near(uhd / 1e6, 99.5, 1, "4K24 HEVC High is ~100 Mb/s");
+    near(CinemaMath.bitrate(3840, 2160, 24, 3, true, false, false) / 1e6, 149, 1, "4K24 HEVC Extreme is ~150 Mb/s");
+    check(hd >= 40_000_000L, "1080p High never drops below 40 Mb/s");
     check(CinemaMath.bitrate(3840, 2160, 24, 2, false, false, false) > uhd, "H.264 needs more than HEVC");
     check(CinemaMath.bitrate(3840, 2160, 24, 2, true, true, false) > uhd, "10-bit needs more");
     check(CinemaMath.bitrate(3840, 2160, 24, 2, true, false, true) > uhd * 2, "All-Intra needs much more");

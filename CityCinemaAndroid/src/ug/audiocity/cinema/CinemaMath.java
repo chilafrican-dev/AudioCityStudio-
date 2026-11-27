@@ -479,17 +479,21 @@ final class CinemaMath {
   static final String[] QUALITY = {"Proxy", "Standard", "High", "Extreme"};
 
   /**
-   * Target video bitrate in bits/s. Bits per pixel per frame at each quality level, scaled for codec
-   * efficiency (HEVC needs ~60% of H.264), 10-bit and intra-only GOP.
+   * Target video bitrate in bits/s, in line with cinema-camera practice: HEVC bits per pixel per frame of 0.06
+   * (Proxy), 0.30 (Standard), 0.50 (High: 4K24 ~100 Mb/s) and 0.75 (Extreme: 4K24 ~150 Mb/s); H.264 needs ~1.6x,
+   * 10-bit 1.2x, All-Intra 2.5x. Floors per level (8 / 20 / 40 / 60 Mb/s) keep 1080p from being starved: foliage,
+   * gravel and water break up badly at low rates. The encoder's maximum caps it (see targetBitrate).
    */
   static long bitrate(int width, int height, double fps, int quality, boolean hevc, boolean tenBit, boolean allIntra) {
-    double[] bpp = {0.05, 0.12, 0.22, 0.40};
-    double bits = width * (double) height * Math.min(fps, 60) * bpp[Math.max(0, Math.min(3, quality))];
+    int q = Math.max(0, Math.min(3, quality));
+    double[] bpp = {0.06, 0.30, 0.50, 0.75};
+    long[] floor = {8_000_000L, 20_000_000L, 40_000_000L, 60_000_000L};
+    double bits = width * (double) height * Math.min(fps, 60) * bpp[q];
     if (fps > 60) bits *= 1 + (fps - 60) / 120.0; // high frame rate: more data, but not linearly
-    if (hevc) bits *= 0.6;
-    if (tenBit) bits *= 1.25;
-    if (allIntra) bits *= 3;
-    return Math.max(2_000_000L, Math.round(bits));
+    if (!hevc) bits *= 1.6;
+    if (tenBit) bits *= 1.2;
+    if (allIntra) bits *= 2.5;
+    return Math.max(floor[q], Math.round(bits));
   }
 
   /** Minutes of recording that fit in the free space at a total bitrate (bits/s). */

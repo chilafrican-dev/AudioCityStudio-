@@ -1,4 +1,4 @@
-# City Cinema 1.5
+# City Cinema 1.6
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -38,7 +38,8 @@ no third-party libraries.
 - **10-bit HDR HLG** (HEVC Main10, BT.2020). Needs Android 13+, a 10-bit camera and a Main10 encoder.
 
 **Codec**
-- HEVC or H.264. Four quality levels from Proxy to Extreme, capped at the encoder's maximum bitrate.
+- HEVC or H.264 at cinema-camera bitrates. HEVC 4K24 is about 100 Mb/s at High and about 150 Mb/s at Extreme (H.264 1.6× more). Each level has a floor (Proxy 8, Standard 20, High 40, Extreme 60 Mb/s), so 1080p isn't starved. The encoder's maximum caps it. Before 1.6, 4K High was only ~26 Mb/s, which broke up badly on foliage and gravel.
+- CBR is the default, and the encoder is asked for its highest level, because many phone encoders undershoot badly in VBR. Existing installs are switched to CBR and at least High once.
 - GOP: Long (1 s), Short (0.5 s) or All-Intra. Bitrate mode: VBR or CBR.
 - Resolution lists only sizes that both the camera and the hardware encoder support at the chosen frame rate (4K DCI/UHD, 1440p, 1080p, 720p).
 
@@ -47,6 +48,10 @@ no third-party libraries.
 - Manual focus with distance readout. Set marks A and B, then run eased **focus pulls** over 1, 2, 3, 5 or 8 s.
 - Zoom across the whole logical camera range, including ultra-wide below 1x, with eased **zoom ramps** (2, 4 or 8 s, geometric so the speed looks constant).
 - Stabilization: off, optical, digital, optical + digital, or preview-matched.
+
+**Preview quality.** The viewfinder gets its own stream of up to 1920 pixels wide. Earlier versions drew the 4K buffer straight into the view, which aliased and looked harshly over-sharpened. That was the viewfinder only, not the recording.
+
+**Tone-curve check.** Some phones claim to support custom tone curves but ignore them. City Cinema reads back what the camera actually applied. If the curve is ignored, it says so, shows *Phone look*, and turns off the log exposure offset, so log looks don't just record 2 stops dark.
 
 **Monitoring**
 - Zebras at 70–100 IRE.

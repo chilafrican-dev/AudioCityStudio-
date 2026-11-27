@@ -145,6 +145,9 @@ public class CinemaActivity extends Activity {
   private volatile float[] liveGains;
   private volatile ColorSpaceTransform liveTransform;
   private volatile Integer liveAfState;
+  /** Whether the camera really applies our tone curves (some report support but ignore them). */
+  private volatile boolean curveIgnored, curveHonoured;
+  private int curveChecks;
 
   // ------------------------------------------------------------------ settings
   private SharedPreferences prefs;
@@ -683,7 +686,9 @@ public class CinemaActivity extends Activity {
     try {
       SurfaceTexture st = texture.getSurfaceTexture();
       if (st == null || device == null) { opening = false; return; }
-      Size buffer = rawMode ? previewSizeFor(rawSize) : proresMode ? previewSizeFor(proresSize) : videoSize;
+      // A preview stream of at most 1920 wide (same aspect): drawing a 4K buffer into a ~1600-pixel view aliases and
+      // looks harshly over-sharpened. High-speed sessions need preview and video at the same size.
+      Size buffer = rawMode ? previewSizeFor(rawSize) : proresMode ? previewSizeFor(proresSize) : fps > 60 ? videoSize : previewSizeFor(videoSize);
       st.setDefaultBufferSize(buffer.getWidth(), buffer.getHeight());
       if (previewSurface != null) previewSurface.release();
       previewSurface = new Surface(st);
@@ -866,6 +871,7 @@ public class CinemaActivity extends Activity {
     } else if (contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)) b.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY);
     // ---- detail: 0 natural (no sharpening, light NR), 1 standard, 2 clean (strong NR)
     int edge = detail == 0 ? CaptureRequest.EDGE_MODE_OFF : CaptureRequest.EDGE_MODE_HIGH_QUALITY;
+    if (detail == 0 && !contains(lens.edgeModes, edge)) edge = CaptureRequest.EDGE_MODE_FAST; // the least sharpening offered
     if (contains(lens.edgeModes, edge)) b.set(CaptureRequest.EDGE_MODE, edge);
     int nr = detail == 0 ? CaptureRequest.NOISE_REDUCTION_MODE_FAST : CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY;
     if (contains(lens.nrModes, nr)) b.set(CaptureRequest.NOISE_REDUCTION_MODE, nr);
@@ -882,7 +888,7 @@ public class CinemaActivity extends Activity {
   /** True when a headroom log (City Log, RED Log3G10, Sony S-Log3, BMD Film Gen 5) is in effect: a tone curve can be
    * applied (not RAW, not HLG, not high-speed) and the camera allows custom curves. */
   private boolean cityLogActive() {
-    return lens != null && CinemaMath.isHeadroomLog(CinemaMath.LOOKS[lookIndex]) && !rawMode && !tenBit && !highSpeedSession
+    return lens != null && !curveIgnored && CinemaMath.isHeadroomLog(CinemaMath.LOOKS[lookIndex]) && !rawMode && !tenBit && !highSpeedSession
         && lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
   }
 
@@ -923,6 +929,15 @@ public class CinemaActivity extends Activity {
       Long e = res.get(CaptureResult.SENSOR_EXPOSURE_TIME); if (e != null) liveExposure = e;
       Float f = res.get(CaptureResult.LENS_FOCUS_DISTANCE); if (f != null) liveFocus = f;
       liveAfState = res.get(CaptureResult.CONTROL_AF_STATE);
+      // Some phones list custom tone curves but quietly ignore them: check what the camera says it actually applied.
+      Integer tm = res.get(CaptureResult.TONEMAP_MODE);
+      Integer asked = r.get(CaptureRequest.TONEMAP_MODE);
+      if (asked != null && asked == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE) {
+        boolean honoured = tm != null && tm == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE;
+        curveChecks = honoured ? 0 : curveChecks + 1;
+        if (honoured) curveHonoured = true;
+        if (!curveIgnored && curveChecks > 30 && !curveHonoured) { curveIgnored = true; applyRepeating(); ui.post(() -> { message("This phone ignores custom tone curves, so log looks can't be applied. The phone's own processing is used and the log exposure offset is turned off."); refreshUi(); }); }
+      }
       if (rawMode) {
         float[] bl = res.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL); if (bl != null && bl.length == 4) liveBlack = bl;
         LensShadingMap map;
@@ -1698,7 +1713,7 @@ public class CinemaActivity extends Activity {
     else if (rawMode && rawSize != null) formatView.setText((rawOpt != null && rawOpt.is8k() ? "8K " : "") + "RAW " + rawSize.getWidth() + "×" + rawSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  CinemaDNG " + rawFormatName() + "  " + (rawCompressed() ? "~" : "") + rawBytesPerSecond() / 1_000_000 + " MB/s");
     else formatView.setText(resolutionName(videoSize) + "  " + CinemaMath.fpsLabel(fps) + speed + "p  " + codec + "  " + CinemaMath.formatBitrate(targetBitrate()));
     fpsCell.set(CinemaMath.fpsLabel(fps) + speed, false);
-    lookCell.set(rawMode ? "RAW" : proresMode ? CinemaMath.LOOKS[lookIndex] : tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
+    lookCell.set(rawMode ? "RAW" : curveIgnored && !tenBit && !"Rec.709".equals(CinemaMath.LOOKS[lookIndex]) ? "Phone look" : proresMode ? CinemaMath.LOOKS[lookIndex] : tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
     recButton.recording = recording; recButton.invalidate();
     for (Toggle t : toggles) t.sync();
     scopes.invalidate();
@@ -1933,7 +1948,7 @@ public class CinemaActivity extends Activity {
   private void lookPanel() {
     boolean curves = lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
     panelHeader("LOOK", rawMode ? CinemaMath.LOOKS[lookIndex] + " · monitoring only: RAW frames are recorded ungraded"
-        : cityLogActive() ? CinemaMath.LOOKS[lookIndex] + " · sensor exposed " + logHeadroom() + " stops under the EI · grade as " + CinemaMath.LOOKS[lookIndex] + " gamma with Rec.709 primaries, or use " + lutFor(CinemaMath.LOOKS[lookIndex]) + " (Menu)" : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curves ? "" : "  · this camera doesn't allow custom tone curves"));
+        : cityLogActive() ? CinemaMath.LOOKS[lookIndex] + " · sensor exposed " + logHeadroom() + " stops under the EI · grade as " + CinemaMath.LOOKS[lookIndex] + " gamma with Rec.709 primaries, or use " + lutFor(CinemaMath.LOOKS[lookIndex]) + " (Menu)" : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curveIgnored ? "  · this phone ignores custom tone curves: its own processing is recorded" : curves ? "" : "  · this camera doesn't allow custom tone curves"));
     LinearLayout c = chips();
     for (int i = 0; i < CinemaMath.LOOKS.length; i++) { final int k = i; addChip(c, CinemaMath.LOOKS[i], lookIndex == i, () -> { lookIndex = k; applyRepeating(); refreshUi(); }); }
     LinearLayout d = chips();
@@ -2139,8 +2154,12 @@ public class CinemaActivity extends Activity {
     videoSize = new Size(p.getInt("w", 3840), p.getInt("h", 2160));
     fps = Double.longBitsToDouble(p.getLong("fps", Double.doubleToLongBits(24)));
     conformFps = Double.longBitsToDouble(p.getLong("conform", Double.doubleToLongBits(0)));
-    hevc = p.getBoolean("hevc", true); tenBit = p.getBoolean("tenBit", false); cbr = p.getBoolean("cbr", false);
-    quality = p.getInt("quality", 2); gop = p.getInt("gop", 0); lookIndex = p.getInt("look", 0); detail = p.getInt("detail", 0);
+    hevc = p.getBoolean("hevc", true); tenBit = p.getBoolean("tenBit", false); cbr = p.getBoolean("cbr", true);
+    quality = p.getInt("quality", 2); gop = p.getInt("gop", 0);
+    if (!p.getBoolean("bitrateFix16", false)) { // 1.6: earlier versions defaulted to VBR, which many encoders undershoot
+      cbr = true; quality = Math.max(quality, 2);
+      p.edit().putBoolean("bitrateFix16", true).apply();
+    } lookIndex = p.getInt("look", 0); detail = p.getInt("detail", 0);
     stabilization = p.getInt("stab", 1); antibanding = p.getInt("antibanding", 0); reel = p.getInt("reel", 1); clip = p.getInt("clip", 1);
     cameraLetter = (char) p.getInt("camLetter", 'A'); wavOn = p.getBoolean("wav", true); audioOn = p.getBoolean("audio", true);
     audioSource = p.getString("audioSource", "Camcorder"); audioDeviceId = p.getInt("audioDevice", 0);
