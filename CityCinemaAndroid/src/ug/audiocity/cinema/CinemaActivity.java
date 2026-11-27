@@ -164,6 +164,10 @@ public class CinemaActivity extends Activity {
   /** Whether the camera really applies our tone curves (some report support but ignore them). */
   private volatile boolean curveIgnored, curveHonoured;
   private int curveChecks;
+  // what the camera did during the current take
+  private volatile int takeFrames, takeCurveFrames, takeEis = -1, takeCcMode = -1;
+  private volatile float sentCurveTop = -1, resultCurveTop = -1;
+  private volatile long takeExpMin = Long.MAX_VALUE, takeExpMax;
 
   // ------------------------------------------------------------------ settings
   private SharedPreferences prefs;
@@ -905,6 +909,7 @@ public class CinemaActivity extends Activity {
     String look = CinemaMath.LOOKS[lookIndex];
     if (!tenBit && !"Rec.709".equals(look) && lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)) {
       float[] curve = CinemaMath.toneCurve(look, Math.min(lens.curvePoints, 64), logHeadroom());
+      sentCurveTop = curve[curve.length - 1]; // the brightest code this curve can produce
       b.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
       b.set(CaptureRequest.TONEMAP_CURVE, new TonemapCurve(curve, curve, curve));
     } else if (contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)) b.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY);
@@ -1088,6 +1093,16 @@ public class CinemaActivity extends Activity {
       // Some phones list custom tone curves but quietly ignore them: check what the camera says it actually applied.
       Integer tm = res.get(CaptureResult.TONEMAP_MODE);
       Integer asked = r.get(CaptureRequest.TONEMAP_MODE);
+      if (recording) { // per-take record of what the camera really did (written to the clip's settings file)
+        takeFrames++;
+        if (tm != null && tm == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE) takeCurveFrames++;
+        android.hardware.camera2.params.TonemapCurve rc = res.get(CaptureResult.TONEMAP_CURVE);
+        if (rc != null && rc.getPointCount(TonemapCurve.CHANNEL_GREEN) > 0) resultCurveTop = rc.getPoint(TonemapCurve.CHANNEL_GREEN, rc.getPointCount(TonemapCurve.CHANNEL_GREEN) - 1).y;
+        Integer vs = res.get(CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE); if (vs != null) takeEis = vs;
+        Integer cc = res.get(CaptureResult.COLOR_CORRECTION_MODE); if (cc != null) takeCcMode = cc;
+        Long ex = res.get(CaptureResult.SENSOR_EXPOSURE_TIME);
+        if (ex != null) { takeExpMin = Math.min(takeExpMin, ex); takeExpMax = Math.max(takeExpMax, ex); }
+      }
       if (asked != null && asked == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE) {
         boolean honoured = tm != null && tm == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE;
         curveChecks = honoured ? 0 : curveChecks + 1;
@@ -1175,6 +1190,7 @@ public class CinemaActivity extends Activity {
       recording = true;
       recordStartNs = SystemClock.elapsedRealtimeNanos();
       takeStartWall = System.currentTimeMillis();
+      takeFrames = takeCurveFrames = 0; takeEis = takeCcMode = -1; resultCurveTop = -1; takeExpMin = Long.MAX_VALUE; takeExpMax = 0;
       applyRepeatingOnCamera();
       ui.post(() -> { scopes.invalidate(); refreshUi(); });
     } catch (IOException | RuntimeException e) {
@@ -1237,6 +1253,13 @@ public class CinemaActivity extends Activity {
       j.put("codec", tenBit ? "HEVC Main10 HLG BT.2020" : hevc ? "HEVC Main BT.709" : "H.264 High BT.709");
       j.put("bitrateTarget", targetBitrate()).put("bitrateMode", cbr ? "CBR" : "VBR").put("gop", gop == 0 ? "1s" : gop == 1 ? "0.5s" : "all-intra");
       j.put("colourMatrix", lens.manualPost && (gamutActive() || !awbAuto) ? ccmSource : "phone");
+      JSONObject dg = new JSONObject();
+      dg.put("logCurveFrames", takeCurveFrames + " of " + takeFrames + " frames used City Cinema's curve")
+          .put("curveTopSent", sentCurveTop).put("curveTopReported", resultCurveTop)
+          .put("curveIgnoredByPhone", curveIgnored).put("videoStabilisationResult", takeEis).put("colourCorrectionMode", takeCcMode)
+          .put("exposureRange", takeExpMax > 0 ? CinemaMath.speedLabel(takeExpMin) + " to " + CinemaMath.speedLabel(takeExpMax) : "-")
+          .put("device", Build.MANUFACTURER + " " + Build.MODEL + " Android " + Build.VERSION.RELEASE);
+      j.put("diagnostics", dg);
       j.put("look", CinemaMath.LOOKS[lookIndex]).put("detail", new String[] {"natural", "standard", "clean"}[detail]);
       if (cityLogActive()) j.put("logHeadroomStops", logHeadroom()).put("exposureIndex", (aeAuto ? liveIso : iso >> logHeadroom()) << logHeadroom()).put("lut", lutFor(CinemaMath.LOOKS[lookIndex]))
           .put("gradeAs", (gamutActive() ? CinemaMath.gamutName(CinemaMath.LOOKS[lookIndex]) : "Rec.709") + " / " + CinemaMath.LOOKS[lookIndex]);

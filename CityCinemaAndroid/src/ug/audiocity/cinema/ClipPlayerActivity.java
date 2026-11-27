@@ -75,6 +75,8 @@ public class ClipPlayerActivity extends Activity {
   private GLSurfaceView video;
   private PlayerRenderer renderer;
   private MediaPlayer player;
+  /** Position, duration and seeking are only valid once the clip has loaded (before that Android reports error -38). */
+  private boolean prepared;
   private Clip current;
   private Button playButton, lutButton;
   private SeekBar seek;
@@ -137,7 +139,7 @@ public class ClipPlayerActivity extends Activity {
     seek = new SeekBar(this);
     seek.setMax(1000);
     seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-      @Override public void onProgressChanged(SeekBar s, int p, boolean user) { if (user && player != null) player.seekTo((int) ((long) player.getDuration() * p / 1000), MediaPlayer.SEEK_CLOSEST); }
+      @Override public void onProgressChanged(SeekBar s, int p, boolean user) { if (user && player != null && prepared) player.seekTo((int) ((long) player.getDuration() * p / 1000), MediaPlayer.SEEK_CLOSEST); }
       @Override public void onStartTrackingTouch(SeekBar s) {}
       @Override public void onStopTrackingTouch(SeekBar s) {}
     });
@@ -148,6 +150,8 @@ public class ClipPlayerActivity extends Activity {
     lutButton = chip("LUT: None", v -> chooseLut());
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(38)); lp.leftMargin = dp(8);
     controls.addView(lutButton, lp);
+    LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(-2, dp(38)); ip.leftMargin = dp(8);
+    controls.addView(chip("INFO", v -> showInfo()), ip);
     Button bake = chip("709 COPY", v -> bakeLut());
     LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, dp(38)); bp.leftMargin = dp(6);
     controls.addView(bake, bp);
@@ -255,8 +259,12 @@ public class ClipPlayerActivity extends Activity {
       player.setSurface(surface);
       player.setOnVideoSizeChangedListener((mp, w, h) -> renderer.setVideoSize(w, h));
       player.setOnCompletionListener(mp -> playButton.setText("▶"));
-      player.setOnErrorListener((mp, what, extra) -> { titleView.setText(k.name + " · can't play this clip (" + what + "/" + extra + ")"); return true; });
-      player.setOnPreparedListener(mp -> { mp.start(); playButton.setText("❚❚"); });
+      player.setOnErrorListener((mp, what, extra) -> {
+        if (what == -38) return true; // a call made while loading: harmless, the clip still plays
+        titleView.setText(k.name + " · can't play this clip (" + what + "/" + extra + ")"); return true;
+      });
+      player.setOnPreparedListener(mp -> { prepared = true; mp.start(); playButton.setText("❚❚"); });
+      checkLog(k);
       player.prepareAsync();
     } catch (Exception e) {
       titleView.setText(k.name + " · can't open: " + e.getMessage());
@@ -264,12 +272,67 @@ public class ClipPlayerActivity extends Activity {
     }
   }
 
+  /**
+   * A clip named as log whose picture is brighter than that log can record wasn't recorded in log (the phone used
+   * its own processing): show it without the log LUT, and say so.
+   */
+  private void checkLog(Clip k) {
+    if (k.look == null || !CinemaMath.convertsInPost(k.look)) return;
+    final String look = k.look;
+    new Thread(() -> {
+      android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+      try {
+        r.setDataSource(this, k.uri);
+        boolean bad = false;
+        for (long t : new long[] {k.durationMs * 250L, k.durationMs * 500L, k.durationMs * 750L}) {
+          android.graphics.Bitmap bm = r.getScaledFrameAtTime(t, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 180);
+          if (bm == null) continue;
+          int[] px = new int[bm.getWidth() * bm.getHeight()];
+          bm.getPixels(px, 0, bm.getWidth(), 0, 0, bm.getWidth(), bm.getHeight());
+          bm.recycle();
+          if (CinemaMath.exceedsLook(px, look)) { bad = true; break; }
+        }
+        if (bad) ui.post(() -> {
+          if (current != k) return;
+          setLut("None");
+          titleView.setText(k.name + " · NOT recorded in " + look + ": the phone used its own processing (see INFO)");
+        });
+      } catch (Exception e) { Log.w(TAG, "log check", e); }
+      finally { try { r.release(); } catch (Exception ignored) {} }
+    }, "clip-log-check").start();
+  }
+
+  /** Shows the clip's recording settings from its JSON sidecar (Documents/City Cinema). */
+  private void showInfo() {
+    Clip k = current;
+    if (k == null) return;
+    String base = k.name.replaceAll("\\.(mp4|mov)$", "");
+    String text = null;
+    android.net.Uri files = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL);
+    try (Cursor c = getContentResolver().query(files, new String[] {MediaStore.Files.FileColumns._ID},
+        MediaStore.Files.FileColumns.DISPLAY_NAME + " = ?", new String[] {base + ".json"}, null)) {
+      if (c != null && c.moveToFirst()) {
+        try (InputStream in = getContentResolver().openInputStream(ContentUris.withAppendedId(files, c.getLong(0)))) {
+          ByteArrayOutputStream b = new ByteArrayOutputStream();
+          byte[] buf = new byte[4096]; int n;
+          while (in != null && (n = in.read(buf)) > 0) b.write(buf, 0, n);
+          text = new JSONObject(new String(b.toByteArray(), StandardCharsets.UTF_8)).toString(2);
+        }
+      }
+    } catch (Exception e) { Log.w(TAG, "info", e); }
+    new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle(k.name)
+        .setMessage(text != null ? text : "No settings file found for this clip (it is made by City Cinema next to each take, in Documents/City Cinema; files from before a reinstall can't be read).")
+        .setPositiveButton("OK", null).show();
+  }
+
   private void togglePlay() {
     if (player == null) { if (current != null) play(current); return; }
+    if (!prepared) return;
     if (player.isPlaying()) { player.pause(); playButton.setText("▶"); } else { player.start(); playButton.setText("❚❚"); }
   }
 
   private void releasePlayer() {
+    prepared = false;
     if (player != null) { try { player.release(); } catch (RuntimeException ignored) {} player = null; }
     playButton.setText("▶");
   }
@@ -277,7 +340,7 @@ public class ClipPlayerActivity extends Activity {
   private final Runnable progress = new Runnable() {
     @Override public void run() {
       MediaPlayer p = player;
-      if (p != null) {
+      if (p != null && prepared) {
         try {
           int pos = p.getCurrentPosition(), dur = Math.max(1, p.getDuration());
           seek.setProgress((int) ((long) pos * 1000 / dur));
