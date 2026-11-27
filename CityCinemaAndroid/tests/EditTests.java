@@ -100,6 +100,7 @@ public class EditTests {
     for (int i = 0; i < total; i++) check(out[i * 2] == out[i * 2 + 1], "mono goes to both channels");
     cubeTests();
     lutPackTests();
+    logDetectTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -107,6 +108,44 @@ public class EditTests {
   static CubeLut cube(String text) throws java.io.IOException { return CubeLut.parse(new java.io.StringReader(text)); }
 
   /** Every .cube shipped in assets/luts must load, be in range and produce a usable picture. */
+  /** Log footage shown without conversion is recognised; normal and dark/flat frames are not. */
+  static void logDetectTests() {
+    int w = 64, h = 36;
+    int[] normal = new int[w * h], log = new int[w * h], black = new int[w * h], grey = new int[w * h];
+    java.util.Random rnd = new java.util.Random(7);
+    for (int i = 0; i < normal.length; i++) {
+      double t = (i % w) / (double) (w - 1), u = (i / w) / (double) (h - 1);
+      double r = t, g = 0.3 + 0.5 * u * t, b = 1 - t; // full range, saturated
+      double n = rnd.nextDouble() * 0.02;
+      normal[i] = argb(r + n, g, b);
+      // the same scene through a log curve: lifted blacks, lowered whites, low saturation
+      double y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      double[] c = {r, g, b};
+      for (int k = 0; k < 3; k++) c[k] = 0.12 + 0.62 * (y + (c[k] - y) * 0.25);
+      log[i] = argb(c[0], c[1], c[2]);
+      black[i] = argb(0.02, 0.02, 0.02);
+      grey[i] = argb(0.5, 0.5, 0.5);
+    }
+    check(!EditModel.looksLikeLog(normal), "normal footage is not log");
+    check(EditModel.looksLikeLog(log), "log footage detected");
+    check(!EditModel.looksLikeLog(black), "black frame: can't tell");
+    check(!EditModel.looksLikeLog(grey), "grey card: can't tell");
+    check(!EditModel.looksLikeLog(null), "no frame");
+    // real City Cinema log: grey ramp through the S-Log3 curve is detected
+    int[] slog = new int[w * h];
+    for (int i = 0; i < slog.length; i++) {
+      double x = (i % w) / (double) (w - 1) * 0.9 + 0.005;
+      double v = x >= 0.01125 ? (420 + Math.log10((x + 0.01) / 0.19) * 261.5) / 1023 : (x * (171.2102946929 - 95) / 0.01125 + 95) / 1023;
+      slog[i] = argb(v * 1.02, v, v * 0.97);
+    }
+    check(EditModel.looksLikeLog(slog), "S-Log3 ramp detected");
+  }
+
+  static int argb(double r, double g, double b) {
+    int R = (int) Math.round(Math.max(0, Math.min(1, r)) * 255), G = (int) Math.round(Math.max(0, Math.min(1, g)) * 255), B = (int) Math.round(Math.max(0, Math.min(1, b)) * 255);
+    return 0xff000000 | (R << 16) | (G << 8) | B;
+  }
+
   static void lutPackTests() {
     java.io.File dir = new java.io.File("assets/luts");
     String[] files = dir.list();

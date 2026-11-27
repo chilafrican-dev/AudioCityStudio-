@@ -1143,6 +1143,7 @@ public class CinemaActivity extends Activity {
       v.put(MediaStore.MediaColumns.IS_PENDING, 1);
       mp4Uri = cr.insert(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
       if (mp4Uri == null) throw new IOException("Couldn't create the video file.");
+      clipName = savedName(mp4Uri, clipName, ".mp4");
       mp4Fd = cr.openFileDescriptor(mp4Uri, "rw");
       wavChannel = null; wavUri = null; wavFd = null;
       boolean wantWav = wavOn && audioOn && audio.isRunning() && !(fps > 60 && conformFps > 0);
@@ -1240,6 +1241,14 @@ public class CinemaActivity extends Activity {
     } catch (Exception e) { Log.w(TAG, "sidecar", e); }
   }
 
+  /** Android renames a file when the name is taken ("A001_C001_20261127 (1).mp4"): use the real name so the sidecar and WAV match. */
+  private String savedName(Uri u, String fallback, String ext) {
+    try (android.database.Cursor c = getContentResolver().query(u, new String[] {MediaStore.MediaColumns.DISPLAY_NAME}, null, null, null)) {
+      if (c != null && c.moveToFirst() && c.getString(0) != null && c.getString(0).endsWith(ext)) return c.getString(0).substring(0, c.getString(0).length() - ext.length());
+    } catch (Exception ignored) {}
+    return fallback;
+  }
+
   private static void closeQuietly(java.io.Closeable c) { if (c != null) try { c.close(); } catch (IOException ignored) {} }
 
   // ================================================================== ProRes recording
@@ -1296,6 +1305,7 @@ public class CinemaActivity extends Activity {
       v.put(MediaStore.MediaColumns.IS_PENDING, 1);
       movUri = cr.insert(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
       if (movUri == null) throw new IOException("Couldn't create the .mov file.");
+      clipName = savedName(movUri, clipName, ".mov");
       movFd = cr.openFileDescriptor(movUri, "rw");
       FileChannel channel = new FileOutputStream(movFd.getFileDescriptor()).getChannel();
       wavUri = null; wavFd = null; wavChannel = null;

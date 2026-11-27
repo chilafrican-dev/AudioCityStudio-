@@ -369,4 +369,31 @@ final class EditModel {
       return written;
     }
   }
+
+  /**
+   * True when a frame (ARGB pixels) looks like log footage shown without its conversion: no true blacks, no bright
+   * whites and washed-out colour. Used to ask about the log when a clip has no sidecar.
+   */
+  static boolean looksLikeLog(int[] argb) {
+    if (argb == null || argb.length < 100) return false;
+    int[] hist = new int[256];
+    double sat = 0;
+    for (int p : argb) {
+      int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+      int y = (int) Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+      hist[Math.max(0, Math.min(255, y))]++;
+      int mx = Math.max(r, Math.max(g, b)), mn = Math.min(r, Math.min(g, b));
+      sat += mx == 0 ? 0 : (mx - mn) / (double) mx;
+    }
+    sat /= argb.length;
+    int lo = percentile(hist, argb.length, 0.01), hi = percentile(hist, argb.length, 0.99);
+    if (hi - lo < 25) return false; // flat card or black frame: can't tell
+    return lo > 14 && hi < 236 && sat < 0.28;
+  }
+
+  private static int percentile(int[] hist, int n, double q) {
+    long want = Math.round(n * q), sum = 0;
+    for (int i = 0; i < 256; i++) { sum += hist[i]; if (sum > want) return i; }
+    return 255;
+  }
 }
