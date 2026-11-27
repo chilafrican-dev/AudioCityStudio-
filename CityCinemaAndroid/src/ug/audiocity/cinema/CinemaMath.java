@@ -170,6 +170,54 @@ final class CinemaMath {
     return new float[] {(float) (gr / min), (float) (gg / min), (float) (gg / min), (float) (gb / min)};
   }
 
+  /**
+   * The colour matrix the ISP needs after white balance (white-balanced camera RGB to linear Rec.709), from the
+   * sensor's own factory calibration (DNG method): interpolated XYZ-to-camera matrix, inverted, Bradford-adapted
+   * from the scene white to D65, rows normalised so white stays white. gains are the RGGB gains in use.
+   */
+  static double[] calibratedCcm(float[] cm1, int k1, float[] cm2, int k2, double kelvin, float[] gains) {
+    double w = k1 == k2 ? 1 : clamp01((1 / kelvin - 1 / (double) k2) / (1 / (double) k1 - 1 / (double) k2));
+    double[] cm = new double[9];
+    for (int i = 0; i < 9; i++) cm[i] = w * cm1[i] + (1 - w) * cm2[i];
+    double gr = gains[0], gg = (gains[1] + gains[2]) / 2, gb = gains[3];
+    double[] unWb = {1 / gr, 0, 0, 0, 1 / gg, 0, 0, 0, 1 / gb};
+    double[] xy = kelvinToXy(kelvin);
+    double[] xyz709 = invert(rgbToXyz(gamutPrimaries("Rec.709")));
+    double[] m = mul3(xyz709, mul3(bradford(xy, new double[] {0.3127, 0.3290}), mul3(invert(cm), unWb)));
+    for (int r = 0; r < 3; r++) {
+      double sum = m[r * 3] + m[r * 3 + 1] + m[r * 3 + 2];
+      if (Math.abs(sum) > 1e-6) for (int c = 0; c < 3; c++) m[r * 3 + c] /= sum;
+    }
+    return m;
+  }
+
+  /** Bradford chromatic adaptation (XYZ to XYZ) from one white (xy) to another. */
+  static double[] bradford(double[] from, double[] to) {
+    double[] b = {0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296};
+    double[] f = mul(b, new double[] {from[0] / from[1], 1, (1 - from[0] - from[1]) / from[1]});
+    double[] t = mul(b, new double[] {to[0] / to[1], 1, (1 - to[0] - to[1]) / to[1]});
+    double[] d = {t[0] / f[0], 0, 0, 0, t[1] / f[1], 0, 0, 0, t[2] / f[2]};
+    return mul3(invert(b), mul3(d, b));
+  }
+
+  /** A typical phone sensor colour matrix (rows sum to 1), for cameras that report no calibration at all. */
+  static final double[] GENERIC_CCM = {1.70, -0.52, -0.18, -0.26, 1.52, -0.26, 0.02, -0.62, 1.60};
+
+  /**
+   * Whether a colour matrix reported by the camera can be used: some phones report none or the identity, and
+   * recording with the identity gives the sensor's raw, nearly colourless RGB (grey, washed-out log).
+   */
+  static boolean usableCcm(double[] m) {
+    if (m == null || m.length != 9) return false;
+    double off = 0;
+    for (int r = 0; r < 3; r++) {
+      double sum = 0;
+      for (int c = 0; c < 3; c++) { if (!Double.isFinite(m[r * 3 + c])) return false; sum += m[r * 3 + c]; if (r != c) off += Math.abs(m[r * 3 + c]); }
+      if (sum < 0.6 || sum > 1.5) return false;
+    }
+    return off > 0.3; // a real sensor matrix mixes channels strongly
+  }
+
   /** A function from (kelvin, tint) to RGGB gains: either sensor-calibrated or the generic sRGB model. */
   interface WbModel { float[] gains(double kelvin, double tint); }
 

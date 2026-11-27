@@ -872,7 +872,9 @@ public class CinemaActivity extends Activity {
       float[] g = awbAuto ? (heldGains != null ? heldGains : liveGains != null ? liveGains : lens.wb.gains(5600, 0)) : lens.wb.gains(kelvin, tint);
       b.set(CaptureRequest.COLOR_CORRECTION_GAINS, new RggbChannelVector(g[0], g[1], g[2], g[3]));
       ColorSpaceTransform t = awbAuto && heldTransform != null ? heldTransform : liveTransform;
-      double[] base = t != null ? transformMatrix(t) : new double[] {1, 0, 0, 0, 1, 0, 0, 0, 1};
+      double[] base = t != null ? transformMatrix(t) : null;
+      ccmSource = "phone auto white balance";
+      if (!CinemaMath.usableCcm(base)) { base = sensorCcm(g); ccmSource = lens.cm1 != null ? "sensor calibration" : "generic"; } // never record the sensor's raw, colourless RGB
       double[] m = gamut ? CinemaMath.mul3(CinemaMath.rec709ToGamut(CinemaMath.LOOKS[lookIndex]), base) : base;
       b.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, toTransform(m));
     }
@@ -961,6 +963,7 @@ public class CinemaActivity extends Activity {
   private volatile float[] heldGains;
   private volatile ColorSpaceTransform heldTransform;
   private volatile long awbMeasureUntil;
+  private volatile String ccmSource = "phone";
 
   /** True when the current look is a log recorded in its own wide gamut (needs manual colour correction support). */
   private boolean gamutActive() {
@@ -974,6 +977,14 @@ public class CinemaActivity extends Activity {
     awbMeasureUntil = SystemClock.uptimeMillis() + 1500;
     applyRepeating();
     ui.postDelayed(() -> { applyRepeating(); refreshUi(); }, 1600);
+  }
+
+  /** The colour matrix from the sensor's factory calibration for these white balance gains (or a typical one). */
+  private double[] sensorCcm(float[] g) {
+    Lens l = lens;
+    if (l == null || l.cm1 == null) return CinemaMath.GENERIC_CCM.clone();
+    double[] m = CinemaMath.calibratedCcm(l.cm1, l.k1, l.cm2, l.k2, CinemaMath.estimateKelvin(l.wb, g[0], g[3]), g);
+    return CinemaMath.usableCcm(m) ? m : CinemaMath.GENERIC_CCM.clone();
   }
 
   private static double[] transformMatrix(ColorSpaceTransform t) {
@@ -1222,6 +1233,7 @@ public class CinemaActivity extends Activity {
       j.put("projectFps", CinemaMath.fpsLabel(fps > 60 && conformFps > 0 ? conformFps : fps));
       j.put("codec", tenBit ? "HEVC Main10 HLG BT.2020" : hevc ? "HEVC Main BT.709" : "H.264 High BT.709");
       j.put("bitrateTarget", targetBitrate()).put("bitrateMode", cbr ? "CBR" : "VBR").put("gop", gop == 0 ? "1s" : gop == 1 ? "0.5s" : "all-intra");
+      j.put("colourMatrix", lens.manualPost && (gamutActive() || !awbAuto) ? ccmSource : "phone");
       j.put("look", CinemaMath.LOOKS[lookIndex]).put("detail", new String[] {"natural", "standard", "clean"}[detail]);
       if (cityLogActive()) j.put("logHeadroomStops", logHeadroom()).put("exposureIndex", (aeAuto ? liveIso : iso >> logHeadroom()) << logHeadroom()).put("lut", lutFor(CinemaMath.LOOKS[lookIndex]))
           .put("gradeAs", (gamutActive() ? CinemaMath.gamutName(CinemaMath.LOOKS[lookIndex]) : "Rec.709") + " / " + CinemaMath.LOOKS[lookIndex]);

@@ -20,6 +20,7 @@ public class CinemaTests {
   }
 
   public static void main(String[] args) throws IOException {
+    ccmTests();
     frameRates();
     shutter();
     iso();
@@ -426,6 +427,35 @@ public class CinemaTests {
     near(red[0], CinemaMath.rec709(0.30), 1e-9, "Flat red back"); near(red[2], CinemaMath.rec709(0.02), 1e-9, "Flat blue back");
     check(CinemaMath.convertsInPost("Flat") && CinemaMath.convertsInPost("Sony S-Log3") && !CinemaMath.convertsInPost("Rec.709") && !CinemaMath.convertsInPost("None"), "looks converted in post");
     check(!CinemaMath.isLogLook("Flat"), "Flat is not a log for the camera");
+  }
+
+  /** The colour matrix from sensor calibration undoes the sensor's own colour mixing (no grey, colourless log). */
+  static void ccmTests() {
+    double[] toXyz = CinemaMath.rgbToXyz(CinemaMath.gamutPrimaries("Rec.709"));
+    double[] a = {0.55, 0.35, 0.10, 0.20, 0.65, 0.15, 0.08, 0.32, 0.60}; // sensor RGB from linear Rec.709: strong overlap
+    double[] cmD = CinemaMath.mul3(a, CinemaMath.invert(toXyz)); // XYZ -> camera
+    float[] cm = new float[9];
+    for (int i = 0; i < 9; i++) cm[i] = (float) cmD[i];
+    float[] g = CinemaMath.calibratedGains(cm, 6504, cm, 6504, 6504, 0);
+    double[] m = CinemaMath.calibratedCcm(cm, 6504, cm, 6504, 6504, g);
+    check(CinemaMath.usableCcm(m), "calibrated matrix is usable");
+    double gg = (g[1] + g[2]) / 2.0;
+    for (double[] c : new double[][] {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {0.4, 0.2, 0.1}, {0.18, 0.18, 0.18}}) {
+      double[] cam = CinemaMath.mul(a, c);
+      double[] wb = {cam[0] * g[0], cam[1] * gg, cam[2] * g[3]};
+      double[] out = CinemaMath.mul(m, wb);
+      // up to one overall exposure scale, the colour comes back
+      double scale = (out[0] + out[1] + out[2]) / Math.max(1e-9, c[0] + c[1] + c[2]);
+      for (int i = 0; i < 3; i++) near(out[i], c[i] * scale, 0.02 * Math.max(1, scale), "sensor colour restored " + java.util.Arrays.toString(c) + " ch" + i);
+    }
+    check(!CinemaMath.usableCcm(new double[] {1, 0, 0, 0, 1, 0, 0, 0, 1}), "identity matrix is rejected");
+    check(!CinemaMath.usableCcm(null), "missing matrix is rejected");
+    check(CinemaMath.usableCcm(CinemaMath.GENERIC_CCM), "generic matrix is usable");
+    // tungsten scene: white stays white after adaptation
+    float[] gt = CinemaMath.calibratedGains(cm, 6504, cm, 6504, 3200, 0);
+    double[] mt = CinemaMath.calibratedCcm(cm, 6504, cm, 6504, 3200, gt);
+    double[] wsum = CinemaMath.mul(mt, new double[] {1, 1, 1});
+    for (int i = 0; i < 3; i++) near(wsum[i], 1, 1e-9, "white stays white at 3200K");
   }
 
   static double enc(String look, double s) { return "Flat Log".equals(look) ? CinemaMath.acLog(s) : CinemaMath.logEncode(look, s); }
