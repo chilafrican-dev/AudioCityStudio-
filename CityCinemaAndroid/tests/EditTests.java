@@ -99,11 +99,32 @@ public class EditTests {
     check(err < 0.02, "resampled sine matches (max error " + err + ")");
     for (int i = 0; i < total; i++) check(out[i * 2] == out[i * 2 + 1], "mono goes to both channels");
     cubeTests();
+    lutPackTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
 
   static CubeLut cube(String text) throws java.io.IOException { return CubeLut.parse(new java.io.StringReader(text)); }
+
+  /** Every .cube shipped in assets/luts must load, be in range and produce a usable picture. */
+  static void lutPackTests() {
+    java.io.File dir = new java.io.File("assets/luts");
+    String[] files = dir.list();
+    check(files != null && files.length >= 17, "LUT pack present");
+    if (files == null) return;
+    for (String f : files) {
+      check(f.toLowerCase(java.util.Locale.US).endsWith(".cube"), "pack file is .cube: " + f);
+      try (java.io.Reader r = new java.io.FileReader(new java.io.File(dir, f))) {
+        CubeLut l = CubeLut.parse(r);
+        check(l.size >= 2 && l.size <= CubeLut.MAX_3D, "pack size " + f);
+        float[] grey = l.apply(0.5f, 0.5f, 0.5f), white = l.apply(1, 1, 1), black = l.apply(0, 0, 0);
+        check(white[1] > black[1] + 0.4f, "pack keeps a tonal range " + f);
+        check(grey[1] > 0.25f && grey[1] < 0.8f, "pack mid grey sensible " + f);
+      } catch (java.io.IOException e) { check(false, "pack parses " + f + ": " + e.getMessage()); }
+    }
+    check(LutPack.isPack(LutPack.key("A.cube")) && LutPack.assetPath(LutPack.key("A.cube")).equals("luts/A.cube"), "pack keys");
+    check(LutPack.label("pack:NicoPan Indoor.cube").equals("NicoPan Indoor"), "pack label");
+  }
 
   static void cubeTests() {
     try {

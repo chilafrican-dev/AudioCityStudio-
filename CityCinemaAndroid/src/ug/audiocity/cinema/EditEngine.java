@@ -209,12 +209,20 @@ final class EditEngine {
     private final Map<String, CubeLut> userLuts = new HashMap<>();
     private final Map<String, Integer> userLutTextures = new HashMap<>();
 
+    private android.content.res.AssetManager assets;
+
     void setLutDir(java.io.File dir) { lutDir = dir; }
+
+    void setAssets(android.content.res.AssetManager a) { assets = a; }
 
     private CubeLut userLut(String name) {
       if (userLuts.containsKey(name)) return userLuts.get(name);
       CubeLut l = null;
       if (CinematicLuts.isBuiltin(name)) l = CinematicLuts.build(CinematicLuts.nameOf(name));
+      else if (LutPack.isPack(name) && assets != null) {
+        try (java.io.Reader r = new java.io.InputStreamReader(assets.open(LutPack.assetPath(name)), java.nio.charset.StandardCharsets.UTF_8)) { l = CubeLut.parse(r); }
+        catch (IOException | RuntimeException e) { Log.w(TAG, "LUT " + name, e); }
+      }
       else if (lutDir != null) {
         try (java.io.Reader r = new java.io.InputStreamReader(new java.io.FileInputStream(new java.io.File(lutDir, name)), java.nio.charset.StandardCharsets.UTF_8)) { l = CubeLut.parse(r); }
         catch (IOException | RuntimeException e) { Log.w(TAG, "LUT " + name, e); }
@@ -423,7 +431,7 @@ final class EditEngine {
 
     FrameRenderer(Context ctx) { this.ctx = ctx; }
 
-    void init() { compositor.init(); compositor.setLutDir(lutDir(ctx)); }
+    void init() { compositor.init(); compositor.setLutDir(lutDir(ctx)); compositor.setAssets(ctx.getAssets()); }
 
     void render(EditModel.Project p, long t, int outW, int outH) { render(p, t, 0, 0, outW, outH); }
 

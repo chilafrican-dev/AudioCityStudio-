@@ -452,10 +452,11 @@ public class EditorActivity extends Activity {
       slider("Shadows", -100, 100, Math.round(g.shadows * 100), v -> g.shadows = v / 100.0, x -> x + "");
       slider("Highlights", -100, 100, Math.round(g.highlights * 100), v -> g.highlights = v / 100.0, x -> x + "");
       // creative / custom LUT (.cube)
-      label("Cinematic LUT" + (c.lut.isEmpty() ? "" : ": " + CinematicLuts.nameOf(c.lut).replaceAll("\\.cube$", "")));
+      label("Cinematic LUT" + (c.lut.isEmpty() ? "" : ": " + (LutPack.isPack(c.lut) ? LutPack.label(c.lut) : CinematicLuts.nameOf(c.lut).replaceAll("\\.cube$", ""))));
       LinearLayout lutRow = row();
       lutRow.addView(chip("None", v -> { c.lut = ""; changed(true); }, c.lut.isEmpty()), lp(-2));
       for (String nm : CinematicLuts.NAMES) { String key = CinematicLuts.key(nm); lutRow.addView(chip("★ " + nm, v -> { c.lut = key; changed(true); }, key.equals(c.lut)), lp(-2)); }
+      for (String f : LutPack.list(getAssets())) { String key = LutPack.key(f); lutRow.addView(chip("◆ " + LutPack.label(key), v -> { c.lut = key; changed(true); }, key.equals(c.lut)), lp(-2)); }
       String[] files = EditEngine.lutDir(this).list();
       if (files != null) { java.util.Arrays.sort(files); for (String f : files) lutRow.addView(chip(f.replaceAll("\\.cube$", ""), v -> { c.lut = f; changed(true); }, f.equals(c.lut)), lp(-2)); }
       lutRow.addView(chip("IMPORT .cube", v -> pickLut()), lp(-2));

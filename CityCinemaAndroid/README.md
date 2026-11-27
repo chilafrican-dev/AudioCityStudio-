@@ -97,6 +97,7 @@ Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra)
   - City Cinema's own designs, so they ship with the app with no licence limits. They expect normal-colour (Rec.709) input; log clips are converted first.
   - Skin tones are protected in the warm/teal looks.
   - **EXPORT PACK** writes all 12 as 33³ `.cube` files to `Documents/City Cinema/LUTs`, for Resolve, Premiere, Final Cut, CapCut desktop or monitors.
+- **NicoPan LUT pack (built in, marked ◆):** 17 LUTs shipped inside the app (`assets/luts`): Afro Natural Cinematic, Afro Warm Love Song, Cinematic Matte 1–5, Matte Cinematic Look, NicoPan Golden Cinematic (v1, v2, Strong), NicoPan Indoor and NicoPan LUT 1–5. All expect normal-colour (Rec.709) input. To add more, drop `.cube` files into `assets/luts` and rebuild; the tests check every file loads.
 - **GET LUTS ONLINE** opens well-known free LUT sources (FreeVisuals, Uppbeat, PremiumBeat, No Film School). Download a `.cube` there, then load it with **IMPORT .cube**. These packs are free to use but not licensed for bundling in another app, so they aren't built in.
 - Copy a grade, including its LUT, to all clips.
 
