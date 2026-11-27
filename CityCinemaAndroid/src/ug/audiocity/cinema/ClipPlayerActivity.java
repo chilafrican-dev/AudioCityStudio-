@@ -99,6 +99,9 @@ public class ClipPlayerActivity extends Activity {
     head.addView(back, new LinearLayout.LayoutParams(-2, dp(34)));
     TextView t = text("CLIPS", 14, TEXT); t.setPadding(dp(12), 0, 0, 0);
     head.addView(t);
+    Button editor = chip("EDIT ›", v -> startActivity(new Intent(this, EditorActivity.class)));
+    LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-2, dp(34)); ep.leftMargin = dp(10);
+    head.addView(editor, ep);
     left.addView(head);
     list = new ListView(this);
     list.setDivider(null);

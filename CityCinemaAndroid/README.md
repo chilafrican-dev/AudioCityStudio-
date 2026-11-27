@@ -1,4 +1,4 @@
-# City Cinema 2.2
+# City Cinema 3.0
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -74,6 +74,35 @@ no third-party libraries.
 Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra) meter *after* the log curve, read the lifted shadows as brightness and run away to about 6 stops under (ISO 50, 18°). Phones without manual exposure keep the phone's auto exposure.
 
 **Tone-curve check.** Some phones claim to support custom tone curves but ignore them. City Cinema reads back what the camera actually applied. If the curve is ignored, it says so, shows *Phone look*, and turns off the log exposure offset, so log looks don't just record 2 stops dark.
+
+**Editor.** **EDIT** (on the camera's side panel, or in CLIPS) opens a full editor.
+
+*Timeline*
+- **+ VIDEO** picks any videos on the phone, from City Cinema, the phone's camera, downloads and so on.
+- Trim each clip's start and end, **SPLIT** at the playhead, move clips left or right, duplicate or delete them.
+- Set clip volume or mute.
+- The playhead stays in the centre while the timeline scrolls under it; pinch to zoom.
+
+*Colour*
+- City Cinema log clips get their LUT automatically, and any clip can be set to the log it was shot in.
+- Exposure, contrast, saturation, temperature, tint, shadows and highlights.
+- Film looks with adjustable strength: Teal & Orange, Warm Film, Cool Night, Bleach Bypass, Mono.
+- Copy a grade to all clips.
+
+*Transitions and titles*
+- Transitions: cut, dissolve (with an equal-power audio crossfade) or dip to black, with adjustable length.
+- The project can fade in from and out to black.
+- **+ TITLE** adds text at the playhead: centre, lower third or top, with size, colour, background box and duration. Titles fade in and out.
+
+*Music*
+- **+ MUSIC** adds a track with volume, fade in/out and start time. It is mixed with the clips' sound and ends with the programme.
+
+*Preview, export and saving*
+- **Preview** plays with sound, with the picture following the audio clock.
+- **EXPORT** renders the timeline through the same GPU compositor to one MP4: source size, 4K, 1080p or 720p; source frame rate, 24, 25, 30 or 60; HEVC or H.264 at High quality. Saved in `Movies/City Cinema`.
+- The project autosaves.
+- The timeline, transition, fade, grade and resampling maths are unit-tested (`EditTests`).
+- ProRes clips can't be decoded on Android, so they can't be added to the editor.
 
 **Clips and player.** **CLIPS** on the side panel opens the clip browser:
 - Thumbnails, length, size and look of everything in `Movies/City Cinema`.

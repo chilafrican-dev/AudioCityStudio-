@@ -1810,6 +1810,12 @@ public class CinemaActivity extends Activity {
     });
     LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, dp(30)); cp.bottomMargin = dp(5);
     togglesGrid.addView(clips, cp);
+    Button edit = chip("EDIT", false, () -> {
+      if (recording) { message("Stop recording to open the editor."); return; }
+      startActivity(new Intent(this, EditorActivity.class));
+    });
+    LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, dp(30)); ep.bottomMargin = dp(5);
+    togglesGrid.addView(edit, ep);
     Button settings = chip("MENU", false, this::showSettings);
     togglesGrid.addView(settings, new LinearLayout.LayoutParams(-1, dp(30)));
     ScrollView sc = new ScrollView(this); sc.setVerticalScrollBarEnabled(false); sc.addView(togglesGrid);

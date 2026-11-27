@@ -8,3 +8,4 @@ out=build/test; rm -rf "$out"; mkdir -p "$out/classes" "$out/tests"
 javac -nowarn --release 8 -cp "$ANDROID_JAR" -d "$out/classes" src/ug/audiocity/cinema/*.java
 javac -nowarn -cp "$out/classes:$ANDROID_JAR" -d "$out/tests" tests/*.java
 java -cp "$out/tests:$out/classes:$ANDROID_JAR" ug.audiocity.cinema.CinemaTests
+java -cp "$out/tests:$out/classes:$ANDROID_JAR" ug.audiocity.cinema.EditTests
