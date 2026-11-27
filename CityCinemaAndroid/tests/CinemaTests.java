@@ -363,6 +363,11 @@ public class CinemaTests {
     a = CinemaMath.allocateExposure(6400 * frame / 1e9 * 4, half, frame, 50, 3200, 6400, 100_000, 100_000_000);
     check(a[0] == 6400 && a[1] == frame, "very dark: clamps at the sensor limits");
     near(CinemaMath.flickerSafeAngle(180, 24, 50), 172.8, 0.01, "50 Hz at 24 fps: 172.8 degrees");
+    int[] px = new int[100 * 50];
+    for (int i = 0; i < px.length; i++) { int v = i % 100 < 10 ? 200 : 90; px[i] = 0xff000000 | v << 16 | v << 8 | v; }
+    near(CinemaMath.clippedFraction(px, 100, 50, 191), 0.1, 0.02, "clipped share of a frame");
+    check(CinemaMath.protectHighlights(1.0, 0.1) <= -0.6 && CinemaMath.protectHighlights(0, 0.03) == -0.25 && CinemaMath.protectHighlights(0.5, 0.0) == 0.5, "highlight protection");
+    near(CinemaMath.toneValue("Sony S-Log3", 1, 2) * 255, 191, 1, "S-Log3 with 2 stops of headroom clips at 8-bit code ~191");
     near(CinemaMath.flickerSafeAngle(180, 25, 50), 180, 0.01, "50 Hz at 25 fps: 180 degrees");
     near(CinemaMath.flickerSafeAngle(180, 24, 60), 144, 0.01, "60 Hz at 24 fps: 144 degrees (180 would flicker)");
   }

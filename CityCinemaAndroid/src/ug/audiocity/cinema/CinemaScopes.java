@@ -20,6 +20,9 @@ class CinemaScopes extends View {
   boolean zebra, peaking, falseColor, grid = true, center, level = true;
   int scopeMode = 1; // 0 off, 1 histogram, 2 waveform, 3 RGB parade
   int zebraIre = 95, peakColor = 0xffff3b30, guide = 0;
+  /** In the log modes: the 8-bit code where the phone clips (e.g. ~191 for S-Log3 with 2 stops of headroom), so
+   * zebras, false colour and the clip warning mark real clipping. 0 = normal video (clip at 255). */
+  volatile int clipLuma;
   float peakSensitivity = 0.5f; // 0 = only the sharpest edges, 1 = very sensitive
   float roll; // degrees from level, from the accelerometer
   final RectF frame = new RectF();
@@ -62,7 +65,7 @@ class CinemaScopes extends View {
       int y = CinemaMath.luma(r, g, b);
       luma[i] = y;
       hr[r >> 2]++; hg[g >> 2]++; hb[b >> 2]++; hl[y >> 2]++;
-      if (y >= 250) clipped++; else if (y <= 4) crushed++;
+      if (y >= (clipLuma > 0 ? clipLuma - 3 : 250)) clipped++; else if (y <= 4) crushed++;
     }
     boolean wantMask = zebra || peaking || falseColor;
     if (wantMask) buildMask(w, h);
@@ -86,7 +89,9 @@ class CinemaScopes extends View {
 
   private void buildMask(int w, int h) {
     phase = (phase + 1) & 7;
-    int zebraLuma = (int) Math.round(zebraIre * 255 / 100.0);
+    int clip = clipLuma;
+    // In log, zebras at 90-100 are relative to the clipping code (95 = 95% of the way to clipping); lower levels stay absolute.
+    int zebraLuma = clip > 0 && zebraIre >= 90 ? clip - (int) Math.round((100 - zebraIre) / 100.0 * clip) - 2 : (int) Math.round(zebraIre * 255 / 100.0);
     // Peaking threshold: gradient magnitude, relative to the frame's own contrast so it works in low light too.
     long sum = 0; int count = 0;
     for (int y = 1; y < h - 1; y += 2) for (int x = 1; x < w - 1; x += 2) { int i = y * w + x; sum += Math.abs(luma[i + 1] - luma[i - 1]) + Math.abs(luma[i + w] - luma[i - w]); count++; }
@@ -96,7 +101,7 @@ class CinemaScopes extends View {
       for (int x = 0; x < w; x++) {
         int i = y * w + x, v = luma[i], out = 0;
         if (falseColor) {
-          int fc = CinemaMath.falseColor(CinemaMath.ire(v));
+          int fc = clip > 0 && v >= clip - 3 ? 0xffe5322d : CinemaMath.falseColor(CinemaMath.ire(v)); // log: red where it really clips
           out = fc != 0 ? fc : 0xff000000 | (v << 16) | (v << 8) | v;
         }
         if (zebra && v >= zebraLuma && (((x + y + phase) >> 2) & 1) == 0) out = 0xe6ffffff;

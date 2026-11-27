@@ -235,6 +235,25 @@ final class CinemaMath {
     return weight == 0 ? LOG_AE_TARGET : Math.exp(sum / weight);
   }
 
+  /** Fraction of a frame's (subsampled) pixels at or above an 8-bit luma: the clipped share in the log modes. */
+  static double clippedFraction(int[] argb, int w, int h, int clipLuma) {
+    int step = Math.max(1, Math.min(w, h) / 90), n = 0, c = 0;
+    for (int y = 0; y < h; y += step)
+      for (int x = 0; x < w; x += step) {
+        int p = argb[y * w + x];
+        if (luma((p >> 16) & 255, (p >> 8) & 255, p & 255) >= clipLuma) c++;
+        n++;
+      }
+    return n == 0 ? 0 : c / (double) n;
+  }
+
+  /** Highlight protection for log auto exposure: limits the correction when part of the picture clips. */
+  static double protectHighlights(double stops, double clipped) {
+    if (clipped > 0.08) return Math.min(stops, -0.6);
+    if (clipped > 0.02) return Math.min(stops, -0.25);
+    return stops;
+  }
+
   /** Exposure change in stops to bring a metered value to the target: damped, with a small dead band, at most 3 stops. */
   static double logAeCorrection(double metered, double target) {
     double stops = Math.log(target / Math.max(1e-4, metered)) / Math.log(2);

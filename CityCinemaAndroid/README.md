@@ -1,4 +1,4 @@
-# City Cinema 1.7
+# City Cinema 1.8
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -56,6 +56,8 @@ no third-party libraries.
 - It holds your shutter angle (180° by default) and moves ISO. Above ISO 3200 it lengthens the shutter up to 360° before adding more gain.
 - With Anti-flicker set to 50/60 Hz it picks the nearest flicker-free angle, e.g. 172.8° at 24 fps under 50 Hz light.
 - EV compensation and AE lock still work.
+- **Highlight protection:** when more than 2% of the picture clips it pulls exposure down by at least a quarter stop, and by at least 0.6 stop above 8%.
+- **Log-aware monitoring:** in log the picture clips well below white (S-Log3 with 2 stops of headroom clips at code ~0.75). Zebras at 90–100, false-colour red and the histogram's clip % trigger at that code, not at 95 IRE.
 
 Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra) meter *after* the log curve, read the lifted shadows as brightness and run away to about 6 stops under (ISO 50, 18°). Phones without manual exposure keep the phone's auto exposure.
 

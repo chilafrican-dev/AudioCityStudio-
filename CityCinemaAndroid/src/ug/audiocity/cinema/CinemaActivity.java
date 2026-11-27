@@ -933,6 +933,11 @@ public class CinemaActivity extends Activity {
    * ISO and shutter manually. Phone auto exposure can't be trusted there: some phones (e.g. Galaxy S20 Ultra) meter
    * after the log curve, see the lifted shadows as brightness and run away to ~6 stops under.
    */
+  /** Tells the scopes where the picture clips in the current log (0 when not in log). */
+  private void updateClipLuma() {
+    scopes.clipLuma = cityLogActive() ? (int) Math.floor(255 * CinemaMath.toneValue(CinemaMath.LOOKS[lookIndex], 1, logHeadroom())) : 0;
+  }
+
   private boolean ownLogAe() {
     return aeAuto && lens != null && lens.manualSensor && !curveIgnored && cityLogActive() && !highSpeedSession && !maxResSession;
   }
@@ -953,7 +958,8 @@ public class CinemaActivity extends Activity {
     frame.getPixels(px, 0, w, 0, 0, w, h);
     double metered = CinemaMath.meterLog(px, w, h, CinemaMath.LOOKS[lookIndex]);
     double target = CinemaMath.LOG_AE_TARGET * Math.pow(2, evIndex * lens.evStep.doubleValue()); // EV compensation still works
-    double stops = CinemaMath.logAeCorrection(metered, target);
+    int clipLuma = (int) Math.floor(255 * CinemaMath.toneValue(CinemaMath.LOOKS[lookIndex], 1, logHeadroom())) - 3;
+    double stops = CinemaMath.protectHighlights(CinemaMath.logAeCorrection(metered, target), CinemaMath.clippedFraction(px, w, h, clipLuma));
     if (stops == 0) return;
     double isoSeconds = logAeIso * (logAeExposure / 1e9) * Math.pow(2, stops);
     int isoMax = lens.isoRange.getUpper();
@@ -1774,6 +1780,7 @@ public class CinemaActivity extends Activity {
     fpsCell.set(CinemaMath.fpsLabel(fps) + speed, false);
     lookCell.set(rawMode ? "RAW" : curveIgnored && !tenBit && !"Rec.709".equals(CinemaMath.LOOKS[lookIndex]) ? "Phone look" : proresMode ? CinemaMath.LOOKS[lookIndex] : tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
     recButton.recording = recording; recButton.invalidate();
+    updateClipLuma();
     for (Toggle t : toggles) t.sync();
     scopes.invalidate();
     if (openPanel != null) buildPanel(openPanel);
