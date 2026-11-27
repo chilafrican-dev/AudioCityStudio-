@@ -61,12 +61,13 @@ public final class MainActivity extends Activity {
         super.onCreate(saved);
         // Keeps the vault out of screenshots and the recent-apps preview.
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        getWindow().setStatusBarColor(Ui.BG);
-        getWindow().setNavigationBarColor(Ui.BG);
+        getWindow().setStatusBarColor(0xFF000000);
+        getWindow().setNavigationBarColor(0xFF000000);
         store = new VaultStore(this);
+        Wallpaper.ensureLoaded(this);
 
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Ui.BG);
+        root.setBackground(Wallpaper.drawable(true, 0x99000000)); // frosted home wallpaper, darkened
         root.addView(buildLockView());
         root.addView(buildVaultView());
         setContentView(root);

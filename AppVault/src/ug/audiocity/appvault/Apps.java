@@ -31,7 +31,10 @@ final class Apps {
         final String pkg;
         final String label;
         final Drawable icon;
-        App(String pkg, String label, Drawable icon) { this.pkg = pkg; this.label = label; this.icon = icon; }
+        /** ApplicationInfo.CATEGORY_*, used to group apps in the App Library. */
+        final int category;
+        App(String pkg, String label, Drawable icon) { this(pkg, label, icon, -1); }
+        App(String pkg, String label, Drawable icon, int category) { this.pkg = pkg; this.label = label; this.icon = icon; this.category = category; }
     }
 
     private Apps() {}
@@ -44,7 +47,7 @@ final class Apps {
         for (ResolveInfo ri : pm.queryIntentActivities(main, 0)) {
             String pkg = ri.activityInfo.packageName;
             if (pkg.equals(context.getPackageName()) || byPkg.containsKey(pkg)) continue;
-            byPkg.put(pkg, new App(pkg, String.valueOf(ri.loadLabel(pm)), rounded(context.getResources(), ri.loadIcon(pm), false)));
+            byPkg.put(pkg, new App(pkg, String.valueOf(ri.loadLabel(pm)), rounded(context.getResources(), ri.loadIcon(pm), false), ri.activityInfo.applicationInfo.category));
         }
         List<App> out = new ArrayList<>(byPkg.values());
         Collections.sort(out, (a, b) -> a.label.compareToIgnoreCase(b.label));
