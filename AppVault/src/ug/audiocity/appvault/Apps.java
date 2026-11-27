@@ -7,7 +7,16 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.content.res.Resources;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Path;
+import android.graphics.drawable.AdaptiveIconDrawable;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
+import android.provider.MediaStore;
+import android.provider.Telephony;
 import android.provider.Settings;
 import android.text.TextUtils;
 import java.util.ArrayList;
@@ -35,11 +44,69 @@ final class Apps {
         for (ResolveInfo ri : pm.queryIntentActivities(main, 0)) {
             String pkg = ri.activityInfo.packageName;
             if (pkg.equals(context.getPackageName()) || byPkg.containsKey(pkg)) continue;
-            byPkg.put(pkg, new App(pkg, String.valueOf(ri.loadLabel(pm)), ri.loadIcon(pm)));
+            byPkg.put(pkg, new App(pkg, String.valueOf(ri.loadLabel(pm)), rounded(context.getResources(), ri.loadIcon(pm), false)));
         }
         List<App> out = new ArrayList<>(byPkg.values());
         Collections.sort(out, (a, b) -> a.label.compareToIgnoreCase(b.label));
         return out;
+    }
+
+    /** Pixel size icons are drawn at: sharp at 60dp on high-density screens without using much memory. */
+    private static final int ICON_PX = 168;
+
+    /**
+     * Draws an icon as a rounded square, the same shape for every app. Adaptive icons fill the shape;
+     * older icons sit on a white tile. fullBleed draws a square icon edge to edge (Nico Pan Vault's own).
+     */
+    static Drawable rounded(Resources res, Drawable icon, boolean fullBleed) {
+        int px = ICON_PX;
+        Bitmap bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Path clip = new Path();
+        float r = px * 0.225f;
+        clip.addRoundRect(0, 0, px, px, r, r, Path.Direction.CW);
+        c.clipPath(clip);
+        if (icon instanceof AdaptiveIconDrawable) {
+            // Adaptive layers are 108 units with the middle 72 visible: spread them a quarter past each edge.
+            AdaptiveIconDrawable a = (AdaptiveIconDrawable) icon;
+            int pad = px / 4;
+            for (Drawable layer : new Drawable[]{a.getBackground(), a.getForeground()}) {
+                if (layer == null) continue;
+                layer.setBounds(-pad, -pad, px + pad, px + pad);
+                layer.draw(c);
+            }
+        } else if (fullBleed) {
+            icon.setBounds(0, 0, px, px);
+            icon.draw(c);
+        } else {
+            c.drawColor(0xFFFFFFFF);
+            int in = Math.round(px * 0.14f);
+            icon.setBounds(in, in, px - in, px - in);
+            icon.draw(c);
+        }
+        return new BitmapDrawable(res, bmp);
+    }
+
+    /** The phone's default dialer, messages, browser and camera apps, for the first dock. */
+    static List<String> defaultDock(Context context) {
+        PackageManager pm = context.getPackageManager();
+        List<String> out = new ArrayList<>();
+        addIfLaunchable(context, out, resolvePkg(pm, new Intent(Intent.ACTION_DIAL)));
+        addIfLaunchable(context, out, Telephony.Sms.getDefaultSmsPackage(context));
+        addIfLaunchable(context, out, resolvePkg(pm, new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com"))));
+        addIfLaunchable(context, out, resolvePkg(pm, new Intent(MediaStore.ACTION_IMAGE_CAPTURE)));
+        return out;
+    }
+
+    private static String resolvePkg(PackageManager pm, Intent i) {
+        ResolveInfo ri = pm.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY);
+        return ri == null || ri.activityInfo == null ? null : ri.activityInfo.packageName;
+    }
+
+    private static void addIfLaunchable(Context context, List<String> out, String pkg) {
+        // "android" is the app chooser, shown when no default is set.
+        if (pkg == null || pkg.equals("android") || out.contains(pkg)) return;
+        if (context.getPackageManager().getLaunchIntentForPackage(pkg) != null) out.add(pkg);
     }
 
     /** The vault's apps in the user's order, skipping any that were uninstalled. */
@@ -68,11 +135,14 @@ final class Apps {
         activity.startActivity(new Intent(android.provider.Settings.ACTION_HOME_SETTINGS));
     }
 
-    static boolean open(Context context, String pkg) {
+    static boolean open(Context context, String pkg) { return open(context, pkg, null); }
+
+    /** Opens an app; options can carry a launch animation (e.g. zooming out of its icon). */
+    static boolean open(Context context, String pkg, android.os.Bundle options) {
         Intent i = context.getPackageManager().getLaunchIntentForPackage(pkg);
         if (i == null) return false;
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        context.startActivity(i);
+        context.startActivity(i, options);
         return true;
     }
 

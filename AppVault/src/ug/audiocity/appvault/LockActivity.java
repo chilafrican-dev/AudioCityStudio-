@@ -52,7 +52,7 @@ public final class LockActivity extends Activity {
         title.setGravity(Gravity.CENTER);
         title.setPadding(0, Ui.dp(this, 18), 0, Ui.dp(this, 6));
         root.addView(title);
-        status = Ui.text(this, "It's in your AppVault", 15, Ui.MUTED, false);
+        status = Ui.text(this, "It's in your Nico Pan Vault", 15, Ui.MUTED, false);
         status.setGravity(Gravity.CENTER);
         status.setPadding(0, 0, 0, Ui.dp(this, 28));
         root.addView(status);

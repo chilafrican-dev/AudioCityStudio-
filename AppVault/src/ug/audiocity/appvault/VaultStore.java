@@ -40,6 +40,17 @@ final class VaultStore {
         setApps(list);
     }
 
+    /** Home screen dock (up to 4 package names), or null until it has been set up. */
+    List<String> dock() {
+        if (!prefs.contains("dock")) return null;
+        String raw = prefs.getString("dock", "");
+        return raw.isEmpty() ? new ArrayList<>() : new ArrayList<>(new LinkedHashSet<>(Arrays.asList(raw.split("\n"))));
+    }
+
+    void setDock(List<String> pkgs) {
+        prefs.edit().putString("dock", String.join("\n", new LinkedHashSet<>(pkgs))).apply();
+    }
+
     long graceMs() { return prefs.getLong("grace", 30_000); }
 
     void setGraceMs(long ms) { prefs.edit().putLong("grace", ms).apply(); }

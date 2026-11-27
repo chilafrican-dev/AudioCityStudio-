@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Builds AppVault.apk with the Android SDK command-line tools only (no Gradle), like Audio City Studio.
-# Usage: ./build.sh            -> AppVault.apk (standard: no App Guard, installs past Play Protect)
-#        ./build.sh guard      -> AppVault-Guard.apk (adds the App Guard Accessibility service)
+# Builds Nico Pan Vault (NicoPanVault.apk) with the Android SDK command-line tools only (no Gradle), like Audio City Studio.
+# Usage: ./build.sh            -> NicoPanVault.apk (standard: no App Guard, installs past Play Protect)
+#        ./build.sh guard      -> NicoPanVault-Guard.apk (adds the App Guard Accessibility service)
 set -euo pipefail
 cd "$(dirname "$0")"
 variant="${1:-standard}"
 case "$variant" in
-  standard) out=AppVault.apk ;;
-  guard) out=AppVault-Guard.apk ;;
+  standard) out=NicoPanVault.apk ;;
+  guard) out=NicoPanVault-Guard.apk ;;
   *) echo "Unknown variant '$variant' (use: standard or guard)" >&2; exit 1 ;;
 esac
 : "${ANDROID_SDK_ROOT:?Set ANDROID_SDK_ROOT to your Android SDK directory}"
@@ -28,7 +28,7 @@ cp build/base.apk build/unsigned.apk
 (cd build/dex && zip -q ../unsigned.apk classes*.dex)
 "$tools/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
 if [ ! -f build/development.keystore ]; then
-keytool -genkeypair -keystore build/development.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=AppVault Development' >/dev/null 2>&1
+keytool -genkeypair -keystore build/development.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Nico Pan Vault Development' >/dev/null 2>&1
 fi
 "$tools/apksigner" sign --ks build/development.keystore --ks-pass pass:android --key-pass pass:android --out "$out" build/aligned.apk
 "$tools/apksigner" verify --verbose "$out"

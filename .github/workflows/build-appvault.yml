@@ -1,4 +1,4 @@
-name: Build AppVault APK
+name: Build Nico Pan Vault APK
 
 on:
   push:
@@ -47,20 +47,20 @@ jobs:
 
       - name: Check the standard APK has no Accessibility service (Play Protect blocks those)
         run: |
-          dump="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml AppVault.apk)"
-          if grep -q BIND_ACCESSIBILITY_SERVICE <<<"$dump"; then echo "::error::AppVault.apk declares an Accessibility service"; exit 1; fi
-          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml AppVault-Guard.apk | grep -q BIND_ACCESSIBILITY_SERVICE
+          dump="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml NicoPanVault.apk)"
+          if grep -q BIND_ACCESSIBILITY_SERVICE <<<"$dump"; then echo "::error::NicoPanVault.apk declares an Accessibility service"; exit 1; fi
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml NicoPanVault-Guard.apk | grep -q BIND_ACCESSIBILITY_SERVICE
 
       - name: Upload standard APK
         uses: actions/upload-artifact@v4
         with:
-          name: AppVault-apk
-          path: AppVault/AppVault.apk
+          name: NicoPanVault-apk
+          path: AppVault/NicoPanVault.apk
           retention-days: 30
 
       - name: Upload App Guard APK
         uses: actions/upload-artifact@v4
         with:
-          name: AppVault-Guard-apk
-          path: AppVault/AppVault-Guard.apk
+          name: NicoPanVault-Guard-apk
+          path: AppVault/NicoPanVault-Guard.apk
           retention-days: 30

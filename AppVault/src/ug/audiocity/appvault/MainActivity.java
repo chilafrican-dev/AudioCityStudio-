@@ -110,7 +110,7 @@ public final class MainActivity extends Activity {
         icon.setContentDescription(null);
         lockView.addView(icon, new LinearLayout.LayoutParams(Ui.dp(this, 112), Ui.dp(this, 112)));
 
-        TextView title = Ui.text(this, "AppVault", 28, Ui.TEXT, true);
+        TextView title = Ui.text(this, "Nico Pan Vault", 28, Ui.TEXT, true);
         title.setGravity(Gravity.CENTER);
         title.setPadding(0, Ui.dp(this, 16), 0, Ui.dp(this, 6));
         lockView.addView(title);
@@ -220,7 +220,7 @@ public final class MainActivity extends Activity {
     /** Points the user at whatever still lets vault apps be seen or opened outside the vault. */
     private void updateBanner() {
         if (!Apps.isDefaultHome(this)) {
-            guardBanner.setText("These apps still show on your home screen. Tap to hide them by making AppVault your home screen.");
+            guardBanner.setText("These apps still show on your home screen. Tap to hide them by making Nico Pan Vault your home screen.");
             guardBanner.setOnClickListener(v -> explainHiding());
             guardBanner.setVisibility(View.VISIBLE);
         } else if (Apps.guardAvailable(this) && !Apps.guardEnabled(this)) {
@@ -241,12 +241,12 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Hide vault apps")
                 .setMessage("Android doesn't let one app hide another app's icon from your phone's home screen. "
-                        + "So AppVault can be your home screen instead: it shows all your apps except the ones in the vault, "
+                        + "So Nico Pan Vault can be your home screen instead: it shows all your apps except the ones in the vault, "
                         + "and those only appear here after your fingerprint.\n\n"
-                        + "On the next screen choose AppVault (if asked, choose \"Always\"). "
+                        + "On the next screen choose Nico Pan Vault (if asked, choose \"Always\"). "
                         + "Your current home screen's layout and widgets are kept, and you can switch back any time in Settings > Apps > Choose default apps > Home app.\n\n"
                         + "Vault apps can still be found in Settings > Apps and in the Play Store.")
-                .setPositiveButton("Make AppVault my home screen", (d, w) -> Apps.requestDefaultHome(this))
+                .setPositiveButton("Make Nico Pan Vault my home screen", (d, w) -> Apps.requestDefaultHome(this))
                 .setNegativeButton("Not now", null)
                 .show();
     }
@@ -446,9 +446,9 @@ public final class MainActivity extends Activity {
         if (!Apps.guardAvailable(this)) {
             new AlertDialog.Builder(this)
                     .setTitle("App Guard")
-                    .setMessage("This version of AppVault doesn't include App Guard, so apps in your vault still open normally from the home screen. "
+                    .setMessage("This version of Nico Pan Vault doesn't include App Guard, so apps in your vault still open normally from the home screen. "
                             + "App Guard needs Android's Accessibility access, and Google Play Protect blocks apps that ask for it unless they come from the Play Store.\n\n"
-                            + "The separate AppVault-Guard download includes it.")
+                            + "The separate Nico Pan Vault Guard download includes it.")
                     .setPositiveButton("OK", null)
                     .show();
             return;
@@ -458,8 +458,8 @@ public final class MainActivity extends Activity {
                 .setMessage("Without App Guard, the apps in your vault can still be opened from the home screen. "
                         + "App Guard watches which app comes on screen, and when it's one of your vault apps it asks for your fingerprint first. "
                         + "It does not read what's inside apps and sends nothing anywhere.\n\n"
-                        + "On the next screen, open \"Installed apps\" (or \"Downloaded apps\"), choose AppVault App Guard and switch it on.\n\n"
-                        + "If Android says the setting is restricted: open Settings > Apps > AppVault, tap ⋮ at the top right, choose \"Allow restricted settings\", then come back and switch it on.")
+                        + "On the next screen, open \"Installed apps\" (or \"Downloaded apps\"), choose Nico Pan Vault App Guard and switch it on.\n\n"
+                        + "If Android says the setting is restricted: open Settings > Apps > Nico Pan Vault, tap ⋮ at the top right, choose \"Allow restricted settings\", then come back and switch it on.")
                 .setPositiveButton("Open Accessibility settings", (d, w) -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)))
                 .setNegativeButton("Not now", null)
                 .show();

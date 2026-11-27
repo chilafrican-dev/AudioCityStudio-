@@ -47,7 +47,7 @@ final class Biometrics {
 
     static CancellationSignal prompt(Activity activity, VaultStore store, String subtitle, Result result) {
         BiometricPrompt.Builder b = new BiometricPrompt.Builder(activity)
-                .setTitle("Unlock AppVault")
+                .setTitle("Unlock Nico Pan Vault")
                 .setSubtitle(subtitle)
                 .setConfirmationRequired(false)
                 .setAllowedAuthenticators(authenticators(store));
