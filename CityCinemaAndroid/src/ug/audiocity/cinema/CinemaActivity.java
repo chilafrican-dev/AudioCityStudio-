@@ -1141,6 +1141,11 @@ public class CinemaActivity extends Activity {
   private void toggleRecord() {
     if (cameraHandler == null || session == null) { message("Camera not ready."); return; }
     if (recordBusy) return;
+    if (!recording && (!aeAuto || !awbAuto)) { // manual settings are easy to leave on: say what this take will use
+      String what = (!aeAuto ? "exposure MANUAL (" + (isoCell != null ? "ISO " + (iso >> logHeadroom()) + ", " : "") + (shutterCell != null ? shutterCell.value.getText() : "") + ")" : "")
+          + (!aeAuto && !awbAuto ? " · " : "") + (!awbAuto ? "white balance MANUAL (" + kelvin + "K)" : "");
+      message("Recording with " + what + ". Tap ISO / SHUTTER / WB → AUTO to let the camera set it.");
+    }
     recordBusy = true;
     cameraHandler.post(() -> {
       try {
@@ -1837,14 +1842,14 @@ public class CinemaActivity extends Activity {
     topWb = mono("", 13, TEXT); topCodec = mono("", 13, TEXT); topBitrate = mono("", 13, TEXT);
     lensView.setTextSize(13);
     LinearLayout cells = row(); cells.setGravity(Gravity.CENTER_VERTICAL);
-    cells.addView(info("LENS", lensView, v -> chooseLens()), wrap(dp(10)));
-    cells.addView(info("RES", topRes, v -> togglePanel("format")), wrap(dp(10)));
-    cells.addView(info("FPS", topFps, v -> togglePanel("format")), wrap(dp(10)));
-    cells.addView(info("SHUTTER", topShutter, v -> togglePanel("shutter")), wrap(dp(10)));
-    cells.addView(info("ISO", topIso, v -> togglePanel("iso")), wrap(dp(10)));
-    cells.addView(info("WB", topWb, v -> togglePanel("wb")), wrap(dp(10)));
-    cells.addView(info("CODEC", topCodec, v -> showSettings()), wrap(dp(10)));
-    cells.addView(info("BITRATE", topBitrate, v -> showSettings()), wrap(dp(10)));
+    cells.addView(info("LENS", lensView, v -> chooseLens()), wrap(dp(6)));
+    cells.addView(info("RES", topRes, v -> togglePanel("format")), wrap(dp(6)));
+    cells.addView(info("FPS", topFps, v -> togglePanel("format")), wrap(dp(6)));
+    cells.addView(info("SHUTTER", topShutter, v -> togglePanel("shutter")), wrap(dp(6)));
+    cells.addView(info("ISO", topIso, v -> togglePanel("iso")), wrap(dp(6)));
+    cells.addView(info("WB", topWb, v -> togglePanel("wb")), wrap(dp(6)));
+    cells.addView(info("CODEC", topCodec, v -> showSettings()), wrap(dp(6)));
+    cells.addView(info("BITRATE", topBitrate, v -> showSettings()), wrap(dp(14)));
     cells.addView(info("TIME CODE", tcView, v -> resetTimecode()), wrap(0));
     android.widget.HorizontalScrollView cs = new android.widget.HorizontalScrollView(this); cs.setHorizontalScrollBarEnabled(false); cs.addView(cells);
     topBar.addView(cs, new LinearLayout.LayoutParams(0, -1, 1));
@@ -2206,7 +2211,7 @@ public class CinemaActivity extends Activity {
     LinearLayout c = chips();
     addChip(c, "AUTO", false, () -> setAeAuto(true));
     for (int v : new int[] {100, 200, 400, 800, 1600, 3200}) if (v >= lens.isoRange.getLower() && v <= lens.isoRange.getUpper() << eiShift) addChip(c, String.valueOf(v), iso == v, () -> { iso = v; applyRepeating(); refreshUi(); });
-    addSlider(stops.size() - 1, CinemaMath.nearest(stops, iso), p -> { iso = stops.get(p); applyRepeating(); updatePanelHeader(String.valueOf(iso)); isoCell.set(String.valueOf(iso), false); }, true);
+    addSlider(stops.size() - 1, CinemaMath.nearest(stops, iso), p -> { iso = stops.get(p); applyRepeating(); updatePanelHeader(String.valueOf(iso)); refreshUi(); }, true);
   }
 
   private void updatePanelHeader(String value) {
