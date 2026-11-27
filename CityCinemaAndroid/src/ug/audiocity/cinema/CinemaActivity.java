@@ -609,7 +609,7 @@ public class CinemaActivity extends Activity {
       if (!sizes.contains(pick)) pick = sizes.get(0);
       videoSize = pick;
     }
-    iso = Math.max(lens.isoRange.getLower(), Math.min(lens.isoRange.getUpper() << CinemaMath.LOG_HEADROOM, iso)); // EI may exceed sensor ISO in City Log
+    iso = Math.max(lens.isoRange.getLower(), Math.min(lens.isoRange.getUpper() << CinemaMath.LOG_HEADROOM, iso)); // EI may exceed sensor ISO in the log modes
     zoom = Math.max(lens.minZoom, Math.min(lens.maxZoom, zoom));
     if (!lens.manualSensor) aeAuto = true;
     if (!lens.manualPost && !lens.manualSensor) awbAuto = true;
@@ -810,7 +810,7 @@ public class CinemaActivity extends Activity {
       b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
       Range<Integer> range = fpsRange(nominal);
       if (range != null) b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range);
-      int ev = evIndex - (int) Math.round(logHeadroom() / lens.evStep.doubleValue()); // City Log: expose under the EI
+      int ev = evIndex - (int) Math.round(logHeadroom() / lens.evStep.doubleValue()); // log modes: expose under the EI
       b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, Math.max(lens.evRange.getLower(), Math.min(lens.evRange.getUpper(), ev)));
       b.set(CaptureRequest.CONTROL_AE_LOCK, aeLock);
     } else {
@@ -879,16 +879,17 @@ public class CinemaActivity extends Activity {
     return fixed;
   }
 
-  /** True when City Log is in effect (a tone curve can be applied: not RAW, not HLG, and the camera allows curves). */
+  /** True when a headroom log (City Log, RED Log3G10, Sony S-Log3, BMD Film Gen 5) is in effect: a tone curve can be
+   * applied (not RAW, not HLG, not high-speed) and the camera allows custom curves. */
   private boolean cityLogActive() {
-    return lens != null && "City Log".equals(CinemaMath.LOOKS[lookIndex]) && !rawMode && !tenBit && !highSpeedSession
+    return lens != null && CinemaMath.isHeadroomLog(CinemaMath.LOOKS[lookIndex]) && !rawMode && !tenBit && !highSpeedSession
         && lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
   }
 
   /**
-   * Stops the sensor is exposed under the exposure index for City Log (0 when not in log). Limited to what the
+   * Stops the sensor is exposed under the exposure index in the log modes (0 otherwise). Limited to what the
    * camera allows: exposure compensation range in auto, minimum ISO in manual. The curve uses the same value, so
-   * 18% grey always lands on the City Log grey code.
+   * 18% grey always lands on the log's grey code.
    */
   private int logHeadroom() {
     if (!cityLogActive()) return 0;
@@ -1059,7 +1060,8 @@ public class CinemaActivity extends Activity {
       j.put("codec", tenBit ? "HEVC Main10 HLG BT.2020" : hevc ? "HEVC Main BT.709" : "H.264 High BT.709");
       j.put("bitrateTarget", targetBitrate()).put("bitrateMode", cbr ? "CBR" : "VBR").put("gop", gop == 0 ? "1s" : gop == 1 ? "0.5s" : "all-intra");
       j.put("look", CinemaMath.LOOKS[lookIndex]).put("detail", new String[] {"natural", "standard", "clean"}[detail]);
-      if (cityLogActive()) j.put("logHeadroomStops", logHeadroom()).put("exposureIndex", (aeAuto ? liveIso : iso >> logHeadroom()) << logHeadroom()).put("lut", "CityLog_to_Rec709.cube");
+      if (cityLogActive()) j.put("logHeadroomStops", logHeadroom()).put("exposureIndex", (aeAuto ? liveIso : iso >> logHeadroom()) << logHeadroom()).put("lut", lutFor(CinemaMath.LOOKS[lookIndex]))
+          .put("gradeAs", CinemaMath.LOOKS[lookIndex] + " gamma, Rec.709 primaries");
       j.put("exposure", aeAuto ? "auto" : "manual").put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()));
       j.put("shutterAngle", Math.round(CinemaMath.angleForExposure(aeAuto ? liveExposure : exposureNs(), fps) * 10) / 10.0);
       j.put("whiteBalance", awbAuto ? "auto" : kelvin + "K tint " + tint).put("focus", manualFocus ? "manual " + focusLabel(focus) : "continuous AF");
@@ -1205,11 +1207,16 @@ public class CinemaActivity extends Activity {
     ui.post(() -> { scopes.invalidate(); refreshUi(); });
   }
 
-  /** Writes the City Log grading LUTs to Documents/City Cinema/LUTs. */
+  static String lutFor(String look) { return "City Log".equals(look) ? "CityLog_to_Rec709.cube" : CinemaMath.lutName(look); }
+
+  /** Writes the grading LUTs (each log to Rec.709, City Log to linear) to Documents/City Cinema/LUTs. */
   private void exportLuts() {
     new Thread(() -> {
       try {
-        String[][] luts = {{"CityLog_to_Rec709.cube", CinemaMath.cityLogRec709Cube()}, {"CityLog_to_Linear.cube", CinemaMath.cityLogLinearCube()}};
+        List<String[]> luts = new ArrayList<>();
+        luts.add(new String[] {"CityLog_to_Rec709.cube", CinemaMath.cityLogRec709Cube()});
+        luts.add(new String[] {"CityLog_to_Linear.cube", CinemaMath.cityLogLinearCube()});
+        for (String look : new String[] {"RED Log3G10", "Sony S-Log3", "BMD Film Gen 5"}) luts.add(new String[] {CinemaMath.lutName(look), CinemaMath.logRec709Cube(look)});
         for (String[] l : luts) {
           ContentValues v = new ContentValues();
           v.put(MediaStore.MediaColumns.DISPLAY_NAME, l[0]);
@@ -1219,7 +1226,7 @@ public class CinemaActivity extends Activity {
           if (u == null) throw new IOException("couldn't create " + l[0]);
           try (OutputStream o = getContentResolver().openOutputStream(u)) { if (o != null) o.write(l[1].getBytes(StandardCharsets.US_ASCII)); }
         }
-        message("LUTs saved to Documents/City Cinema/LUTs: CityLog_to_Rec709.cube, CityLog_to_Linear.cube");
+        message("LUTs saved to Documents/City Cinema/LUTs: City Log, RED Log3G10, Sony S-Log3 and BMD Film Gen 5 to Rec.709, plus City Log to linear");
       } catch (IOException | RuntimeException e) { message("Couldn't save LUTs: " + e.getMessage()); }
     }, "lut-export").start();
   }
@@ -1259,7 +1266,7 @@ public class CinemaActivity extends Activity {
           .put("startTimecode", startTimecodeFor(takeStartWall)).put("device", Build.MANUFACTURER + " " + Build.MODEL).put("lens", lens.label)
           .put("resolution", proresSize.getWidth() + "x" + proresSize.getHeight()).put("fps", CinemaMath.fpsLabel(fps))
           .put("colour", "BT.709 primaries and transfer, BT.601 matrix (camera YCbCr), limited range")
-          .put("look", CinemaMath.LOOKS[lookIndex]).put("logHeadroomStops", logHeadroom()).put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()))
+          .put("look", CinemaMath.LOOKS[lookIndex]).put("logHeadroomStops", logHeadroom()).put("lut", cityLogActive() ? lutFor(CinemaMath.LOOKS[lookIndex]) : "none").put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()))
           .put("whiteBalance", awbAuto ? "auto" : kelvin + "K tint " + tint)
           .put("frameSlots", slots).put("framesEncoded", encodedFrames).put("droppedFramesFilled", drops).put("errors", errors)
           .put("durationSeconds", durationNs / 1e9).put("encoderThreads", prores.encoderThreads())
@@ -1823,7 +1830,7 @@ public class CinemaActivity extends Activity {
   }
 
   private void isoPanel() {
-    int eiShift = cityLogActive() ? CinemaMath.LOG_HEADROOM : 0; // in City Log the dial sets the exposure index
+    int eiShift = cityLogActive() ? CinemaMath.LOG_HEADROOM : 0; // in the log modes the dial sets the exposure index
     List<Integer> stops = CinemaMath.isoStops(lens.isoRange.getLower(), lens.isoRange.getUpper() << eiShift);
     if (aeAuto) {
       double step = lens.evStep.doubleValue();
@@ -1836,7 +1843,7 @@ public class CinemaActivity extends Activity {
       addSlider(hi - lo, evIndex - lo, p -> { evIndex = lo + p; applyRepeating(); updatePanelHeader(String.format(Locale.US, "EV %+.1f", evIndex * step)); }, hi > lo);
       return;
     }
-    panelHeader(eiShift > 0 ? "EXPOSURE INDEX (City Log · sensor ISO " + Math.max(lens.isoRange.getLower(), iso >> logHeadroom()) + ")" : "ISO", String.valueOf(iso));
+    panelHeader(eiShift > 0 ? "EXPOSURE INDEX (" + CinemaMath.LOOKS[lookIndex] + " · sensor ISO " + Math.max(lens.isoRange.getLower(), iso >> logHeadroom()) + ")" : "ISO", String.valueOf(iso));
     LinearLayout c = chips();
     addChip(c, "AUTO", false, () -> setAeAuto(true));
     for (int v : new int[] {100, 200, 400, 800, 1600, 3200}) if (v >= lens.isoRange.getLower() && v <= lens.isoRange.getUpper() << eiShift) addChip(c, String.valueOf(v), iso == v, () -> { iso = v; applyRepeating(); refreshUi(); });
@@ -1926,7 +1933,7 @@ public class CinemaActivity extends Activity {
   private void lookPanel() {
     boolean curves = lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
     panelHeader("LOOK", rawMode ? CinemaMath.LOOKS[lookIndex] + " · monitoring only: RAW frames are recorded ungraded"
-        : cityLogActive() ? "City Log · sensor exposed " + logHeadroom() + " stops under the EI for highlight range · grade with the City Log LUT (Menu)" : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curves ? "" : "  · this camera doesn't allow custom tone curves"));
+        : cityLogActive() ? CinemaMath.LOOKS[lookIndex] + " · sensor exposed " + logHeadroom() + " stops under the EI · grade as " + CinemaMath.LOOKS[lookIndex] + " gamma with Rec.709 primaries, or use " + lutFor(CinemaMath.LOOKS[lookIndex]) + " (Menu)" : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curves ? "" : "  · this camera doesn't allow custom tone curves"));
     LinearLayout c = chips();
     for (int i = 0; i < CinemaMath.LOOKS.length; i++) { final int k = i; addChip(c, CinemaMath.LOOKS[i], lookIndex == i, () -> { lookIndex = k; applyRepeating(); refreshUi(); }); }
     LinearLayout d = chips();
@@ -2017,7 +2024,7 @@ public class CinemaActivity extends Activity {
       "Anamorphic desqueeze: " + CinemaMath.DESQUEEZE_NAMES[prefs.getInt("desqueeze", 0)],
       "Center marker: " + (scopes.center ? "On" : "Off"),
       "Lens: " + lens.label,
-      "Export City Log LUTs (.cube)",
+      "Export log LUTs (.cube): City Log, RED, Sony, Blackmagic",
       "ProRes speed test (can this phone record 4K ProRes?)",
       "About this camera",
     };

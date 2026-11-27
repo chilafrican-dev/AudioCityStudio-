@@ -22,7 +22,7 @@ mkdir -p build/raw-check && rm -f build/raw-check/*
 java -cp "build/test/tests:build/test/classes:$ANDROID_JAR" ug.audiocity.cinema.CinemaTests build/raw-check | tail -n 1
 java -Djava.library.path=build/host -cp "build/test/tests:build/test/classes:$ANDROID_JAR" ug.audiocity.cinema.RawHostTest build/raw-check
 "$python" -I tools/verify_dng.py build/raw-check
-"$python" -I tools/verify_lut.py "$ffmpeg" build/raw-check/CityLog_to_Rec709.cube
+"$python" -I tools/verify_lut.py "$ffmpeg" build/raw-check
 
 # NEON check: the ARM NEON build must produce byte-identical frames to the scalar build (same fingerprints).
 # Runs when an ARM64 compiler and qemu-aarch64 are available. Uses the NDK's clang (the compiler that builds the

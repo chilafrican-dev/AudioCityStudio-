@@ -1,4 +1,4 @@
-# City Cinema 1.4
+# City Cinema 1.5
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -27,8 +27,13 @@ no third-party libraries.
   - The sensor is exposed 2 stops under the EI you set: exposure compensation in auto, sensor ISO = EI ÷ 4 in manual.
   - The curve lifts the image back, so the phone's clip point lands 2 stops higher (code ~0.76).
   - The ISO dial shows `EI`. The headroom is reduced automatically where the camera's ISO or exposure-compensation range can't go 2 stops lower.
-- **Grading LUTs:** Menu → *Export City Log LUTs* saves `CityLog_to_Rec709.cube` (33³, soft highlight roll-off) and `CityLog_to_Linear.cube` (1D) to `Documents/City Cinema/LUTs` for Resolve, Premiere, Final Cut or a monitor. CI applies the LUT with FFmpeg and checks it.
-- Other looks: Film, Rec.709, Vivid, Flat, and Flat Log (the earlier flat curve, without EI headroom).
+- **Grading LUTs:** Menu → *Export log LUTs* saves `CityLog_to_Rec709.cube` (33³, soft highlight roll-off) and `CityLog_to_Linear.cube` (1D) to `Documents/City Cinema/LUTs` for Resolve, Premiere, Final Cut or a monitor. CI applies the LUT with FFmpeg and checks it.
+- **Camera logs:** **RED Log3G10**, **Sony S-Log3** and **Blackmagic Film Gen 5** are the manufacturers' published transfer functions. The tests check them against the open-source colour-science library to within 2×10⁻⁶. Each uses the same 2-stop EI headroom as City Log, so footage cuts in with the same input gamma in Resolve, Premiere or Final Cut.
+  - **Gamut:** only the curve matches. Colors stay in the phone's Rec.709 primaries, so in a Color Space Transform set the input gamma to e.g. S-Log3 and the input color space to **Rec.709**, not S-Gamut3, REDWideGamutRGB or BMD Wide Gamut.
+  - **LUTs:** Menu → *Export log LUTs* also writes `RED_Log3G10_to_Rec709.cube`, `Sony_S-Log3_to_Rec709.cube` and `BMD_Film_Gen_5_to_Rec709.cube`.
+  - *RED, Log3G10, Sony, S-Log3, Blackmagic and Blackmagic Film are trademarks of their owners. City Cinema implements their published curves for interchange and is not affiliated with or endorsed by them.*
+- **Flat Log** is a gentle flat curve without EI headroom: no change to exposure, so shadows stay as clean as Rec.709, with less highlight range than the logs above.
+- Other looks: Film, Rec.709, Vivid, Flat.
 - Detail: Natural (sharpening off), Standard, or Clean (strong noise reduction).
 - **10-bit HDR HLG** (HEVC Main10, BT.2020). Needs Android 13+, a 10-bit camera and a Main10 encoder.
 

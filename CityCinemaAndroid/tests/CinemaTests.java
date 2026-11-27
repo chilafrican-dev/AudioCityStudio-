@@ -107,6 +107,7 @@ public class CinemaTests {
     near(CinemaMath.acLog(0.18), 0.42, 0.03, "Flat Log puts 18% grey near 42%");
     near(CinemaMath.acLog(0), 0.0625, 1e-9, "Flat Log legal black");
     cityLog();
+    cameraLogs();
     check(CinemaMath.acLog(0.02) > CinemaMath.rec709(0.02), "log lifts shadows above Rec.709");
     check(CinemaMath.acLog(0.9) < CinemaMath.rec709(0.9), "log holds highlights below Rec.709");
     near(CinemaMath.rec709(1), 1, 1e-3, "Rec.709 white");
@@ -258,6 +259,8 @@ public class CinemaTests {
   static void writeSampleDngs(String dir) throws IOException {
     for (int bits : new int[] {12, 16}) try (FileOutputStream o = new FileOutputStream(dir + "/sample" + bits + ".dng")) { o.write(sampleFile(bits)); }
     try (FileOutputStream o = new FileOutputStream(dir + "/CityLog_to_Rec709.cube")) { o.write(CinemaMath.cityLogRec709Cube().getBytes("US-ASCII")); }
+    for (String look : new String[] {"RED Log3G10", "Sony S-Log3", "BMD Film Gen 5"})
+      try (FileOutputStream o = new FileOutputStream(dir + "/" + CinemaMath.lutName(look))) { o.write(CinemaMath.logRec709Cube(look).getBytes("US-ASCII")); }
   }
 
   /** Audio that starts before frame 0 is trimmed; a gap is filled with silence, so sound stays in sync. */
@@ -305,5 +308,30 @@ public class CinemaTests {
     check(Double.parseDouble(e[0]) > 0.3 && e[1].equals(e[2]) && Double.parseDouble(e[1]) == 0, "cube: red varies fastest");
     String lin = CinemaMath.cityLogLinearCube();
     check(lin.contains("LUT_1D_SIZE 4096") && lin.split("\n").length == 4096 + 5, "1D cube header and size");
+  }
+
+  /** RED Log3G10, Sony S-Log3, Blackmagic Film Gen 5 against reference values from colour-science 0.4.7. */
+  static void cameraLogs() {
+    double[] x = {0, 0.005, 0.01125, 0.18, 1, 4, 16};
+    double[][] ref = {
+      {0.092864, 0.125974, 0.167361, 0.410557, 0.596027, 0.749099, 0.902790},   // S-Log3
+      {0.091551, 0.117456, 0.142403, 0.333333, 0.493449, 0.627293, 0.762025},   // Log3G10
+      {0.092466, 0.133884, 0.174500, 0.383562, 0.530490, 0.650642, 0.771061}};  // BMD Film Gen 5
+    String[] looks = {"Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"};
+    for (int l = 0; l < 3; l++) {
+      String look = looks[l];
+      check(CinemaMath.isHeadroomLog(look), look + " uses EI headroom");
+      for (int i = 0; i < x.length; i++) {
+        near(CinemaMath.logEncode(look, x[i]), ref[l][i], 2e-6, look + " at " + x[i]);
+        near(CinemaMath.logDecode(look, CinemaMath.logEncode(look, x[i])), x[i], 1e-9, look + " inverse at " + x[i]);
+      }
+      double prev = -1;
+      for (int i = 0; i <= 1000; i++) { double v = CinemaMath.logEncode(look, i / 1000.0 * 8); check(v > prev, look + " increases"); prev = v; }
+      near(CinemaMath.toneValue(look, 0.18 / 4, 2), CinemaMath.logEncode(look, 0.18), 1e-12, look + " EI headroom keeps grey on its code");
+      near(CinemaMath.logToRec709(look, CinemaMath.logEncode(look, 0.18)), CinemaMath.rec709(0.18), 0.03, look + " LUT keeps grey");
+      check(CinemaMath.logRec709Cube(look).contains("TITLE \"" + look + " to Rec.709"), look + " cube title");
+    }
+    check(CinemaMath.lutName("Sony S-Log3").equals("Sony_S-Log3_to_Rec709.cube") && CinemaMath.lutName("RED Log3G10").equals("RED_Log3G10_to_Rec709.cube"), "LUT names");
+    check(!CinemaMath.isHeadroomLog("Flat Log") && !CinemaMath.isHeadroomLog("Rec.709"), "Flat Log has no EI headroom");
   }
 }

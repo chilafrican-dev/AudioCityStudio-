@@ -195,7 +195,73 @@ final class CinemaMath {
   // ---------------------------------------------------------------- looks / tone curves
 
   /** Looks. Index 0 is City Log (the log profile); "Flat Log" is the earlier headroom-free flat curve. */
-  static final String[] LOOKS = {"City Log", "Film", "Rec.709", "Vivid", "Flat", "Flat Log"};
+  static final String[] LOOKS = {"City Log", "Film", "Rec.709", "Vivid", "Flat", "Flat Log", "RED Log3G10", "Sony S-Log3", "BMD Film Gen 5"};
+
+  /**
+   * Log curves that use exposure-index headroom (the sensor is exposed LOG_HEADROOM stops under the EI and the curve
+   * maps the ISP signal back to scene light). RED Log3G10, Sony S-Log3 and Blackmagic Film Generation 5 are the
+   * manufacturers' published transfer functions, implemented for interchange: footage grades with the matching
+   * input gamma in Resolve, Premiere or Final Cut. Only the transfer curve matches: colours stay in the phone's
+   * Rec.709 primaries (set the input colour space / gamut to Rec.709). The names are trademarks of their owners;
+   * City Cinema is not affiliated with them.
+   */
+  static boolean isHeadroomLog(String look) {
+    return "City Log".equals(look) || "RED Log3G10".equals(look) || "Sony S-Log3".equals(look) || "BMD Film Gen 5".equals(look);
+  }
+
+  /** Scene-linear light (18% grey = 0.18) to code value, for the headroom logs. */
+  static double logEncode(String look, double s) {
+    switch (look) {
+      case "RED Log3G10": return log3g10(s);
+      case "Sony S-Log3": return slog3(s);
+      case "BMD Film Gen 5": return bmdFilm5(s);
+      default: return cityLog(s);
+    }
+  }
+
+  static double logDecode(String look, double y) {
+    switch (look) {
+      case "RED Log3G10": return log3g10Inverse(y);
+      case "Sony S-Log3": return slog3Inverse(y);
+      case "BMD Film Gen 5": return bmdFilm5Inverse(y);
+      default: return cityLogInverse(y);
+    }
+  }
+
+  // RED Log3G10 (RED white paper "REDWideGamutRGB and Log3G10", with the 0.01 offset): 18% grey at 1/3.
+  static final double L3G10_A = 0.224282, L3G10_B = 155.975327, L3G10_C = 0.01, L3G10_G = 15.1927;
+
+  static double log3g10(double x) {
+    double v = x + L3G10_C;
+    return v < 0 ? v * L3G10_G : L3G10_A * Math.log10(v * L3G10_B + 1);
+  }
+
+  static double log3g10Inverse(double y) {
+    return y < 0 ? y / L3G10_G - L3G10_C : (Math.pow(10, y / L3G10_A) - 1) / L3G10_B - L3G10_C;
+  }
+
+  // Sony S-Log3 (Sony "Technical Summary for S-Gamut3.Cine/S-Log3"): 18% grey at 420/1023, black at 95/1023.
+  static double slog3(double x) {
+    if (x >= 0.01125) return (420.0 + Math.log10((x + 0.01) / (0.18 + 0.01)) * 261.5) / 1023.0;
+    return (x * (171.2102946929 - 95.0) / 0.01125 + 95.0) / 1023.0;
+  }
+
+  static double slog3Inverse(double y) {
+    if (y >= 171.2102946929 / 1023.0) return Math.pow(10, (y * 1023.0 - 420.0) / 261.5) * (0.18 + 0.01) - 0.01;
+    return (y * 1023.0 - 95.0) * 0.01125 / (171.2102946929 - 95.0);
+  }
+
+  // Blackmagic Film Generation 5 (Blackmagic Generation 5 Color Science): 18% grey at ~0.384.
+  static final double BMD_A = 0.08692876065491224, BMD_B = 0.005494072432257808, BMD_C = 0.5300133392291939,
+      BMD_D = 8.283605932402494, BMD_E = 0.09246575342465753, BMD_LIN_CUT = 0.005;
+
+  static double bmdFilm5(double x) {
+    return x < BMD_LIN_CUT ? BMD_D * x + BMD_E : BMD_A * Math.log(x + BMD_B) + BMD_C;
+  }
+
+  static double bmdFilm5Inverse(double y) {
+    return y < BMD_D * BMD_LIN_CUT + BMD_E ? (y - BMD_E) / BMD_D : Math.exp((y - BMD_C) / BMD_A) - BMD_B;
+  }
 
   // ---------------------------------------------------------------- City Log
 
@@ -220,21 +286,30 @@ final class CinemaMath {
   }
 
   /** Display rendering used by the City Log to Rec.709 LUT: exposure-normalised soft-shoulder tone map, then BT.709. */
-  static double cityLogToRec709(double code) {
-    double s = Math.max(0, cityLogInverse(code)) * 1.18; // keeps 18% grey close to its Rec.709 level
+  static double cityLogToRec709(double code) { return logToRec709("City Log", code); }
+
+  /** The same display rendering for any of the headroom logs. */
+  static double logToRec709(String look, double code) {
+    double s = Math.max(0, logDecode(look, code)) * 1.18; // keeps 18% grey close to its Rec.709 level
     final double white = 16;                             // ~6.5 stops over grey reaches display white
     double d = s * (1 + s / (white * white)) / (1 + s);
     return rec709(clamp01(d));
   }
 
   /** A 3D .cube LUT (33 points) converting City Log to Rec.709, for Resolve, Premiere, Final Cut and monitors. */
-  static String cityLogRec709Cube() {
+  static String cityLogRec709Cube() { return logRec709Cube("City Log"); }
+
+  /** File name of a log's Rec.709 LUT, e.g. "Sony_S-Log3_to_Rec709.cube". */
+  static String lutName(String look) { return look.replace(' ', '_').replace('.', '_') + "_to_Rec709.cube"; }
+
+  /** A 3D .cube LUT (33 points) converting a headroom log (Rec.709 primaries) to Rec.709 display. */
+  static String logRec709Cube(String look) {
     final int n = 33;
     StringBuilder b = new StringBuilder(n * n * n * 24);
-    b.append("TITLE \"City Log to Rec.709 (City Cinema)\"\n# City Log: y = 0.255825*log10(s + 0.01) + 0.604514\n");
+    b.append("TITLE \"").append(look).append(" to Rec.709 (City Cinema)\"\n# input: ").append(look).append(" transfer, Rec.709 primaries\n");
     b.append("LUT_3D_SIZE ").append(n).append("\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n");
     double[] v = new double[n];
-    for (int i = 0; i < n; i++) v[i] = cityLogToRec709(i / (double) (n - 1));
+    for (int i = 0; i < n; i++) v[i] = logToRec709(look, i / (double) (n - 1));
     for (int bl = 0; bl < n; bl++) for (int g = 0; g < n; g++) for (int r = 0; r < n; r++)
       b.append(String.format(Locale.US, "%.6f %.6f %.6f%n", v[r], v[g], v[bl]));
     return b.toString();
@@ -282,7 +357,8 @@ final class CinemaMath {
   static double toneValue(String look, double linear, int headroom) {
     double x = clamp01(linear);
     switch (look) {
-      case "City Log": return cityLog(x * (1 << headroom));
+      case "City Log": case "RED Log3G10": case "Sony S-Log3": case "BMD Film Gen 5":
+        return logEncode(look, x * (1 << headroom));
       case "Flat Log": return acLog(x);
       case "Film": return filmic(x);
       case "Vivid": return clamp01(Math.pow(rec709(x), 0.92) * 1.04 - 0.02);
