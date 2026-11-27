@@ -700,7 +700,10 @@ public class CinemaActivity extends Activity {
       highSpeedSession = fps > 60 && !rawMode && !proresMode;
       SessionConfiguration config = new SessionConfiguration(highSpeedSession ? SessionConfiguration.SESSION_HIGH_SPEED : SessionConfiguration.SESSION_REGULAR,
           maxResSession ? Collections.singletonList(video) : Arrays.asList(preview, video), cameraExecutor, new CameraCaptureSession.StateCallback() {
-            @Override public void onConfigured(CameraCaptureSession s) { session = s; opening = false; triedFallback = false; applyRepeating(); ui.post(() -> refreshUi()); }
+            @Override public void onConfigured(CameraCaptureSession s) {
+              session = s; opening = false; triedFallback = false; applyRepeating(); ui.post(() -> refreshUi());
+              if (heldGains == null) ui.postDelayed(() -> { if (gamutActive()) oneShotWhiteBalance(); }, 800); // first white balance in log
+            }
             @Override public void onConfigureFailed(CameraCaptureSession s) { opening = false; sessionFailed(); }
           });
       device.createCaptureSession(config);
@@ -840,17 +843,22 @@ public class CinemaActivity extends Activity {
     }
     int[] bands = {CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_50HZ, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_60HZ, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_OFF};
     if (contains(lens.antibanding, bands[antibanding])) b.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, bands[antibanding]);
-    // ---- white balance
-    if (awbAuto || !lens.manualPost) {
+    // ---- white balance and colour. The log looks are recorded in their wide gamut (S-Gamut3.Cine, REDWideGamutRGB,
+    // BMD Wide Gamut Gen 5, Rec.2020): that needs a custom colour matrix, which needs auto white balance off, so
+    // in the logs auto white balance is one-push (measured, then held) like on a cinema camera.
+    boolean gamut = gamutActive(), measuring = SystemClock.uptimeMillis() < awbMeasureUntil;
+    if (!lens.manualPost || (awbAuto && (!gamut || measuring))) {
       b.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO);
-      b.set(CaptureRequest.CONTROL_AWB_LOCK, awbLock || (recording && lockWbOnRecord)); // white balance holds during a take
+      b.set(CaptureRequest.CONTROL_AWB_LOCK, !measuring && (awbLock || (recording && lockWbOnRecord))); // white balance holds during a take
     } else {
       b.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF);
       b.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX);
-      float[] g = lens.wb.gains(kelvin, tint);
+      float[] g = awbAuto ? (heldGains != null ? heldGains : liveGains != null ? liveGains : lens.wb.gains(5600, 0)) : lens.wb.gains(kelvin, tint);
       b.set(CaptureRequest.COLOR_CORRECTION_GAINS, new RggbChannelVector(g[0], g[1], g[2], g[3]));
-      ColorSpaceTransform t = liveTransform;
-      b.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, t != null ? t : new ColorSpaceTransform(new int[] {1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1}));
+      ColorSpaceTransform t = awbAuto && heldTransform != null ? heldTransform : liveTransform;
+      double[] base = t != null ? transformMatrix(t) : new double[] {1, 0, 0, 0, 1, 0, 0, 0, 1};
+      double[] m = gamut ? CinemaMath.mul3(CinemaMath.rec709ToGamut(CinemaMath.LOOKS[lookIndex]), base) : base;
+      b.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, toTransform(m));
     }
     // ---- focus
     if (manualFocus && lens.minFocus > 0) {
@@ -933,6 +941,37 @@ public class CinemaActivity extends Activity {
    * ISO and shutter manually. Phone auto exposure can't be trusted there: some phones (e.g. Galaxy S20 Ultra) meter
    * after the log curve, see the lifted shadows as brightness and run away to ~6 stops under.
    */
+  // ---- wide-gamut log colour and one-push white balance
+  private volatile float[] heldGains;
+  private volatile ColorSpaceTransform heldTransform;
+  private volatile long awbMeasureUntil;
+
+  /** True when the current look is a log recorded in its own wide gamut (needs manual colour correction support). */
+  private boolean gamutActive() {
+    return lens != null && lens.manualPost && CinemaMath.isLogLook(CinemaMath.LOOKS[lookIndex]) && !rawMode && !tenBit && !curveIgnored && !highSpeedSession
+        && lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
+  }
+
+  /** One-push auto white balance: run the phone's auto white balance for ~1.5 s, then hold what it found. */
+  private void oneShotWhiteBalance() {
+    if (!awbAuto || recording) return;
+    awbMeasureUntil = SystemClock.uptimeMillis() + 1500;
+    applyRepeating();
+    ui.postDelayed(() -> { applyRepeating(); refreshUi(); }, 1600);
+  }
+
+  private static double[] transformMatrix(ColorSpaceTransform t) {
+    double[] m = new double[9];
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) m[r * 3 + c] = t.getElement(c, r).doubleValue();
+    return m;
+  }
+
+  private static ColorSpaceTransform toTransform(double[] m) {
+    Rational[] r = new Rational[9];
+    for (int i = 0; i < 9; i++) r[i] = new Rational((int) Math.round(m[i] * 10000), 10000);
+    return new ColorSpaceTransform(r);
+  }
+
   /** Tells the scopes where the picture clips in the current log (0 when not in log). */
   private void updateClipLuma() {
     scopes.clipLuma = cityLogActive() ? (int) Math.floor(255 * CinemaMath.toneValue(CinemaMath.LOOKS[lookIndex], 1, logHeadroom())) : 0;
@@ -1041,11 +1080,14 @@ public class CinemaActivity extends Activity {
         float[] g = awbAuto ? liveGains : lens.wb.gains(kelvin, tint);
         if (g != null) { float green = (g[1] + g[2]) / 2; rr.setMonitorGains(new float[] {g[0] / green, 1, g[3] / green}); }
       }
-      if (awbAuto) {
+      // Only real auto white balance results count (never read back the matrix City Cinema sent itself).
+      Integer awbMode = res.get(CaptureResult.CONTROL_AWB_MODE);
+      if (awbAuto && awbMode != null && awbMode == CaptureResult.CONTROL_AWB_MODE_AUTO) {
         RggbChannelVector g = res.get(CaptureResult.COLOR_CORRECTION_GAINS);
         if (g != null) liveGains = new float[] {g.getRed(), g.getGreenEven(), g.getGreenOdd(), g.getBlue()};
         ColorSpaceTransform t = res.get(CaptureResult.COLOR_CORRECTION_TRANSFORM);
         if (t != null) liveTransform = t;
+        if (SystemClock.uptimeMillis() < awbMeasureUntil) { heldGains = liveGains; heldTransform = liveTransform; }
       }
     }
   };
@@ -1164,7 +1206,7 @@ public class CinemaActivity extends Activity {
       j.put("bitrateTarget", targetBitrate()).put("bitrateMode", cbr ? "CBR" : "VBR").put("gop", gop == 0 ? "1s" : gop == 1 ? "0.5s" : "all-intra");
       j.put("look", CinemaMath.LOOKS[lookIndex]).put("detail", new String[] {"natural", "standard", "clean"}[detail]);
       if (cityLogActive()) j.put("logHeadroomStops", logHeadroom()).put("exposureIndex", (aeAuto ? liveIso : iso >> logHeadroom()) << logHeadroom()).put("lut", lutFor(CinemaMath.LOOKS[lookIndex]))
-          .put("gradeAs", CinemaMath.LOOKS[lookIndex] + " gamma, Rec.709 primaries");
+          .put("gradeAs", (gamutActive() ? CinemaMath.gamutName(CinemaMath.LOOKS[lookIndex]) : "Rec.709") + " / " + CinemaMath.LOOKS[lookIndex]);
       j.put("exposure", aeAuto ? "auto" : "manual").put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()));
       j.put("shutterAngle", Math.round(CinemaMath.angleForExposure(aeAuto ? liveExposure : exposureNs(), fps) * 10) / 10.0);
       j.put("whiteBalance", awbAuto ? "auto" : kelvin + "K tint " + tint).put("focus", manualFocus ? "manual " + focusLabel(focus) : "continuous AF");
@@ -1319,7 +1361,7 @@ public class CinemaActivity extends Activity {
         List<String[]> luts = new ArrayList<>();
         luts.add(new String[] {"CityLog_to_Rec709.cube", CinemaMath.cityLogRec709Cube()});
         luts.add(new String[] {"CityLog_to_Linear.cube", CinemaMath.cityLogLinearCube()});
-        for (String look : new String[] {"RED Log3G10", "Sony S-Log3", "BMD Film Gen 5"}) luts.add(new String[] {CinemaMath.lutName(look), CinemaMath.logRec709Cube(look)});
+        for (String look : new String[] {"Flat Log", "RED Log3G10", "Sony S-Log3", "BMD Film Gen 5"}) luts.add(new String[] {CinemaMath.lutName(look), CinemaMath.logRec709Cube(look)});
         for (String[] l : luts) {
           ContentValues v = new ContentValues();
           v.put(MediaStore.MediaColumns.DISPLAY_NAME, l[0]);
@@ -1329,7 +1371,7 @@ public class CinemaActivity extends Activity {
           if (u == null) throw new IOException("couldn't create " + l[0]);
           try (OutputStream o = getContentResolver().openOutputStream(u)) { if (o != null) o.write(l[1].getBytes(StandardCharsets.US_ASCII)); }
         }
-        message("LUTs saved to Documents/City Cinema/LUTs: City Log, RED Log3G10, Sony S-Log3 and BMD Film Gen 5 to Rec.709, plus City Log to linear");
+        message("LUTs saved to Documents/City Cinema/LUTs: City Log, Flat Log, RED Log3G10, Sony S-Log3 and BMD Film Gen 5 to Rec.709, plus City Log to linear");
       } catch (IOException | RuntimeException e) { message("Couldn't save LUTs: " + e.getMessage()); }
     }, "lut-export").start();
   }
@@ -1974,7 +2016,8 @@ public class CinemaActivity extends Activity {
       }
       awbAuto = !awbAuto; applyRepeating(); refreshUi();
     });
-    if (awbAuto) addChip(c, awbLock ? "AWB LOCKED" : "AWB LOCK", awbLock, () -> { awbLock = !awbLock; applyRepeating(); refreshUi(); });
+    if (awbAuto && gamutActive()) addChip(c, "ONE-PUSH AWB", false, () -> { oneShotWhiteBalance(); message("Measuring white balance… point at something white or grey."); });
+    else if (awbAuto) addChip(c, awbLock ? "AWB LOCKED" : "AWB LOCK", awbLock, () -> { awbLock = !awbLock; applyRepeating(); refreshUi(); });
     for (int k : CinemaMath.WB_PRESETS) addChip(c, k + "K", !awbAuto && kelvin == k, () -> { if (!lens.manualPost) return; awbAuto = false; kelvin = k; applyRepeating(); refreshUi(); });
     if (!awbAuto) {
       addSlider((10000 - 2000) / 50, (kelvin - 2000) / 50, p -> { kelvin = 2000 + p * 50; applyRepeating(); updatePanelHeader(kelvin + "K  tint " + tint); }, true);
@@ -2041,9 +2084,15 @@ public class CinemaActivity extends Activity {
   private void lookPanel() {
     boolean curves = lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
     panelHeader("LOOK", rawMode ? CinemaMath.LOOKS[lookIndex] + " · monitoring only: RAW frames are recorded ungraded"
-        : cityLogActive() ? CinemaMath.LOOKS[lookIndex] + " · sensor exposed " + logHeadroom() + " stops under the EI · grade as " + CinemaMath.LOOKS[lookIndex] + " gamma with Rec.709 primaries, or use " + lutFor(CinemaMath.LOOKS[lookIndex]) + " (Menu)" : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curveIgnored ? "  · this phone ignores custom tone curves: its own processing is recorded" : curves ? "" : "  · this camera doesn't allow custom tone curves"));
+        : cityLogActive() || gamutActive() ? CinemaMath.LOOKS[lookIndex] + (logHeadroom() > 0 ? " · exposed " + logHeadroom() + " stops under the EI" : "") + " · grade as " + (gamutActive() ? CinemaMath.gamutName(CinemaMath.LOOKS[lookIndex]) : "Rec.709") + " / " + CinemaMath.LOOKS[lookIndex] + " or use " + lutFor(CinemaMath.LOOKS[lookIndex]) : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curveIgnored ? "  · this phone ignores custom tone curves: its own processing is recorded" : curves ? "" : "  · this camera doesn't allow custom tone curves"));
     LinearLayout c = chips();
-    for (int i = 0; i < CinemaMath.LOOKS.length; i++) { final int k = i; addChip(c, CinemaMath.LOOKS[i], lookIndex == i, () -> { lookIndex = k; applyRepeating(); refreshUi(); }); }
+    for (int i = 0; i < CinemaMath.LOOKS.length; i++) {
+      final int k = i;
+      addChip(c, CinemaMath.LOOKS[i], lookIndex == i, () -> {
+        lookIndex = k; applyRepeating(); refreshUi();
+        if (gamutActive() && awbAuto) oneShotWhiteBalance(); // measure white once, then hold it in the log gamut
+      });
+    }
     LinearLayout d = chips();
     String[] details = {"Natural detail", "Standard detail", "Clean (strong NR)"};
     for (int i = 0; i < details.length; i++) { final int k = i; addChip(d, details[i], detail == i, () -> { detail = k; applyRepeating(); refreshUi(); }); }

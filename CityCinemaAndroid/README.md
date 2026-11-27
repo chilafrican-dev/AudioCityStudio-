@@ -1,4 +1,4 @@
-# City Cinema 1.9
+# City Cinema 2.0
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -29,8 +29,15 @@ no third-party libraries.
   - The ISO dial shows `EI`. The headroom is reduced automatically where the camera's ISO or exposure-compensation range can't go 2 stops lower.
 - **Grading LUTs:** Menu → *Export log LUTs* saves `CityLog_to_Rec709.cube` (33³, soft highlight roll-off) and `CityLog_to_Linear.cube` (1D) to `Documents/City Cinema/LUTs` for Resolve, Premiere, Final Cut or a monitor. CI applies the LUT with FFmpeg and checks it.
 - **Camera logs:** **RED Log3G10**, **Sony S-Log3** and **Blackmagic Film Gen 5** are the manufacturers' published transfer functions. The tests check them against the open-source colour-science library to within 2×10⁻⁶. Each uses the same 2-stop EI headroom as City Log, so footage cuts in with the same input gamma in Resolve, Premiere or Final Cut.
-  - **Gamut:** only the curve matches. Colors stay in the phone's Rec.709 primaries, so in a Color Space Transform set the input gamma to e.g. S-Log3 and the input color space to **Rec.709**, not S-Gamut3, REDWideGamutRGB or BMD Wide Gamut.
-  - **LUTs:** Menu → *Export log LUTs* also writes `RED_Log3G10_to_Rec709.cube`, `Sony_S-Log3_to_Rec709.cube` and `BMD_Film_Gen_5_to_Rec709.cube`.
+  - **Gamut:** each log is recorded in its own wide gamut, with the colour matrix built from the published primaries (checked against colour-science):
+    - Sony → **S-Gamut3.Cine**
+    - RED → **REDWideGamutRGB**
+    - Blackmagic → **BMD Wide Gamut Gen 5**
+    - City Log and Flat Log → **Rec.2020**
+
+    The footage looks properly flat and low in saturation, like real log, and grades exactly. In Resolve, use a Color Space Transform with input e.g. *S-Gamut3.Cine / S-Log3*. This needs a camera that allows manual colour correction; on others the colours stay Rec.709 and the sidecar says so.
+  - **White balance in the logs is one-push:** the custom colour matrix needs auto white balance off, so the app measures white balance when you choose a log (or tap **ONE-PUSH AWB**) and then holds it, like a cinema camera. Manual Kelvin works as usual.
+  - **LUTs:** Menu → *Export log LUTs* writes a 3D LUT per log, including the gamut conversion back to Rec.709: `RED_Log3G10_to_Rec709.cube`, `Sony_S-Log3_to_Rec709.cube`, `BMD_Film_Gen_5_to_Rec709.cube` and `Flat_Log_to_Rec709.cube`.
   - *RED, Log3G10, Sony, S-Log3, Blackmagic and Blackmagic Film are trademarks of their owners. City Cinema implements their published curves for interchange and is not affiliated with or endorsed by them.*
 - **Flat Log** is a gentle flat curve without EI headroom: no change to exposure, so shadows stay as clean as Rec.709, with less highlight range than the logs above.
 - Other looks: Film, Rec.709, Vivid, Flat.

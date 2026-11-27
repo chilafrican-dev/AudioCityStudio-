@@ -5,10 +5,10 @@ import glob, os, subprocess, sys
 import numpy as np
 
 ff, folder = sys.argv[1], sys.argv[2]
-grey = {"CityLog": 0.42, "RED_Log3G10": 1 / 3, "Sony_S-Log3": 420 / 1023, "BMD_Film_Gen_5": 0.383562}
-black = {"CityLog": 95 / 1023, "RED_Log3G10": 0.091551, "Sony_S-Log3": 95 / 1023, "BMD_Film_Gen_5": 0.092466}
+grey = {"CityLog": 0.42, "Flat_Log": 0.4211, "RED_Log3G10": 1 / 3, "Sony_S-Log3": 420 / 1023, "BMD_Film_Gen_5": 0.383562}
+black = {"CityLog": 95 / 1023, "Flat_Log": 0.0625, "RED_Log3G10": 0.091551, "Sony_S-Log3": 95 / 1023, "BMD_Film_Gen_5": 0.092466}
 cubes = sorted(glob.glob(f"{folder}/*_to_Rec709.cube"))
-assert len(cubes) == 4, cubes
+assert len(cubes) == 5, cubes
 for cube in cubes:
     name = os.path.basename(cube).replace("_to_Rec709.cube", "")
     codes = np.array([black[name], grey[name], grey[name] + 0.15, grey[name] + 0.3])
@@ -18,3 +18,14 @@ for cube in cubes:
     v = np.frombuffer(out, "<u2").reshape(4, 3)[:, 0] / 65535
     assert v[0] < 0.02 and abs(v[1] - 0.41) < 0.04 and v[1] < v[2] < v[3] <= 1, (name, v)
     print(f"{name} LUT via FFmpeg lut3d: black {v[0]:.3f}, grey {v[1]:.3f}, highlights {v[2]:.3f} / {v[3]:.3f}")
+
+# colour: a neutral grey stays neutral, and a wide-gamut-encoded red stays red after the LUT
+for cube in cubes:
+    name = os.path.basename(cube).replace("_to_Rec709.cube", "")
+    g = grey[name]
+    img = np.array([[[g, g, g], [g + 0.08, g - 0.04, g - 0.05]]])
+    out = subprocess.run([ff, "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", "2x1", "-i", "-", "-vf", f"lut3d={cube}:interp=tetrahedral",
+                          "-f", "rawvideo", "-pix_fmt", "rgb48le", "-"], input=np.round(img * 65535).astype("<u2").tobytes(), capture_output=True, check=True).stdout
+    v = np.frombuffer(out, "<u2").reshape(2, 3) / 65535
+    assert np.ptp(v[0]) < 0.01 and v[1][0] > v[1][1] and v[1][0] > v[1][2], (name, v)
+print("All LUTs: grey stays neutral, reds stay red")

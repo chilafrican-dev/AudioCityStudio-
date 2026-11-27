@@ -109,6 +109,7 @@ public class CinemaTests {
     cityLog();
     cameraLogs();
     logAutoExposure();
+    gamuts();
     check(CinemaMath.acLog(0.02) > CinemaMath.rec709(0.02), "log lifts shadows above Rec.709");
     check(CinemaMath.acLog(0.9) < CinemaMath.rec709(0.9), "log holds highlights below Rec.709");
     near(CinemaMath.rec709(1), 1, 1e-3, "Rec.709 white");
@@ -263,7 +264,7 @@ public class CinemaTests {
   static void writeSampleDngs(String dir) throws IOException {
     for (int bits : new int[] {12, 16}) try (FileOutputStream o = new FileOutputStream(dir + "/sample" + bits + ".dng")) { o.write(sampleFile(bits)); }
     try (FileOutputStream o = new FileOutputStream(dir + "/CityLog_to_Rec709.cube")) { o.write(CinemaMath.cityLogRec709Cube().getBytes("US-ASCII")); }
-    for (String look : new String[] {"RED Log3G10", "Sony S-Log3", "BMD Film Gen 5"})
+    for (String look : new String[] {"Flat Log", "RED Log3G10", "Sony S-Log3", "BMD Film Gen 5"})
       try (FileOutputStream o = new FileOutputStream(dir + "/" + CinemaMath.lutName(look))) { o.write(CinemaMath.logRec709Cube(look).getBytes("US-ASCII")); }
   }
 
@@ -383,4 +384,35 @@ public class CinemaTests {
     near(CinemaMath.flickerSafeAngle(180, 25, 50), 180, 0.01, "50 Hz at 25 fps: 180 degrees");
     near(CinemaMath.flickerSafeAngle(180, 24, 60), 144, 0.01, "60 Hz at 24 fps: 144 degrees (180 would flicker)");
   }
+
+  static void gamuts() {
+    double[] m = CinemaMath.rgbToXyz(CinemaMath.gamutPrimaries("Rec.709"));
+    near(m[0], 0.4124, 2e-4, "Rec.709 to XYZ"); near(m[4], 0.7152, 2e-4, "Rec.709 to XYZ Y green"); near(m[8], 0.9505, 2e-4, "Rec.709 to XYZ Z blue");
+    double[] to2020 = CinemaMath.rec709ToGamut("City Log");
+    near(to2020[0], 0.6274, 3e-4, "709 to 2020 [0]"); near(to2020[1], 0.3293, 3e-4, "709 to 2020 [1]"); near(to2020[4], 0.9195, 3e-4, "709 to 2020 [4]");
+    // reference matrices from colour-science 0.4.7 (matrix_RGB_to_RGB, no chromatic adaptation)
+    String[] refLooks = {"Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"};
+    double[][] refs = {{0.6457, 0.2591, 0.0952, 0.0875, 0.7597, 0.1528, 0.0370, 0.1293, 0.8338},
+        {0.5419, 0.3601, 0.0979, 0.0770, 0.7680, 0.1550, 0.0589, 0.2735, 0.6676},
+        {0.6549, 0.2687, 0.0764, 0.0489, 0.7920, 0.1591, 0.0356, 0.1624, 0.8022}};
+    for (int l = 0; l < 3; l++) { double[] t = CinemaMath.rec709ToGamut(refLooks[l]); for (int i = 0; i < 9; i++) near(t[i], refs[l][i], 1e-4, refLooks[l] + " gamut matrix [" + i + "]"); }
+    for (String look : new String[] {"Sony S-Log3", "RED Log3G10", "BMD Film Gen 5", "City Log", "Flat Log"}) {
+      double[] t = CinemaMath.rec709ToGamut(look);
+      for (int r = 0; r < 3; r++) near(t[r * 3] + t[r * 3 + 1] + t[r * 3 + 2], 1, 2e-3, look + ": white stays white (row " + r + ")");
+      double[] red = CinemaMath.mul(t, new double[] {1, 0, 0});
+      check(red[1] > 0.04 && red[2] >= -1e-3, look + ": a Rec.709 red is less saturated in the wide gamut");
+      // LUT round trip: grey and a saturated Rec.709 colour come back after log + gamut encoding
+      double hr = CinemaMath.isHeadroomLog(look) ? 1 : 0;
+      for (double[] c : new double[][] {{0.18, 0.18, 0.18}, {0.30, 0.05, 0.02}}) {
+        double[] w = CinemaMath.mul(t, c);
+        double[] out = CinemaMath.logToRec709(look, enc(look, w[0]), enc(look, w[1]), enc(look, w[2]));
+        double[] ref = CinemaMath.logToRec709(look, enc(look, c[0]), enc(look, c[0]), enc(look, c[0]));
+        if (c[1] == 0.18) for (int i = 0; i < 3; i++) near(out[i], ref[0], 0.01, look + " grey stays neutral through the LUT");
+        else check(out[0] > out[1] * 1.8 && out[0] > out[2] * 1.8, look + " a red stays red through the LUT");
+      }
+    }
+    check(CinemaMath.logRec709Cube("Sony S-Log3").contains("S-Gamut3.Cine primaries"), "cube names the gamut");
+  }
+
+  static double enc(String look, double s) { return "Flat Log".equals(look) ? CinemaMath.acLog(s) : CinemaMath.logEncode(look, s); }
 }

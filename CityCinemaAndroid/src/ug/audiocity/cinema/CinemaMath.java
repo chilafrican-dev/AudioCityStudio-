@@ -209,6 +209,83 @@ final class CinemaMath {
     return "City Log".equals(look) || "RED Log3G10".equals(look) || "Sony S-Log3".equals(look) || "BMD Film Gen 5".equals(look);
   }
 
+  // ---------------------------------------------------------------- log gamuts
+
+  /**
+   * The wide gamut each log is recorded in (published primaries, x/y for R, G, B and the white point). Real log
+   * footage looks flat and low in saturation largely because of these wide gamuts; recording into them also makes
+   * grading exact (e.g. Resolve CST input "S-Gamut3.Cine / S-Log3"). City Log and Flat Log use Rec.2020.
+   */
+  static String gamutName(String look) {
+    switch (look) {
+      case "Sony S-Log3": return "S-Gamut3.Cine";
+      case "RED Log3G10": return "REDWideGamutRGB";
+      case "BMD Film Gen 5": return "Blackmagic Wide Gamut Gen 5";
+      case "City Log": case "Flat Log": return "Rec.2020";
+      default: return null;
+    }
+  }
+
+  static double[] gamutPrimaries(String gamut) {
+    switch (gamut) {
+      case "S-Gamut3.Cine": return new double[] {0.766, 0.275, 0.225, 0.800, 0.089, -0.087, 0.3127, 0.3290};
+      case "REDWideGamutRGB": return new double[] {0.780308, 0.304253, 0.121595, 1.493994, 0.095612, -0.084589, 0.3127, 0.3290};
+      case "Blackmagic Wide Gamut Gen 5": return new double[] {0.7177215, 0.3171181, 0.2280410, 0.8615690, 0.1005841, -0.0820452, 0.3127170, 0.3290312};
+      case "Rec.2020": return new double[] {0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290};
+      default: return new double[] {0.640, 0.330, 0.300, 0.600, 0.150, 0.060, 0.3127, 0.3290}; // Rec.709
+    }
+  }
+
+  /** RGB to XYZ matrix (row-major) for primaries and white point (SMPTE RP 177 method). */
+  static double[] rgbToXyz(double[] p) {
+    double[] m = new double[9];
+    for (int c = 0; c < 3; c++) {
+      double x = p[c * 2], y = p[c * 2 + 1];
+      m[c] = x / y; m[3 + c] = 1; m[6 + c] = (1 - x - y) / y;
+    }
+    double wx = p[6], wy = p[7];
+    double[] w = {wx / wy, 1, (1 - wx - wy) / wy};
+    double[] s = mul(invert(m), w);
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) m[r * 3 + c] *= s[c];
+    return m;
+  }
+
+  /** Linear Rec.709 RGB to linear RGB in a log's gamut (identity for looks without one). */
+  static double[] rec709ToGamut(String look) {
+    String g = gamutName(look);
+    if (g == null) return new double[] {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    return mul3(invert(rgbToXyz(gamutPrimaries(g))), rgbToXyz(gamutPrimaries("Rec.709")));
+  }
+
+  static double[] mul3(double[] a, double[] b) {
+    double[] o = new double[9];
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) for (int k = 0; k < 3; k++) o[r * 3 + c] += a[r * 3 + k] * b[k * 3 + c];
+    return o;
+  }
+
+  static double[] mul(double[] m, double[] v) {
+    return new double[] {m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]};
+  }
+
+  static double[] invert(double[] m) {
+    double a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5], g = m[6], h = m[7], i = m[8];
+    double A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g, det = a * A + b * B + c * C;
+    return new double[] {A / det, -(b * i - c * h) / det, (b * f - c * e) / det, B / det, (a * i - c * g) / det, -(a * f - c * d) / det, C / det, -(a * h - b * g) / det, (a * e - b * d) / det};
+  }
+
+  /** Any curve that City Cinema encodes in its own gamut (the headroom logs and Flat Log). */
+  static boolean isLogLook(String look) { return gamutName(look) != null; }
+
+  /** Code value to scene-linear light for every log look (Flat Log has no headroom). */
+  static double decodeLook(String look, double code) {
+    if ("Flat Log".equals(look)) {
+      double lo = 0, hi = 1;
+      for (int k = 0; k < 40; k++) { double mid = (lo + hi) / 2; if (acLog(mid) < code) lo = mid; else hi = mid; }
+      return (lo + hi) / 2;
+    }
+    return logDecode(look, code);
+  }
+
   /** Scene-linear light (18% grey = 0.18) to code value, for the headroom logs. */
   // ---------------------------------------------------------------- log auto exposure
 
@@ -425,16 +502,30 @@ final class CinemaMath {
   /** File name of a log's Rec.709 LUT, e.g. "Sony_S-Log3_to_Rec709.cube". */
   static String lutName(String look) { return look.replace(' ', '_').replace('.', '_') + "_to_Rec709.cube"; }
 
-  /** A 3D .cube LUT (33 points) converting a headroom log (Rec.709 primaries) to Rec.709 display. */
+  /** Rendering of one log RGB code triple to Rec.709 display: decode, gamut back to Rec.709, tone map, BT.709. */
+  static double[] logToRec709(String look, double r, double g, double b) {
+    double[] lin = {Math.max(0, decodeLook(look, r)), Math.max(0, decodeLook(look, g)), Math.max(0, decodeLook(look, b))};
+    double[] rgb = mul(invert(rec709ToGamut(look)), lin);
+    double[] out = new double[3];
+    for (int i = 0; i < 3; i++) {
+      double s = Math.max(0, rgb[i]) * 1.18;
+      final double white = 16;
+      out[i] = rec709(clamp01(s * (1 + s / (white * white)) / (1 + s)));
+    }
+    return out;
+  }
+
+  /** A 3D .cube LUT (33 points) converting a log (in its gamut) to Rec.709 display. */
   static String logRec709Cube(String look) {
     final int n = 33;
     StringBuilder b = new StringBuilder(n * n * n * 24);
-    b.append("TITLE \"").append(look).append(" to Rec.709 (City Cinema)\"\n# input: ").append(look).append(" transfer, Rec.709 primaries\n");
+    b.append("TITLE \"").append(look).append(" to Rec.709 (City Cinema)\"\n# input: ").append(look).append(" transfer, ").append(gamutName(look)).append(" primaries\n");
     b.append("LUT_3D_SIZE ").append(n).append("\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n");
-    double[] v = new double[n];
-    for (int i = 0; i < n; i++) v[i] = logToRec709(look, i / (double) (n - 1));
-    for (int bl = 0; bl < n; bl++) for (int g = 0; g < n; g++) for (int r = 0; r < n; r++)
-      b.append(String.format(Locale.US, "%.6f %.6f %.6f%n", v[r], v[g], v[bl]));
+    double d = n - 1;
+    for (int bl = 0; bl < n; bl++) for (int g = 0; g < n; g++) for (int r = 0; r < n; r++) {
+      double[] o = logToRec709(look, r / d, g / d, bl / d);
+      b.append(String.format(Locale.US, "%.6f %.6f %.6f%n", o[0], o[1], o[2]));
+    }
     return b.toString();
   }
 
