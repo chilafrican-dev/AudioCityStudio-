@@ -580,6 +580,26 @@ final class CinemaMath {
     return o;
   }
 
+  /** The highest code a look can record (where the sensor clips): a recording above it wasn't made in that look. */
+  static double topCode(String look) {
+    if ("Flat Log".equals(look)) return acLog(1);
+    if ("Flat".equals(look)) return toneValue("Flat", 1, 0);
+    if (isHeadroomLog(look)) return logEncode(look, 1 << LOG_HEADROOM);
+    return 1;
+  }
+
+  /** True when more than 1% of a frame (ARGB) is clearly brighter than the look can record. */
+  static boolean exceedsLook(int[] argb, String look) {
+    double top = topCode(look) + 0.1;
+    if (argb == null || argb.length == 0 || top >= 1) return false;
+    int over = 0;
+    for (int p : argb) {
+      int mx = Math.max((p >> 16) & 255, Math.max((p >> 8) & 255, p & 255));
+      if (mx / 255.0 > top) over++;
+    }
+    return over > argb.length / 100;
+  }
+
   /** 0 below the top of a log's range, rising to 1 at the code where the sensor clips. */
   static double highlightFade(String look, double code) {
     double clip = "Flat Log".equals(look) ? acLog(1) : logEncode(look, isHeadroomLog(look) ? 1 << LOG_HEADROOM : 1);

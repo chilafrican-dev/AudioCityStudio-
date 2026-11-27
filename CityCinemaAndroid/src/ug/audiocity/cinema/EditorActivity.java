@@ -168,6 +168,7 @@ public class EditorActivity extends Activity {
     // clips without a log: find the log they were shot in (file name tag, then sidecar). With "convert" on, convert
     // them (asking when unsure); otherwise only note it: log clips stay flat for your own grade.
     final boolean convert = convertLog();
+    for (EditModel.Clip c : project.clips) if (CinemaMath.convertsInPost(c.look) || !c.shotIn.isEmpty()) verifyLog(c);
     final java.util.List<EditModel.Clip> plain = new java.util.ArrayList<>();
     for (EditModel.Clip c : project.clips) if (!CinemaMath.convertsInPost(c.look) && !c.name.contains("_Rec709") && (convert || c.shotIn.isEmpty())) plain.add(c);
     if (!plain.isEmpty()) jobs.execute(() -> {
@@ -233,6 +234,7 @@ public class EditorActivity extends Activity {
             project.clips.add(Math.max(0, Math.min(at, project.clips.size())), c);
             selected = c; changed(true);
             if (noSidecar.contains(c.id) && !c.name.contains("_Rec709")) checkForLog(c); // only when "convert log" is on
+            verifyLog(c);
           });
           else ui.post(() -> toast("Couldn't read that video."));
         } else {
@@ -396,6 +398,38 @@ public class EditorActivity extends Activity {
     });
   }
 
+  /**
+   * A clip named or noted as log whose picture goes brighter than that log can record wasn't really recorded in log
+   * (the phone applied its own processing): treat it as normal video so it isn't converted twice.
+   */
+  private void verifyLog(EditModel.Clip c) {
+    final String log = CinemaMath.convertsInPost(c.look) ? c.look : c.shotIn;
+    if (!CinemaMath.convertsInPost(log)) return;
+    jobs.execute(() -> {
+      android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+      try {
+        r.setDataSource(this, Uri.parse(c.uri));
+        boolean bad = false;
+        for (double f : new double[] {0.25, 0.5, 0.75}) {
+          android.graphics.Bitmap bm = r.getScaledFrameAtTime(c.inUs + (long) ((c.outUs - c.inUs) * f), android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 180);
+          if (bm == null) continue;
+          int[] px = new int[bm.getWidth() * bm.getHeight()];
+          bm.getPixels(px, 0, bm.getWidth(), 0, 0, bm.getWidth(), bm.getHeight());
+          bm.recycle();
+          if (CinemaMath.exceedsLook(px, log)) { bad = true; break; }
+        }
+        if (bad) ui.post(() -> {
+          c.shotIn = ""; if (log.equals(c.look)) c.look = "None";
+          changed(true);
+          toast(c.name + " is named " + log + " but wasn't recorded in log (the phone used its own processing), so it's treated as normal video.");
+        });
+      } catch (Exception e) { Log.w(TAG, "verify log", e); }
+      finally { try { r.release(); } catch (Exception ignored) {} }
+    });
+  }
+
+  private static String trimNum(double v) { return v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(v); }
+
   private void askLog(EditModel.Clip c) {
     if (isFinishing() || !project.clips.contains(c) || CinemaMath.convertsInPost(c.look)) return;
     String[] logs = {"City Log", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5", "Flat Log", "Flat (not log)", "It's not log"};
@@ -517,7 +551,7 @@ public class EditorActivity extends Activity {
   }
 
   private void clipInspector(EditModel.Clip c) {
-    heading(c.name, (c.width + "×" + c.height) + " · " + fmt(c.durationUs()) + (CinemaMath.convertsInPost(c.look) ? " · " + c.look : !c.shotIn.isEmpty() ? " · " + c.shotIn + " (flat)" : ""));
+    heading(c.name, (c.width + "×" + c.height) + " · " + fmt(c.durationUs()) + (c.speed != 1 ? " · " + trimNum(c.speed) + "x" : "") + (CinemaMath.convertsInPost(c.look) ? " · " + c.look : !c.shotIn.isEmpty() ? " · " + c.shotIn + " (flat)" : ""));
     LinearLayout tabs = row();
     for (String t : new String[] {"Edit", "Colour", "Transition"}) tabs.addView(chip(t, v -> { clipTab = t; buildInspector(); }, clipTab.equals(t)), lp(-2));
     inspector.addView(tabs);
@@ -535,6 +569,23 @@ public class EditorActivity extends Activity {
       r2.addView(chip("DUPLICATE", v -> { EditModel.Clip k = c.copy(); k.id = EditModel.NEXT_ID.incrementAndGet(); project.clips.add(i + 1, k); selected = k; changed(true); }), lp(-2));
       r2.addView(chip("DELETE", v -> { project.clips.remove(c); selected = null; changed(true); }), lp(-2));
       inspector.addView(r2);
+      // speed (sound follows, with its pitch)
+      label(String.format(Locale.US, "Speed: %sx%s", trimNum(c.speed), c.speed != 1 ? " · sound pitch follows; MUTE for silent slow motion" : ""));
+      LinearLayout sp = row();
+      for (double v : new double[] {0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4}) sp.addView(chip(trimNum(v) + "x", x -> { c.speed = v; changed(true); }, Math.abs(c.speed - v) < 1e-6), lp(-2));
+      inspector.addView(scroll(sp));
+      // framing
+      label("Framing" + (c.turn != 0 ? " · turned " + c.turn + "°" : "") + (c.flip ? " · mirrored" : ""));
+      LinearLayout fr = row();
+      fr.addView(chip("FIT", v -> { c.fill = false; changed(true); }, !c.fill), lp(-2));
+      fr.addView(chip("FILL", v -> { c.fill = true; changed(true); }, c.fill), lp(-2));
+      fr.addView(chip("ROTATE ↻", v -> { c.turn = (c.turn + 90) % 360; changed(true); }), lp(-2));
+      fr.addView(chip("FLIP ↔", v -> { c.flip = !c.flip; changed(true); }, c.flip), lp(-2));
+      fr.addView(chip("RESET", v -> { c.fill = false; c.zoom = 1; c.panX = c.panY = 0; c.turn = 0; c.flip = false; changed(true); }), lp(-2));
+      inspector.addView(scroll(fr));
+      slider("Zoom / crop", 100, 400, Math.round(c.zoom * 100), v -> c.zoom = v / 100.0, x -> x + "%");
+      slider("Move left / right", -100, 100, Math.round(c.panX * 100), v -> c.panX = v / 100.0, x -> x + "");
+      slider("Move up / down", -100, 100, Math.round(c.panY * 100), v -> c.panY = v / 100.0, x -> x + "");
     } else if (clipTab.equals("Colour")) {
       EditModel.Grade g = c.grade;
       LinearLayout looks = row();
@@ -841,7 +892,7 @@ public class EditorActivity extends Activity {
         c.save(); c.clipRect(r);
         c.drawText(k.name, r.left + dp(5), rowV + dp(14), p);
         p.setColor(DIM);
-        c.drawText(fmt(k.durationUs()) + (k.muted ? " · muted" : "") + (CinemaMath.convertsInPost(k.look) ? " · " + k.look : !k.shotIn.isEmpty() ? " · " + k.shotIn + " (flat)" : "") + (k.grade.neutral() ? "" : " · graded"), r.left + dp(5), rowV + dp(28), p);
+        c.drawText(fmt(k.durationUs()) + (k.speed != 1 ? " · " + trimNum(k.speed) + "x" : "") + (k.muted ? " · muted" : "") + (CinemaMath.convertsInPost(k.look) ? " · " + k.look : !k.shotIn.isEmpty() ? " · " + k.shotIn + " (flat)" : "") + (k.grade.neutral() ? "" : " · graded"), r.left + dp(5), rowV + dp(28), p);
         c.restore();
       }
       for (EditModel.Title t : project.titles) {

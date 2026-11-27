@@ -67,15 +67,22 @@ final class EditModel {
     /** A user-imported .cube LUT (file name in the app's LUT folder; "" = none), applied after the log LUT. */
     String lut = "";
     String shotIn = ""; // the log the clip was recorded in (kept flat unless look converts it)
+    /** Edit tools: playback speed (sound follows, with its pitch), framing (fit or fill, zoom, pan), turn and flip. */
+    double speed = 1, zoom = 1, panX, panY;
+    int turn; // extra clockwise rotation: 0, 90, 180, 270
+    boolean flip, fill;
     double lutStrength = 1;
 
-    long durationUs() { return Math.max(0, outUs - inUs); }
+    long durationUs() { return Math.max(0, Math.round((outUs - inUs) / speed)); }
+
+    /** Source time for a time inside the clip on the timeline. */
+    long sourceAt(long local) { return inUs + Math.round(local * speed); }
 
     JSONObject json() throws JSONException {
       return new JSONObject().put("uri", uri).put("name", name).put("look", look).put("sourceDurationUs", sourceDurationUs).put("inUs", inUs)
           .put("outUs", outUs).put("width", width).put("height", height).put("rotation", rotation).put("fps", fps).put("volume", volume)
           .put("muted", muted).put("hasAudio", hasAudio).put("transition", transition).put("transitionUs", transitionUs).put("grade", grade.json())
-          .put("lut", lut).put("lutStrength", lutStrength).put("shotIn", shotIn);
+          .put("lut", lut).put("lutStrength", lutStrength).put("shotIn", shotIn).put("speed", speed).put("zoom", zoom).put("panX", panX).put("panY", panY).put("turn", turn).put("flip", flip).put("fill", fill);
     }
 
     static Clip from(JSONObject j) {
@@ -86,6 +93,8 @@ final class EditModel {
       c.volume = j.optDouble("volume", 1); c.muted = j.optBoolean("muted"); c.hasAudio = j.optBoolean("hasAudio", true);
       c.transition = j.optInt("transition"); c.transitionUs = j.optLong("transitionUs", 500_000); c.grade = Grade.from(j.optJSONObject("grade"));
       c.lut = j.optString("lut", ""); c.lutStrength = j.optDouble("lutStrength", 1); c.shotIn = j.optString("shotIn", "");
+      c.speed = Math.max(0.1, j.optDouble("speed", 1)); c.zoom = j.optDouble("zoom", 1); c.panX = j.optDouble("panX", 0); c.panY = j.optDouble("panY", 0);
+      c.turn = j.optInt("turn", 0); c.flip = j.optBoolean("flip"); c.fill = j.optBoolean("fill");
       return c;
     }
 
@@ -94,6 +103,7 @@ final class EditModel {
       c.id = id; c.uri = uri; c.name = name; c.look = look; c.sourceDurationUs = sourceDurationUs; c.inUs = inUs; c.outUs = outUs;
       c.width = width; c.height = height; c.rotation = rotation; c.fps = fps; c.volume = volume; c.muted = muted; c.hasAudio = hasAudio;
       c.transition = transition; c.transitionUs = transitionUs; c.grade = grade.copy(); c.lut = lut; c.lutStrength = lutStrength; c.shotIn = shotIn;
+      c.speed = speed; c.zoom = zoom; c.panX = panX; c.panY = panY; c.turn = turn; c.flip = flip; c.fill = fill;
       return c;
     }
   }
@@ -239,7 +249,7 @@ final class EditModel {
         long tout = transitionUs(p, i + 1);
         if (next.transition == 2 && tout > 0 && local > c.durationUs() - tout / 2) bright *= Math.max(0, (c.durationUs() - local) / (tout / 2.0)); // dip: fade down
       }
-      out.add(new Layer(i, c.inUs + local, alpha, bright));
+      out.add(new Layer(i, c.sourceAt(local), alpha, bright));
     }
     return out;
   }
@@ -293,8 +303,8 @@ final class EditModel {
     if (local < 100_000 || local > c.durationUs() - 100_000) return false;
     Clip b = c.copy();
     b.id = NEXT_ID.incrementAndGet();
-    b.inUs = c.inUs + local; b.transition = 0;
-    c.outUs = c.inUs + local;
+    b.inUs = c.sourceAt(local); b.transition = 0;
+    c.outUs = c.sourceAt(local);
     p.clips.add(i + 1, b);
     return true;
   }

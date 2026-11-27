@@ -1145,7 +1145,7 @@ public class CinemaActivity extends Activity {
     long free = new StatFs(Environment.getExternalStorageDirectory().getPath()).getAvailableBytes();
     if (free < 300L * 1024 * 1024) { message("Storage is almost full."); return; }
     String date = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
-    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date) + CinemaMath.lookTag(tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex]);
+    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date) + CinemaMath.lookTag(tenBit || curveIgnored ? "HLG" : CinemaMath.LOOKS[lookIndex]);
     ContentResolver cr = getContentResolver();
     try {
       ContentValues v = new ContentValues();
@@ -1201,6 +1201,7 @@ public class CinemaActivity extends Activity {
       if (wavUri != null) cr.update(wavUri, done, null, null);
       clipName = savedName(mp4Uri, clipName, ".mp4"); // final name: Android settles name clashes on publish
       writeSidecar(frames, dropped, bytes, durationNs);
+      checkTakeIsLog(mp4Uri, clipName, CinemaMath.LOOKS[lookIndex]);
       recordRunBase += CinemaMath.framesFor(durationNs, fps);
       clip++;
       savePrefs();
@@ -1253,6 +1254,31 @@ public class CinemaActivity extends Activity {
       Uri u = getContentResolver().insert(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
       if (u != null) try (OutputStream o = getContentResolver().openOutputStream(u)) { if (o != null) o.write(j.toString(2).getBytes(StandardCharsets.UTF_8)); }
     } catch (Exception e) { Log.w(TAG, "sidecar", e); }
+  }
+
+  /**
+   * After a take in a log (or Flat): look at the saved file. If it's brighter than that look can record, the phone
+   * processed the video itself instead of using City Cinema's curve, so say so (the editor then treats it as normal).
+   */
+  private void checkTakeIsLog(Uri uri, String name, String look) {
+    if (!CinemaMath.convertsInPost(look) || tenBit || curveIgnored || analysisHandler == null) return;
+    final String stab = new String[] {"off", "OIS", "EIS", "OIS+EIS", "preview"}[Math.max(0, Math.min(4, stabilization))];
+    analysisHandler.postDelayed(() -> {
+      android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+      try {
+        r.setDataSource(this, uri);
+        String d = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION);
+        long us = d == null ? 1_000_000 : Long.parseLong(d) * 500;
+        android.graphics.Bitmap bm = r.getScaledFrameAtTime(us, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 180);
+        if (bm == null) return;
+        int[] px = new int[bm.getWidth() * bm.getHeight()];
+        bm.getPixels(px, 0, bm.getWidth(), 0, 0, bm.getWidth(), bm.getHeight());
+        bm.recycle();
+        if (CinemaMath.exceedsLook(px, look)) ui.post(() -> message(name + " wasn't recorded in " + look + ": the phone used its own processing for this take"
+            + (stab.contains("EIS") || stab.equals("preview") ? " (stabilisation " + stab + " can do this: try OIS only)" : "") + ". The editor will treat it as normal video."));
+      } catch (Exception e) { Log.w(TAG, "check take", e); }
+      finally { try { r.release(); } catch (Exception ignored) {} }
+    }, 1500);
   }
 
   /** Android renames a file when the name is taken ("A001_C001_20261127 (1).mp4"): use the real name so the sidecar and WAV match. */
@@ -1309,7 +1335,7 @@ public class CinemaActivity extends Activity {
     long free = new StatFs(Environment.getExternalStorageDirectory().getPath()).getAvailableBytes();
     if (free < 500L * 1024 * 1024) { message("Storage is almost full."); return; }
     String date = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
-    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date) + CinemaMath.lookTag(tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex]);
+    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date) + CinemaMath.lookTag(tenBit || curveIgnored ? "HLG" : CinemaMath.LOOKS[lookIndex]);
     ContentResolver cr = getContentResolver();
     try {
       ContentValues v = new ContentValues();

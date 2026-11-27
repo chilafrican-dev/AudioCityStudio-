@@ -102,6 +102,7 @@ public class EditTests {
     lutPackTests();
     logDetectTests();
     autoGradeTests();
+    toolTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -111,6 +112,33 @@ public class EditTests {
   /** Every .cube shipped in assets/luts must load, be in range and produce a usable picture. */
   /** Log footage shown without conversion is recognised; normal and dark/flat frames are not. */
   /** Auto colour: a dark, warm-cast frame comes out neutral and at normal brightness; a good frame is left alone. */
+  /** Speed changes the clip's length and maps timeline time to source time; split keeps both halves in sync. */
+  static void toolTests() {
+    EditModel.Project p = new EditModel.Project();
+    EditModel.Clip c = new EditModel.Clip();
+    c.inUs = 1_000_000; c.outUs = 9_000_000; c.sourceDurationUs = 10_000_000;
+    p.clips.add(c);
+    check(c.durationUs() == 8_000_000, "1x length");
+    c.speed = 2;
+    check(c.durationUs() == 4_000_000 && EditModel.duration(p) == 4_000_000, "2x halves the length");
+    check(c.sourceAt(1_000_000) == 3_000_000, "2x: 1 s in shows source 3 s");
+    check(EditModel.layersAt(p, 2_000_000).get(0).sourceUs == 5_000_000, "layer at 2x");
+    c.speed = 0.5;
+    check(c.durationUs() == 16_000_000, "0.5x doubles the length");
+    check(EditModel.split(p, 0, 4_000_000), "split slow clip");
+    EditModel.Clip a = p.clips.get(0), b = p.clips.get(1);
+    check(a.outUs == 3_000_000 && b.inUs == 3_000_000 && b.speed == 0.5, "split at 0.5x lands on source 3 s");
+    check(a.durationUs() + b.durationUs() == 16_000_000, "split keeps the total length");
+    try {
+      EditModel.Clip k = EditModel.Clip.from(b.json());
+      check(k.speed == 0.5, "speed saved");
+    } catch (Exception e) { check(true, "json is stubbed on the CI android.jar"); }
+    EditModel.Clip d = b.copy();
+    d.zoom = 2; d.turn = 90; d.flip = true; d.fill = true;
+    EditModel.Clip e = d.copy();
+    check(e.zoom == 2 && e.turn == 90 && e.flip && e.fill, "framing copied");
+  }
+
   static void autoGradeTests() {
     int w = 80, h = 45;
     java.util.Random rnd = new java.util.Random(3);

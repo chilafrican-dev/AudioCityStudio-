@@ -433,6 +433,22 @@ public class CinemaTests {
 
   /** The colour matrix from sensor calibration undoes the sensor's own colour mixing (no grey, colourless log). */
   static void nameAndHighlightTests() {
+    // a real log recording never goes above the look's top code; a phone-processed take with white does
+    check(CinemaMath.topCode("Flat Log") > 0.9 && CinemaMath.topCode("Flat") > 0.9, "Flat Log and Flat reach near white (can't be checked)");
+    for (String look : new String[] {"RED Log3G10", "Sony S-Log3", "City Log", "BMD Film Gen 5"}) {
+      double top = CinemaMath.topCode(look);
+      check(top > 0.4 && top < 1, look + " top code " + top);
+      int[] log = new int[1000], phone = new int[1000];
+      for (int i = 0; i < 1000; i++) {
+        int v = (int) Math.floor(top * 255 * i / 999.0);
+        log[i] = 0xff000000 | (v << 16) | (v << 8) | v;
+        int w = i < 900 ? v : 255;
+        phone[i] = 0xff000000 | (w << 16) | (w << 8) | w;
+      }
+      check(!CinemaMath.exceedsLook(log, look), look + ": a real log take passes");
+      check(CinemaMath.exceedsLook(phone, look), look + ": a take with pure white is not that log");
+    }
+    check(!CinemaMath.exceedsLook(new int[] {0xffffffff}, "Rec.709"), "normal video is never flagged");
     check(CinemaMath.lookTag("Sony S-Log3").equals("_SLOG3") && CinemaMath.lookTag("Rec.709").isEmpty() && CinemaMath.lookTag("HLG").isEmpty(), "look tags");
     for (String[] t : CinemaMath.LOOK_TAGS) {
       String n = CinemaMath.clipName('A', 1, 1, "20261127") + CinemaMath.lookTag(t[0]);

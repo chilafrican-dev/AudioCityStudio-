@@ -103,14 +103,18 @@ final class EditEngine {
     /** Draws one clip frame, rotated and letterboxed into the output, through its LUT and grade. */
     void drawClip(FrameSource src, EditModel.Clip c, double alpha, double brightness, int outW, int outH) {
       if (clipProgram == 0 || !src.hasFrame()) return;
-      int dw = c.rotation % 180 == 0 ? Math.max(1, c.width) : Math.max(1, c.height), dh = c.rotation % 180 == 0 ? Math.max(1, c.height) : Math.max(1, c.width);
-      double scale = Math.min(outW / (double) dw, outH / (double) dh);
+      int rot = ((c.rotation + c.turn) % 360 + 360) % 360;
+      int dw = rot % 180 == 0 ? Math.max(1, c.width) : Math.max(1, c.height), dh = rot % 180 == 0 ? Math.max(1, c.height) : Math.max(1, c.width);
+      // fit (letterbox) or fill (crop to the frame), then zoom; pan moves a zoomed picture up to its edges
+      double scale = (c.fill ? Math.max(outW / (double) dw, outH / (double) dh) : Math.min(outW / (double) dw, outH / (double) dh)) * Math.max(1, c.zoom);
       float sx = (float) (dw * scale / outW), sy = (float) (dh * scale / outH);
+      float ox = (float) (-c.panX * Math.max(0, sx - 1)), oy = (float) (c.panY * Math.max(0, sy - 1));
       // texture corners for BL, BR, TL, TR of the displayed picture, by rotation (clockwise)
-      float[][] uv = c.rotation == 90 ? new float[][] {{1, 0}, {1, 1}, {0, 0}, {0, 1}} : c.rotation == 180 ? new float[][] {{1, 1}, {0, 1}, {1, 0}, {0, 0}}
-          : c.rotation == 270 ? new float[][] {{0, 1}, {0, 0}, {1, 1}, {1, 0}} : new float[][] {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+      float[][] uv = rot == 90 ? new float[][] {{1, 0}, {1, 1}, {0, 0}, {0, 1}} : rot == 180 ? new float[][] {{1, 1}, {0, 1}, {1, 0}, {0, 0}}
+          : rot == 270 ? new float[][] {{0, 1}, {0, 0}, {1, 1}, {1, 0}} : new float[][] {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+      if (c.flip) uv = new float[][] {uv[1], uv[0], uv[3], uv[2]}; // mirror left-right
       quad.clear();
-      quad.put(new float[] {-sx, -sy, uv[0][0], uv[0][1], sx, -sy, uv[1][0], uv[1][1], -sx, sy, uv[2][0], uv[2][1], sx, sy, uv[3][0], uv[3][1]});
+      quad.put(new float[] {ox - sx, oy - sy, uv[0][0], uv[0][1], ox + sx, oy - sy, uv[1][0], uv[1][1], ox - sx, oy + sy, uv[2][0], uv[2][1], ox + sx, oy + sy, uv[3][0], uv[3][1]});
       GLES30.glUseProgram(clipProgram);
       bindQuad(clipProgram, src.transform());
       GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
@@ -578,12 +582,12 @@ final class EditEngine {
         if (t1 <= starts[i] || t >= starts[i] + c.durationUs() || c.muted || !c.hasAudio) continue;
         live.add(c.id);
         double g0 = EditModel.clipGain(p, i, Math.max(t, starts[i])), g1 = EditModel.clipGain(p, i, Math.min(t1, starts[i] + c.durationUs() - 1));
-        add(c.id, c.uri, c.inUs + Math.max(0, t - starts[i]), Math.max(0, starts[i] - t), frames, g0, g1, out);
+        add(c.id, c.uri, c.sourceAt(Math.max(0, t - starts[i])), Math.max(0, starts[i] - t), frames, g0, g1, out, c.speed);
       }
       EditModel.Music m = p.music;
       if (m != null && t1 > m.startUs && t < m.startUs + m.sourceDurationUs) {
         live.add(m);
-        add(m, m.uri, Math.max(0, t - m.startUs), Math.max(0, m.startUs - t), frames, EditModel.musicGain(p, t), EditModel.musicGain(p, t1), out);
+        add(m, m.uri, Math.max(0, t - m.startUs), Math.max(0, m.startUs - t), frames, EditModel.musicGain(p, t), EditModel.musicGain(p, t1), out, 1);
       }
       for (Iterator<Map.Entry<Object, AudioSource>> it = sources.entrySet().iterator(); it.hasNext(); ) {
         Map.Entry<Object, AudioSource> e = it.next();
@@ -592,7 +596,9 @@ final class EditEngine {
       for (int i = 0; i < frames * 2; i++) out[i] = Math.max(-1f, Math.min(1f, out[i]));
     }
 
-    private void add(Object key, String uri, long sourceUs, long delayUs, int frames, double g0, double g1, float[] out) {
+    private float[] speedBlock = new float[0];
+
+    private void add(Object key, String uri, long sourceUs, long delayUs, int frames, double g0, double g1, float[] out, double speed) {
       AudioSource s = sources.get(key);
       try {
         if (s == null) { s = new AudioSource(ctx, uri, sourceUs); sources.put(key, s); }
@@ -600,7 +606,18 @@ final class EditEngine {
       int skip = (int) Math.min(frames, delayUs * 48_000 / 1_000_000L);
       int n = frames - skip;
       if (n <= 0) return;
-      s.read(block, n);
+      if (Math.abs(speed - 1) < 1e-6) s.read(block, n);
+      else { // speed change: read speed x as much sound and resample it to n frames (the pitch follows, like tape)
+        int m = Math.max(1, (int) Math.round(n * speed));
+        if (speedBlock.length < (m + 1) * 2) speedBlock = new float[(m + 1) * 2];
+        s.read(speedBlock, m);
+        for (int i = 0; i < n; i++) {
+          double pos = i * (m / (double) n);
+          int k = (int) pos; double f = pos - k; int k1 = Math.min(m - 1, k + 1);
+          block[i * 2] = (float) (speedBlock[k * 2] * (1 - f) + speedBlock[k1 * 2] * f);
+          block[i * 2 + 1] = (float) (speedBlock[k * 2 + 1] * (1 - f) + speedBlock[k1 * 2 + 1] * f);
+        }
+      }
       for (int i = 0; i < n; i++) {
         float g = (float) (g0 + (g1 - g0) * i / Math.max(1, n - 1));
         out[(skip + i) * 2] += block[i * 2] * g;
