@@ -210,6 +210,67 @@ final class CinemaMath {
   }
 
   /** Scene-linear light (18% grey = 0.18) to code value, for the headroom logs. */
+  // ---------------------------------------------------------------- log auto exposure
+
+  /** Target centre-weighted geometric mean of scene light for log auto exposure (a touch under 18%: protects highlights). */
+  static final double LOG_AE_TARGET = 0.13;
+
+  /**
+   * Meters a frame of log-encoded preview pixels (ARGB) by decoding each sample back to scene light (EI units,
+   * 18% grey = 0.18) and taking a centre-weighted geometric mean. Doesn't depend on the phone's own metering,
+   * which on some phones measures after the log curve and then runs away into deep underexposure.
+   */
+  static double meterLog(int[] argb, int w, int h, String look) {
+    double sum = 0, weight = 0;
+    int step = Math.max(1, Math.min(w, h) / 90);
+    for (int y = 0; y < h; y += step)
+      for (int x = 0; x < w; x += step) {
+        int p = argb[y * w + x];
+        double code = luma((p >> 16) & 255, (p >> 8) & 255, p & 255) / 255.0;
+        double s = Math.max(1e-3, Math.min(16, logDecode(look, code)));
+        boolean centre = Math.abs(x - w / 2) < w / 4 && Math.abs(y - h / 2) < h / 4;
+        double wt = centre ? 2 : 1;
+        sum += wt * Math.log(s); weight += wt;
+      }
+    return weight == 0 ? LOG_AE_TARGET : Math.exp(sum / weight);
+  }
+
+  /** Exposure change in stops to bring a metered value to the target: damped, with a small dead band, at most 3 stops. */
+  static double logAeCorrection(double metered, double target) {
+    double stops = Math.log(target / Math.max(1e-4, metered)) / Math.log(2);
+    if (Math.abs(stops) < 0.12) return 0;
+    return Math.max(-3, Math.min(3, stops * 0.5));
+  }
+
+  /**
+   * Splits an exposure (sensor ISO x seconds) into ISO and exposure time: keep the preferred shutter (cinema motion
+   * blur) and move ISO; below the lowest ISO shorten the shutter; above isoSoftMax (noise) lengthen the shutter up to
+   * the frame duration first, then use more ISO up to the sensor maximum. Returns {iso, exposure ns}.
+   */
+  static long[] allocateExposure(double isoSeconds, long preferredNs, long frameNs, int isoMin, int isoSoftMax, int isoMax, long expMin, long expMax) {
+    long maxTime = Math.min(frameNs, expMax);
+    double time = Math.min(preferredNs, maxTime) / (double) NS;
+    double iso = isoSeconds / time;
+    if (iso < isoMin) { iso = isoMin; time = isoSeconds / isoMin; }
+    else if (iso > isoSoftMax) {
+      time = Math.min(maxTime / (double) NS, isoSeconds / isoSoftMax);
+      iso = isoSeconds / time;
+    }
+    iso = Math.max(isoMin, Math.min(isoMax, iso));
+    long ns = Math.max(expMin, Math.min(maxTime, Math.round(time * NS)));
+    return new long[] {Math.round(iso), ns};
+  }
+
+  /** The shutter angle closest to the wanted one that is flicker-free under mains lighting (0 Hz = no adjustment). */
+  static double flickerSafeAngle(double wanted, double fps, int mainsHz) {
+    if (mainsHz <= 0) return wanted;
+    List<Double> safe = flickerFreeAngles(fps, mainsHz);
+    if (safe.isEmpty()) return wanted;
+    double best = safe.get(0);
+    for (double a : safe) if (Math.abs(a - wanted) < Math.abs(best - wanted)) best = a;
+    return best;
+  }
+
   static double logEncode(String look, double s) {
     switch (look) {
       case "RED Log3G10": return log3g10(s);

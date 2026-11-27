@@ -811,7 +811,20 @@ public class CinemaActivity extends Activity {
     b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
     int nominal = CinemaMath.nominalFps(fps);
     // ---- exposure
-    if (aeAuto || !lens.manualSensor) {
+    if (ownLogAe()) {
+      // log modes: City Cinema's own auto exposure (meters the decoded log picture), sent as manual exposure
+      if (!logAeReady) {
+        logAeIso = Math.max(lens.isoRange.getLower(), Math.min(lens.isoRange.getUpper(), liveIso));
+        logAeExposure = clampExposure(logAePreferredShutter(), CinemaMath.frameDurationNs(fps));
+        logAeReady = true;
+      }
+      b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+      long frame = CinemaMath.frameDurationNs(fps);
+      b.set(CaptureRequest.SENSOR_FRAME_DURATION, frame);
+      b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, clampExposure(logAeExposure, frame));
+      b.set(CaptureRequest.SENSOR_SENSITIVITY, logAeIso);
+    } else if (aeAuto || !lens.manualSensor) {
+      logAeReady = false;
       b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
       Range<Integer> range = fpsRange(nominal);
       if (range != null) b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range);
@@ -900,6 +913,7 @@ public class CinemaActivity extends Activity {
   private int logHeadroom() {
     if (!cityLogActive()) return 0;
     int want = CinemaMath.LOG_HEADROOM;
+    if (ownLogAe()) return want; // our own log auto exposure sets the sensor ISO directly
     if (aeAuto || !lens.manualSensor) {
       double available = -lens.evRange.getLower() * lens.evStep.doubleValue();
       return (int) Math.max(0, Math.min(want, Math.floor(available + 1e-6)));
@@ -907,6 +921,47 @@ public class CinemaActivity extends Activity {
     int stops = 0;
     while (stops < want && (iso >> (stops + 1)) >= lens.isoRange.getLower()) stops++;
     return stops;
+  }
+
+  // ---- City Cinema's own auto exposure for the log modes
+  private volatile boolean logAeReady;
+  private volatile int logAeIso = 100;
+  private volatile long logAeExposure = 20_833_333L, lastLogMeter;
+
+  /**
+   * In the log modes with auto exposure, City Cinema meters the picture itself (decoding the log curve) and drives
+   * ISO and shutter manually. Phone auto exposure can't be trusted there: some phones (e.g. Galaxy S20 Ultra) meter
+   * after the log curve, see the lifted shadows as brightness and run away to ~6 stops under.
+   */
+  private boolean ownLogAe() {
+    return aeAuto && lens != null && lens.manualSensor && !curveIgnored && cityLogActive() && !highSpeedSession && !maxResSession;
+  }
+
+  /** Cinema motion blur: the chosen shutter angle (180 by default), nudged to be flicker-free under 50/60 Hz light. */
+  private long logAePreferredShutter() {
+    int mains = antibanding == 1 ? 50 : antibanding == 2 ? 60 : 0;
+    return CinemaMath.exposureForAngle(CinemaMath.flickerSafeAngle(shutterAsAngle ? shutterAngle : 180, fps, mains), fps);
+  }
+
+  /** One metering step on a preview frame (analysis thread). */
+  private void logAeStep(Bitmap frame) {
+    long now = SystemClock.uptimeMillis();
+    if (now - lastLogMeter < 250 || !ownLogAe() || !logAeReady || aeLock) return; // AE LOCK freezes the exposure
+    lastLogMeter = now;
+    int w = frame.getWidth(), h = frame.getHeight();
+    int[] px = new int[w * h];
+    frame.getPixels(px, 0, w, 0, 0, w, h);
+    double metered = CinemaMath.meterLog(px, w, h, CinemaMath.LOOKS[lookIndex]);
+    double target = CinemaMath.LOG_AE_TARGET * Math.pow(2, evIndex * lens.evStep.doubleValue()); // EV compensation still works
+    double stops = CinemaMath.logAeCorrection(metered, target);
+    if (stops == 0) return;
+    double isoSeconds = logAeIso * (logAeExposure / 1e9) * Math.pow(2, stops);
+    int isoMax = lens.isoRange.getUpper();
+    long[] e = CinemaMath.allocateExposure(isoSeconds, logAePreferredShutter(), CinemaMath.frameDurationNs(fps), lens.isoRange.getLower(),
+        Math.min(isoMax, 3200), isoMax, lens.expRange.getLower(), lens.expRange.getUpper());
+    if (e[0] == logAeIso && e[1] == logAeExposure) return;
+    logAeIso = (int) e[0]; logAeExposure = e[1];
+    applyRepeating();
   }
 
   private Range<Integer> fpsRange(int nominal) {
@@ -1480,13 +1535,17 @@ public class CinemaActivity extends Activity {
     @Override public void run() {
       updateStatus();
       meter.invalidate();
-      if (scopes.needsFrames() && !maxResSession && texture.isAvailable() && analysisHandler != null && !analysing.get() && session != null) {
+      if ((scopes.needsFrames() || ownLogAe()) && !maxResSession && texture.isAvailable() && analysisHandler != null && !analysing.get() && session != null) {
         int w = 480, h = Math.max(1, Math.round(480f * texture.getHeight() / Math.max(1, texture.getWidth())));
         if (grab == null || grab.getWidth() != w || grab.getHeight() != h) grab = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         texture.getBitmap(grab);
         analysing.set(true);
         final Bitmap frame = grab;
-        analysisHandler.post(() -> { try { scopes.analyze(frame); } catch (RuntimeException e) { Log.w(TAG, "scopes", e); } finally { analysing.set(false); } });
+        analysisHandler.post(() -> {
+          try { if (scopes.needsFrames()) scopes.analyze(frame); logAeStep(frame); }
+          catch (RuntimeException e) { Log.w(TAG, "scopes", e); }
+          finally { analysing.set(false); }
+        });
       }
       ui.postDelayed(this, 80);
     }

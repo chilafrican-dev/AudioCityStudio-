@@ -108,6 +108,7 @@ public class CinemaTests {
     near(CinemaMath.acLog(0), 0.0625, 1e-9, "Flat Log legal black");
     cityLog();
     cameraLogs();
+    logAutoExposure();
     check(CinemaMath.acLog(0.02) > CinemaMath.rec709(0.02), "log lifts shadows above Rec.709");
     check(CinemaMath.acLog(0.9) < CinemaMath.rec709(0.9), "log holds highlights below Rec.709");
     near(CinemaMath.rec709(1), 1, 1e-3, "Rec.709 white");
@@ -336,5 +337,33 @@ public class CinemaTests {
     }
     check(CinemaMath.lutName("Sony S-Log3").equals("Sony_S-Log3_to_Rec709.cube") && CinemaMath.lutName("RED Log3G10").equals("RED_Log3G10_to_Rec709.cube"), "LUT names");
     check(!CinemaMath.isHeadroomLog("Flat Log") && !CinemaMath.isHeadroomLog("Rec.709"), "Flat Log has no EI headroom");
+  }
+
+  static void logAutoExposure() {
+    for (String look : new String[] {"Sony S-Log3", "City Log", "RED Log3G10"}) {
+      for (double scene : new double[] {0.02, 0.13, 0.6}) {
+        int code = (int) Math.round(CinemaMath.logEncode(look, scene) * 255);
+        int[] px = new int[64 * 36];
+        java.util.Arrays.fill(px, 0xff000000 | code << 16 | code << 8 | code);
+        double m = CinemaMath.meterLog(px, 64, 36, look);
+        near(Math.log(m / scene) / Math.log(2), 0, 0.15, look + " meter reads the scene back within 0.15 stop at " + scene);
+      }
+    }
+    // the runaway seen on a Galaxy S20 Ultra: a dark frame must push exposure up, not down
+    check(CinemaMath.logAeCorrection(0.01, CinemaMath.LOG_AE_TARGET) > 1, "dark frame raises exposure");
+    check(CinemaMath.logAeCorrection(1.0, CinemaMath.LOG_AE_TARGET) < -1, "bright frame lowers exposure");
+    check(CinemaMath.logAeCorrection(0.135, CinemaMath.LOG_AE_TARGET) == 0, "dead band near the target");
+    long frame = CinemaMath.frameDurationNs(24), half = CinemaMath.exposureForAngle(180, 24);
+    long[] a = CinemaMath.allocateExposure(400 * half / 1e9, half, frame, 50, 3200, 6400, 100_000, 100_000_000);
+    check(a[0] == 400 && a[1] == half, "normal light: keep 180 degrees, ISO 400");
+    a = CinemaMath.allocateExposure(50 * half / 1e9 / 8, half, frame, 50, 3200, 6400, 100_000, 100_000_000);
+    check(a[0] == 50 && Math.abs(a[1] - half / 8) < 1000, "bright: lowest ISO, shorter shutter");
+    a = CinemaMath.allocateExposure(3200 * half / 1e9 * 2, half, frame, 50, 3200, 6400, 100_000, 100_000_000);
+    check(a[0] == 3200 && Math.abs(a[1] - frame) < 1000, "dark: 360 degrees before more ISO");
+    a = CinemaMath.allocateExposure(6400 * frame / 1e9 * 4, half, frame, 50, 3200, 6400, 100_000, 100_000_000);
+    check(a[0] == 6400 && a[1] == frame, "very dark: clamps at the sensor limits");
+    near(CinemaMath.flickerSafeAngle(180, 24, 50), 172.8, 0.01, "50 Hz at 24 fps: 172.8 degrees");
+    near(CinemaMath.flickerSafeAngle(180, 25, 50), 180, 0.01, "50 Hz at 25 fps: 180 degrees");
+    near(CinemaMath.flickerSafeAngle(180, 24, 60), 144, 0.01, "60 Hz at 24 fps: 144 degrees (180 would flicker)");
   }
 }
