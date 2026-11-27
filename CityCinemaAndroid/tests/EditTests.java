@@ -106,6 +106,7 @@ public class EditTests {
     layerTests();
     audioTrackTests();
     trackStateTests();
+    editOperationTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -119,6 +120,54 @@ public class EditTests {
   /** Layer tracks: drawn above the main track in track order, extend the timeline, snap, split, keep their sound. */
   /** Audio tracks: trimmed and muted sound clips, splitting, snapping to sound edges, the voice-over WAV header. */
   /** Track headers: hidden layers aren't drawn, muted/soloed audio tracks, muted camera sound; markers. */
+  /** Ripple trims, roll, slip, slide and in-place trims keep the programme consistent and stay inside the media. */
+  static void editOperationTests() {
+    EditModel.Project p = new EditModel.Project();
+    EditModel.Clip a = clip(0, 4_000_000, 10_000_000), b = clip(2_000_000, 6_000_000, 10_000_000), c = clip(1_000_000, 5_000_000, 10_000_000);
+    p.clips.add(a); p.clips.add(b); p.clips.add(c);
+    long total = EditModel.duration(p);
+    check(total == 12_000_000, "three 4 s clips");
+    // ripple trim
+    check(EditModel.trimStart(b, 1_000_000) == 1_000_000 && b.inUs == 3_000_000 && EditModel.duration(p) == 11_000_000, "ripple trim start shortens the programme");
+    check(EditModel.trimStart(b, -9_000_000) == -3_000_000 && b.inUs == 0, "trim start stops at the start of the file");
+    check(EditModel.trimEnd(a, 2_000_000) == 2_000_000 && a.outUs == 6_000_000, "trim end lengthens");
+    check(EditModel.trimEnd(a, 20_000_000) == 4_000_000 && a.outUs == 10_000_000, "trim end stops at the end of the file");
+    check(EditModel.trimEnd(a, -20_000_000) == -(10_000_000 - EditModel.MIN_US) && a.durationUs() == EditModel.MIN_US, "never shorter than the minimum");
+    a.outUs = 4_000_000; b.inUs = 2_000_000;
+    total = EditModel.duration(p);
+    // roll keeps the length
+    long r = EditModel.roll(p, 1, 1_000_000);
+    check(r == 1_000_000 && a.outUs == 5_000_000 && b.inUs == 3_000_000 && EditModel.duration(p) == total, "roll moves the cut, same length");
+    check(EditModel.roll(p, 1, -9_000_000) == -3_000_000 && b.inUs == 0 && a.outUs == 2_000_000 && EditModel.duration(p) == total, "roll stops where the next clip's file starts");
+    a.outUs = 4_000_000; b.inUs = 2_000_000;
+    // slip keeps place and length
+    long[] before = EditModel.starts(p);
+    check(EditModel.slip(b, 1_000_000) == 1_000_000 && b.inUs == 3_000_000 && b.outUs == 7_000_000 && b.durationUs() == 4_000_000, "slip moves the content");
+    check(java.util.Arrays.equals(before, EditModel.starts(p)) && EditModel.duration(p) == total, "slip keeps the timeline");
+    check(EditModel.slip(b, 9_000_000) == 3_000_000 && b.outUs == 10_000_000, "slip stops at the end of the file");
+    b.inUs = 2_000_000; b.outUs = 6_000_000;
+    // slide moves the clip between neighbours
+    long s1 = EditModel.starts(p)[1];
+    check(EditModel.slide(p, 1, 1_000_000) == 1_000_000 && EditModel.starts(p)[1] == s1 + 1_000_000 && b.durationUs() == 4_000_000 && EditModel.duration(p) == total, "slide");
+    check(EditModel.slide(p, 0, 1_000_000) == 0 && EditModel.slide(p, 2, 1_000_000) == 0, "first and last clips can't slide");
+    // speed: a 2x clip trims twice as much source per timeline second
+    EditModel.Clip f = clip(0, 8_000_000, 8_000_000); f.speed = 2;
+    check(EditModel.trimStart(f, 1_000_000) == 1_000_000 && f.inUs == 2_000_000, "trim at 2x");
+    // layers and sounds trim in place
+    EditModel.Clip l = clip(1_000_000, 5_000_000, 10_000_000); l.startUs = 3_000_000;
+    long end = l.startUs + l.durationUs();
+    check(EditModel.trimLayerStart(l, 500_000) == 500_000 && l.startUs == 3_500_000 && l.startUs + l.durationUs() == end, "layer start trim keeps its end");
+    EditModel.Music m = new EditModel.Music(); m.sourceDurationUs = 10_000_000; m.startUs = 2_000_000; m.inUs = 1_000_000;
+    long mEnd = m.startUs + m.playUs();
+    check(EditModel.trimAudioStart(m, 1_000_000) == 1_000_000 && m.startUs == 3_000_000 && m.inUs == 2_000_000 && m.startUs + m.playUs() == mEnd, "sound start trim keeps its end");
+    check(EditModel.trimAudioEnd(m, -2_000_000) == -2_000_000 && m.playUs() == 6_000_000, "sound end trim");
+    check(EditModel.trimAudioStart(m, -9_000_000) == -2_000_000 && m.inUs == 0, "sound start trim stops at the file start");
+  }
+
+  static EditModel.Clip clip(long in, long out, long src) {
+    EditModel.Clip c = new EditModel.Clip(); c.inUs = in; c.outUs = out; c.sourceDurationUs = src; c.transition = 0; return c;
+  }
+
   static void trackStateTests() {
     EditModel.Project p = new EditModel.Project();
     p.fadeIn = p.fadeOut = false;

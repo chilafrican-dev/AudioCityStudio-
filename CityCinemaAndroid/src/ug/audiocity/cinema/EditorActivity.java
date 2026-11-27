@@ -131,6 +131,8 @@ public class EditorActivity extends Activity {
     actions.addView(voiceButton, lp(-2));
     actions.addView(chip("SPLIT", v -> splitAtPlayhead()), lp(-2));
     actions.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
+    actions.addView(chip("COPY", v -> copyItems()), lp(-2));
+    actions.addView(chip("PASTE", v -> pasteItems()), lp(-2));
     actions.addView(chip("UNDO", v -> undo()), lp(-2));
     actions.addView(chip("REDO", v -> redo()), lp(-2));
     actions.addView(chip("◆ MARK", v -> { snapshot(); boolean added = EditModel.toggleMarker(project, playhead); changed(true); if (!added) toast("Marker removed."); }), lp(-2));
@@ -593,6 +595,17 @@ public class EditorActivity extends Activity {
 
   /** Deletes what is selected on the timeline: a clip, a title or the music. */
   private void deleteSelected() {
+    if (!multi.isEmpty()) {
+      snapshot();
+      int n = 0;
+      for (Object o : multi) {
+        if (o instanceof EditModel.Clip && project.overlays.contains(o) && project.layerLocked(((EditModel.Clip) o).track)) continue;
+        if (project.clips.remove(o) || project.overlays.remove(o) || project.titles.remove(o) || project.audio.remove(o)) n++;
+      }
+      multi.clear(); selected = null; changed(true);
+      toast(n + " items deleted. UNDO brings them back.");
+      return;
+    }
     if (selected instanceof EditModel.Clip && project.overlays.contains(selected) && project.layerLocked(((EditModel.Clip) selected).track)) { toast("Layer " + ((EditModel.Clip) selected).track + " is locked: unlock it in the track header first."); return; }
     if (selected instanceof EditModel.Clip) { snapshot(); if (!project.clips.remove(selected)) project.overlays.remove(selected); toast("Clip deleted. UNDO brings it back."); }
     else if (selected instanceof EditModel.Title) { snapshot(); project.titles.remove(selected); toast("Title deleted. UNDO brings it back."); }
@@ -627,6 +640,58 @@ public class EditorActivity extends Activity {
   // ------------------------------------------------------------------------------------------------ inspector
 
   private void select(Object o) { selected = o; buildInspector(); timeline.invalidate(); }
+
+  // ---- multi-select, copy and paste
+  /** Items picked with a long press (clips, layers, titles, sounds); DELETE and COPY act on all of them. */
+  private final java.util.LinkedHashSet<Object> multi = new java.util.LinkedHashSet<>();
+  private final java.util.List<Object[]> clipboard = new java.util.ArrayList<>(); // {kind, copy, offset from the first item's start}
+  /** How dragging a selected main clip works: TRIM (edges, ripple), ROLL (edges move the cut), SLIP / SLIDE (the body). */
+  private String editMode = "TRIM";
+
+  private long startOfItem(Object o) {
+    if (o instanceof EditModel.Clip) {
+      EditModel.Clip c = (EditModel.Clip) o;
+      int i = project.clips.indexOf(c);
+      return i >= 0 ? EditModel.starts(project)[i] : c.startUs;
+    }
+    return o instanceof EditModel.Title ? ((EditModel.Title) o).startUs : ((EditModel.Music) o).startUs;
+  }
+
+  private void copyItems() {
+    java.util.List<Object> items = new java.util.ArrayList<>(multi.isEmpty() && selected != null ? java.util.Collections.singletonList(selected) : multi);
+    if (items.isEmpty()) { toast("Select a clip, layer, title or sound first (long-press to pick several)."); return; }
+    long first = Long.MAX_VALUE;
+    for (Object o : items) first = Math.min(first, startOfItem(o));
+    clipboard.clear();
+    for (Object o : items) {
+      long off = startOfItem(o) - first;
+      if (o instanceof EditModel.Clip) clipboard.add(new Object[] {project.clips.contains(o) ? "main" : "layer", ((EditModel.Clip) o).copy(), off});
+      else if (o instanceof EditModel.Title) clipboard.add(new Object[] {"title", ((EditModel.Title) o).copy(), off});
+      else clipboard.add(new Object[] {"sound", ((EditModel.Music) o).copy(), off});
+    }
+    toast(clipboard.size() + (clipboard.size() == 1 ? " item" : " items") + " copied. Move the playhead and tap PASTE.");
+  }
+
+  /** Main-track clips go in after the clip under the playhead; everything else keeps its spacing from the playhead. */
+  private void pasteItems() {
+    if (clipboard.isEmpty()) { toast("Nothing copied yet."); return; }
+    snapshot();
+    long[] s = EditModel.starts(project);
+    int at = project.clips.size();
+    for (int i = 0; i < s.length; i++) if (playhead >= s[i] && playhead < s[i] + project.clips.get(i).durationUs()) at = i + 1;
+    Object last = null;
+    for (Object[] e : clipboard) {
+      long off = (Long) e[2];
+      if ("main".equals(e[0]) || "layer".equals(e[0])) {
+        EditModel.Clip c = ((EditModel.Clip) e[1]).copy(); c.id = EditModel.NEXT_ID.incrementAndGet();
+        if ("main".equals(e[0])) project.clips.add(at++, c);
+        else { c.startUs = playhead + off; c.track = freeTrack(c.startUs, c.durationUs()); project.overlays.add(c); }
+        last = c;
+      } else if ("title".equals(e[0])) { EditModel.Title t = ((EditModel.Title) e[1]).copy(); t.startUs = playhead + off; project.titles.add(t); last = t; }
+      else { EditModel.Music m = ((EditModel.Music) e[1]).copy(); m.startUs = playhead + off; project.audio.add(m); last = m; }
+    }
+    multi.clear(); selected = last; changed(true);
+  }
 
   private void buildInspector() {
     inspector.removeAllViews();
@@ -668,6 +733,15 @@ public class EditorActivity extends Activity {
       }), lp(-2));
       r2.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
       inspector.addView(r2);
+      if (!layer) {
+        label("Dragging this clip on the timeline: " + (editMode.equals("TRIM") ? "edges trim it (the clips after it move up or back: ripple)"
+            : editMode.equals("ROLL") ? "edges move the cut with the neighbouring clip (total length stays)"
+            : editMode.equals("SLIP") ? "drag the clip to show an earlier or later part of its video (place and length stay)"
+            : "drag the clip along, taking time from one neighbour and giving it to the other"));
+        LinearLayout em = row();
+        for (String m : new String[] {"TRIM", "ROLL", "SLIP", "SLIDE"}) em.addView(chip(m, v -> { editMode = m; buildInspector(); }, editMode.equals(m)), lp(-2));
+        inspector.addView(em);
+      } else label("Drag the layer's edges on the timeline to trim it, its middle to move it.");
       // speed (sound follows, with its pitch)
       label(String.format(Locale.US, "Speed: %sx%s", trimNum(c.speed), c.speed != 1 ? " · sound pitch follows; MUTE for silent slow motion" : ""));
       LinearLayout sp = row();
@@ -1052,6 +1126,21 @@ public class EditorActivity extends Activity {
     private final android.view.ScaleGestureDetector zoom;
     // moving a layer clip, title or sound: what, where it started, and the snap guide shown while moving
     private Object moving; private long moveFrom, guideUs = -1; private boolean moved;
+    // edge / body edits on the selected item: L, R (edges), SLIP, SLIDE (main body); applied step by step while dragging
+    private String op; private EditModel.Clip opClip; private EditModel.Music opSound; private int opIndex;
+    private boolean longPressed;
+    private float downY;
+    private final Runnable longPress = () -> {
+      Object hit = hitAt(downX, downY);
+      if (hit == null || dragging) return;
+      longPressed = true;
+      if (!multi.remove(hit)) multi.add(hit);
+      if (selected != null && selected != hit && !multi.contains(selected) && multi.size() == 1) multi.add(selected);
+      selected = hit; buildInspector();
+      performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+      invalidate();
+      if (multi.size() > 1) toast(multi.size() + " items selected: DELETE or COPY act on all of them. Long-press again to drop one.");
+    };
 
     Timeline(Context c) {
       super(c);
@@ -1187,6 +1276,12 @@ public class EditorActivity extends Activity {
         android.graphics.Path d = new android.graphics.Path(); d.moveTo(mx, 0); d.lineTo(mx + dp(5), dp(5)); d.lineTo(mx, dp(10)); d.lineTo(mx - dp(5), dp(5)); d.close();
         c.drawPath(d, p);
       }
+      // multi-selection outlines and the selected item's edge handles
+      p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(2)); p.setColor(0xff8fe3ff);
+      for (Object o : multi) { RectF r = rectOf(o); if (r != null) c.drawRoundRect(r, dp(3), dp(3), p); }
+      p.setStyle(Paint.Style.FILL);
+      RectF sr = selected == null ? null : rectOf(selected);
+      if (sr != null) { p.setColor(ACCENT); c.drawRect(sr.left, sr.top, sr.left + dp(4), sr.bottom, p); c.drawRect(sr.right - dp(4), sr.top, sr.right, sr.bottom, p); }
       if (guideUs >= 0) { p.setColor(ACCENT); float gx = x(guideUs); c.drawRect(gx - dp(1), 0, gx + dp(1), h, p); } // snap guide
       p.setColor(TEXT);
       c.drawRect(getWidth() / 2f - dp(1), 0, getWidth() / 2f + dp(1), h, p);
@@ -1223,6 +1318,18 @@ public class EditorActivity extends Activity {
         p.setColor(on ? (g.equals("M") || g.equals("S") ? BG : TEXT) : 0xff5a6066);
         float tw = p.measureText(g); c.drawText(g, box.centerX() - tw / 2, box.centerY() + dp(3.5f), p);
       }
+    }
+
+    private RectF rectOf(Object o) {
+      if (o instanceof EditModel.Clip) {
+        EditModel.Clip k = (EditModel.Clip) o;
+        int i = project.clips.indexOf(k);
+        if (i >= 0) { long st = EditModel.starts(project)[i]; return new RectF(x(st) + 1, rowV(), x(st + k.durationUs()) - 1, rowV() + rowVh()); }
+        return project.overlays.contains(k) ? layerRect(k) : null;
+      }
+      if (o instanceof EditModel.Title && project.titles.contains(o)) { EditModel.Title t = (EditModel.Title) o; return new RectF(x(t.startUs), rowT(), x(t.startUs + t.durationUs), rowT() + rowTh()); }
+      if (o instanceof EditModel.Music && project.audio.contains(o)) return audioRect((EditModel.Music) o);
+      return null;
     }
 
     /** A tap in the header column: which switch, if any. */
@@ -1262,14 +1369,25 @@ public class EditorActivity extends Activity {
       if (e.getPointerCount() > 1) { dragging = true; moving = null; guideUs = -1; return true; }
       switch (e.getActionMasked()) {
         case MotionEvent.ACTION_DOWN:
-          lastX = downX = e.getX(); dragging = false; moved = false;
-          moving = e.getX() < headW() ? null : movableAt(e.getX(), e.getY());
+          lastX = downX = e.getX(); downY = e.getY(); dragging = false; moved = false; longPressed = false;
+          op = e.getX() < headW() ? null : opAt(e.getX(), e.getY());
+          moving = op != null || e.getX() < headW() ? null : movableAt(e.getX(), e.getY());
           if (moving != null) moveFrom = startOf(moving);
+          postDelayed(longPress, 450);
           return true;
         case MotionEvent.ACTION_MOVE:
-          if (Math.abs(e.getX() - downX) > dp(6)) dragging = true;
+          if (Math.abs(e.getX() - downX) > dp(6)) { dragging = true; removeCallbacks(longPress); }
           if (!dragging) return true;
           if (playing) stopPlayback();
+          if (op != null) { // trim / roll / slip / slide, step by step (each step is clamped to what the media allows)
+            if (!moved) { snapshot(); moved = true; }
+            long dt = (long) ((e.getX() - lastX) / scale() * 1e6);
+            lastX = e.getX();
+            applyOp(dt);
+            shown = EditModel.snapshot(project);
+            updateTime(); invalidate(); preview.requestRender();
+            return true;
+          }
           if (moving != null) { // drag the selected item, snapping its start or end to nearby edges, markers and the playhead
             if (!moved) { snapshot(); moved = true; }
             long dt = (long) ((e.getX() - downX) / scale() * 1e6);
@@ -1288,9 +1406,10 @@ public class EditorActivity extends Activity {
           lastX = e.getX(); updateTime(); invalidate(); preview.requestRender();
           return true;
         case MotionEvent.ACTION_UP:
-          if (moving != null && moved) { guideUs = -1; moving = null; changed(true); return true; }
-          moving = null; guideUs = -1;
-          if (!dragging) tap(e.getX(), e.getY());
+          removeCallbacks(longPress);
+          if ((moving != null || op != null) && moved) { guideUs = -1; moving = null; op = null; changed(true); return true; }
+          moving = null; op = null; guideUs = -1;
+          if (!dragging && !longPressed) tap(e.getX(), e.getY());
           invalidate();
           return true;
         default: return true;
@@ -1305,12 +1424,66 @@ public class EditorActivity extends Activity {
         for (long mk : project.markers) if (Math.abs(mk - t) <= tol) { if (playing) stopPlayback(); playhead = mk; updateTime(); invalidate(); preview.requestRender(); return; }
         return;
       }
+      Object hit = hitAt(tx, ty);
+      if (!multi.isEmpty() && (hit == null || !multi.contains(hit))) multi.clear(); // a plain tap ends a multi-selection
+      select(hit);
+    }
+
+    private Object hitAt(float tx, float ty) {
+      if (tx < headW() || ty < rowR()) return null;
+      long t = timeAt(tx);
       Object hit = null;
       if (ty < rowV()) { for (EditModel.Clip o : project.overlays) if (layerRect(o).contains(tx, ty)) hit = o; }
       else if (ty < rowT()) { long[] s = EditModel.starts(project); for (int i = project.clips.size() - 1; i >= 0 && hit == null; i--) if (t >= s[i] && t < s[i] + project.clips.get(i).durationUs()) hit = project.clips.get(i); }
       else if (ty < rowM()) { for (EditModel.Title k : project.titles) if (t >= k.startUs && t < k.startUs + k.durationUs) hit = k; }
       else for (EditModel.Music m : project.audio) if (audioRect(m).contains(tx, ty)) hit = m;
-      select(hit);
+      return hit;
+    }
+
+    /** Which edit a drag starting at (tx, ty) makes on the selected item: an edge trim / roll, a slip or slide, or none. */
+    private String opAt(float tx, float ty) {
+      float grab = dp(14);
+      if (selected instanceof EditModel.Clip) {
+        EditModel.Clip c = (EditModel.Clip) selected;
+        int i = project.clips.indexOf(c);
+        if (i >= 0) {
+          long st = EditModel.starts(project)[i];
+          RectF r = new RectF(x(st), rowV(), x(st + c.durationUs()), rowV() + rowVh());
+          if (ty < r.top || ty > r.bottom || tx < r.left - grab || tx > r.right + grab) return null;
+          opClip = c; opIndex = i;
+          if (Math.abs(tx - r.left) < grab) return "L";
+          if (Math.abs(tx - r.right) < grab) return "R";
+          return editMode.equals("SLIP") ? "SLIP" : editMode.equals("SLIDE") ? "SLIDE" : null;
+        }
+        if (project.overlays.contains(c) && !project.layerLocked(c.track)) {
+          RectF r = layerRect(c);
+          if (ty < r.top - dp(4) || ty > r.bottom + dp(4)) return null;
+          opClip = c;
+          if (Math.abs(tx - r.left) < grab) return "LL";
+          if (Math.abs(tx - r.right) < grab) return "LR";
+        }
+      } else if (selected instanceof EditModel.Music && project.audio.contains(selected)) {
+        RectF r = audioRect((EditModel.Music) selected);
+        if (ty < r.top - dp(4) || ty > r.bottom + dp(4)) return null;
+        opSound = (EditModel.Music) selected;
+        if (Math.abs(tx - r.left) < grab) return "AL";
+        if (Math.abs(tx - r.right) < grab) return "AR";
+      }
+      return null;
+    }
+
+    private void applyOp(long dt) {
+      switch (op) {
+        case "L": if (editMode.equals("ROLL")) EditModel.roll(project, opIndex, dt); else EditModel.trimStart(opClip, dt); break;
+        case "R": if (editMode.equals("ROLL")) EditModel.roll(project, opIndex + 1, dt); else EditModel.trimEnd(opClip, dt); break;
+        case "SLIP": EditModel.slip(opClip, -dt); break; // drag right: the picture moves right, showing an earlier part
+        case "SLIDE": EditModel.slide(project, opIndex, dt); break;
+        case "LL": EditModel.trimLayerStart(opClip, dt); break;
+        case "LR": EditModel.trimEnd(opClip, dt); break;
+        case "AL": EditModel.trimAudioStart(opSound, dt); break;
+        case "AR": EditModel.trimAudioEnd(opSound, dt); break;
+        default: break;
+      }
     }
   }
 

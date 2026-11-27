@@ -119,6 +119,8 @@ final class EditModel {
     boolean box = true;
     double size = 1;
 
+    Title copy() { Title u = new Title(); u.text = text; u.startUs = startUs; u.durationUs = durationUs; u.place = place; u.color = color; u.box = box; u.size = size; return u; }
+
     JSONObject json() throws JSONException {
       return new JSONObject().put("text", text).put("startUs", startUs).put("durationUs", durationUs).put("place", place)
           .put("color", color).put("box", box).put("size", size);
@@ -297,6 +299,85 @@ final class EditModel {
     long[] out = new long[pts.size()];
     for (int i = 0; i < out.length; i++) out[i] = pts.get(i);
     return out;
+  }
+
+  // ---------------------------------------------------------------- trimming and the four classic edits
+  // All take a change in timeline microseconds and clamp it to what the media allows (never shorter than MIN_US).
+  static final long MIN_US = 200_000;
+
+  /** Main track, left edge: + shortens the clip from its start (everything after moves up: ripple). Returns the change applied. */
+  static long trimStart(Clip c, long dt) {
+    long lo = -(long) (c.inUs / c.speed), hi = c.durationUs() - MIN_US;
+    dt = Math.max(lo, Math.min(hi, dt));
+    c.inUs = Math.max(0, c.inUs + Math.round(dt * c.speed));
+    return dt;
+  }
+
+  /** Main track, right edge: + lengthens the clip (ripple). Returns the change applied. */
+  static long trimEnd(Clip c, long dt) {
+    long lo = -(c.durationUs() - MIN_US), hi = (long) ((c.sourceDurationUs - c.outUs) / c.speed);
+    dt = Math.max(lo, Math.min(hi, dt));
+    c.outUs = Math.min(c.sourceDurationUs, c.outUs + Math.round(dt * c.speed));
+    return dt;
+  }
+
+  /** Roll: moves the cut between clips i-1 and i; the programme length stays the same. */
+  static long roll(Project p, int i, long dt) {
+    if (i <= 0 || i >= p.clips.size()) return 0;
+    Clip a = p.clips.get(i - 1), b = p.clips.get(i);
+    long lo = Math.max(-(a.durationUs() - MIN_US), -(long) (b.inUs / b.speed));
+    long hi = Math.min(b.durationUs() - MIN_US, (long) ((a.sourceDurationUs - a.outUs) / a.speed));
+    dt = Math.max(lo, Math.min(hi, dt));
+    a.outUs += Math.round(dt * a.speed);
+    b.inUs += Math.round(dt * b.speed);
+    return dt;
+  }
+
+  /** Slip: shows a different part of the source in the same place and length. dt is in timeline time. */
+  static long slip(Clip c, long dt) {
+    long ds = Math.round(dt * c.speed);
+    ds = Math.max(-c.inUs, Math.min(c.sourceDurationUs - c.outUs, ds));
+    c.inUs += ds; c.outUs += ds;
+    return ds;
+  }
+
+  /** Slide: moves clip i along the main track, taking time from one neighbour and giving it to the other. */
+  static long slide(Project p, int i, long dt) {
+    if (i <= 0 || i >= p.clips.size() - 1) return 0;
+    Clip a = p.clips.get(i - 1), n = p.clips.get(i + 1);
+    long lo = Math.max(-(a.durationUs() - MIN_US), -(long) (n.inUs / n.speed));
+    long hi = Math.min(n.durationUs() - MIN_US, (long) ((a.sourceDurationUs - a.outUs) / a.speed));
+    dt = Math.max(lo, Math.min(hi, dt));
+    a.outUs += Math.round(dt * a.speed);
+    n.inUs += Math.round(dt * n.speed);
+    return dt;
+  }
+
+  /** Layer clip, left edge: the clip starts later (or earlier) in place; its right edge stays put. */
+  static long trimLayerStart(Clip c, long dt) {
+    long lo = Math.max(-(long) (c.inUs / c.speed), -c.startUs), hi = c.durationUs() - MIN_US;
+    dt = Math.max(lo, Math.min(hi, dt));
+    c.inUs = Math.max(0, c.inUs + Math.round(dt * c.speed));
+    c.startUs += dt;
+    return dt;
+  }
+
+  /** Sound clip, left edge (in place). */
+  static long trimAudioStart(Music m, long dt) {
+    long lo = Math.max(-m.inUs, -m.startUs), hi = m.playUs() - MIN_US;
+    dt = Math.max(lo, Math.min(hi, dt));
+    long len = m.playUs();
+    m.inUs += dt; m.startUs += dt; m.lengthUs = len - dt;
+    return dt;
+  }
+
+  /** Sound clip, right edge. */
+  static long trimAudioEnd(Music m, long dt) {
+    long len = m.playUs();
+    long lo = -(len - MIN_US), hi = m.sourceDurationUs - m.inUs - len;
+    dt = Math.max(lo, Math.min(hi, dt));
+    m.lengthUs = len + dt;
+    return dt;
   }
 
   /** Adds a marker at t, or removes the marker within 100 ms of t. Returns true when added. */

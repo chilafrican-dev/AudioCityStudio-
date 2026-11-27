@@ -49,7 +49,12 @@ already integer microseconds (good); project format is unversioned JSON (add a v
      (background, cached); **track headers** that work: hide/lock each layer, mute camera sound (V1), hide titles,
      mute/solo MUSIC/VOICE/FX (export follows them); **markers** (◆ MARK, tap one on the ruler to jump, snap points);
      project format **version 4**.
-   - Next: ripple/roll/slip/slide on the main track, multi-select, copy/paste.
+   - 4.2: **edge trimming by dragging** (main clips ripple, layers and sounds in place), edit modes for main clips
+     **TRIM / ROLL / SLIP / SLIDE**, **multi-select** by long press (DELETE and COPY act on all), **COPY / PASTE**
+     (main clips after the clip under the playhead; layers, titles and sounds keep their spacing from the playhead).
+     All edits are clamped to the media and tested; drags are one undo step each.
+   - Phase 3 left: insert/overwrite edits from a source monitor, clip grouping, automatic scrolling during playback
+     (the timeline already follows the playhead, which stays centred).
 4. GPU compositing: per-layer transform with opacity and blend modes, FP16 intermediates, PiP.
 5. Colour: lift/gamma/gain/offset wheels, curves, HSL qualifier, masks, before/after; LUT manager (rename, delete,
    favourites, thumbnails).
