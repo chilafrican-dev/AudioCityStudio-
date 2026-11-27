@@ -66,6 +66,7 @@ final class EditModel {
     Grade grade = new Grade();
     /** A user-imported .cube LUT (file name in the app's LUT folder; "" = none), applied after the log LUT. */
     String lut = "";
+    String shotIn = ""; // the log the clip was recorded in (kept flat unless look converts it)
     double lutStrength = 1;
 
     long durationUs() { return Math.max(0, outUs - inUs); }
@@ -74,7 +75,7 @@ final class EditModel {
       return new JSONObject().put("uri", uri).put("name", name).put("look", look).put("sourceDurationUs", sourceDurationUs).put("inUs", inUs)
           .put("outUs", outUs).put("width", width).put("height", height).put("rotation", rotation).put("fps", fps).put("volume", volume)
           .put("muted", muted).put("hasAudio", hasAudio).put("transition", transition).put("transitionUs", transitionUs).put("grade", grade.json())
-          .put("lut", lut).put("lutStrength", lutStrength);
+          .put("lut", lut).put("lutStrength", lutStrength).put("shotIn", shotIn);
     }
 
     static Clip from(JSONObject j) {
@@ -84,7 +85,7 @@ final class EditModel {
       c.width = j.optInt("width"); c.height = j.optInt("height"); c.rotation = j.optInt("rotation"); c.fps = j.optDouble("fps", 30);
       c.volume = j.optDouble("volume", 1); c.muted = j.optBoolean("muted"); c.hasAudio = j.optBoolean("hasAudio", true);
       c.transition = j.optInt("transition"); c.transitionUs = j.optLong("transitionUs", 500_000); c.grade = Grade.from(j.optJSONObject("grade"));
-      c.lut = j.optString("lut", ""); c.lutStrength = j.optDouble("lutStrength", 1);
+      c.lut = j.optString("lut", ""); c.lutStrength = j.optDouble("lutStrength", 1); c.shotIn = j.optString("shotIn", "");
       return c;
     }
 
@@ -92,7 +93,7 @@ final class EditModel {
       Clip c = new Clip();
       c.id = id; c.uri = uri; c.name = name; c.look = look; c.sourceDurationUs = sourceDurationUs; c.inUs = inUs; c.outUs = outUs;
       c.width = width; c.height = height; c.rotation = rotation; c.fps = fps; c.volume = volume; c.muted = muted; c.hasAudio = hasAudio;
-      c.transition = transition; c.transitionUs = transitionUs; c.grade = grade.copy(); c.lut = lut; c.lutStrength = lutStrength;
+      c.transition = transition; c.transitionUs = transitionUs; c.grade = grade.copy(); c.lut = lut; c.lutStrength = lutStrength; c.shotIn = shotIn;
       return c;
     }
   }

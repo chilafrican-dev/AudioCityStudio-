@@ -84,6 +84,9 @@ public class EditorActivity extends Activity {
   private Thread audioThread;
   private float density;
 
+  /** Log clips stay flat (for your own grade) unless this is on. */
+  private boolean convertLog() { return getSharedPreferences("editor", MODE_PRIVATE).getBoolean("convertLog", false); }
+
   @Override protected void onCreate(Bundle b) {
     super.onCreate(b);
     density = getResources().getDisplayMetrics().density;
@@ -162,14 +165,16 @@ public class EditorActivity extends Activity {
       File f = projectFile();
       if (f.exists()) project = EditModel.Project.from(new JSONObject(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8)));
     } catch (Exception e) { Log.w(TAG, "load", e); }
-    // clips without a log: look for their sidecar again (exact name first), else check the picture
+    // clips without a log: find the log they were shot in (file name tag, then sidecar). With "convert" on, convert
+    // them (asking when unsure); otherwise only note it: log clips stay flat for your own grade.
+    final boolean convert = convertLog();
     final java.util.List<EditModel.Clip> plain = new java.util.ArrayList<>();
-    for (EditModel.Clip c : project.clips) if (!CinemaMath.convertsInPost(c.look) && !c.name.contains("_Rec709")) plain.add(c);
+    for (EditModel.Clip c : project.clips) if (!CinemaMath.convertsInPost(c.look) && !c.name.contains("_Rec709") && (convert || c.shotIn.isEmpty())) plain.add(c);
     if (!plain.isEmpty()) jobs.execute(() -> {
       for (EditModel.Clip c : plain) {
         String look = lookFromSidecar(c.name);
-        if (look == null) { noSidecar.add(c.id); ui.post(() -> checkForLog(c)); }
-        else if (CinemaMath.convertsInPost(look)) ui.post(() -> { c.look = look; changed(true); toast(c.name + ": " + look + " found → normal colour."); });
+        if (look == null) { if (convert) { noSidecar.add(c.id); ui.post(() -> checkForLog(c)); } }
+        else if (CinemaMath.convertsInPost(look)) ui.post(() -> { c.shotIn = look; if (convert) { c.look = look; toast(c.name + ": " + look + " → normal colour."); } changed(true); });
       }
     });
   }
@@ -227,8 +232,7 @@ public class EditorActivity extends Activity {
             int at = selected instanceof EditModel.Clip ? project.clips.indexOf(selected) + 1 : project.clips.size();
             project.clips.add(Math.max(0, Math.min(at, project.clips.size())), c);
             selected = c; changed(true);
-            if (noSidecar.contains(c.id) && !c.name.contains("_Rec709")) checkForLog(c); // asks about log first, then auto colour
-            else autoColour(c, true);
+            if (noSidecar.contains(c.id) && !c.name.contains("_Rec709")) checkForLog(c); // only when "convert log" is on
           });
           else ui.post(() -> toast("Couldn't read that video."));
         } else {
@@ -260,8 +264,9 @@ public class EditorActivity extends Activity {
       if (c.name.endsWith(".mov") && c.width > 0 && !canDecode(ex)) return null;
       c.inUs = 0; c.outUs = c.sourceDurationUs;
       String look = lookFromSidecar(c.name);
-      c.look = look != null ? look : "None";
-      if (look == null) noSidecar.add(c.id);
+      c.shotIn = look != null && CinemaMath.convertsInPost(look) ? look : "";
+      c.look = look != null && convertLog() ? look : "None"; // log stays flat unless "convert" is on
+      if (look == null && convertLog()) noSidecar.add(c.id);
       return c;
     } catch (Exception e) { Log.w(TAG, "probe", e); return null; } finally { ex.release(); }
   }
@@ -352,7 +357,6 @@ public class EditorActivity extends Activity {
         bm.getPixels(px, 0, bm.getWidth(), 0, 0, bm.getWidth(), bm.getHeight());
         bm.recycle();
         if (EditModel.looksLikeLog(px)) ui.post(() -> askLog(c));
-        else if (c.grade.neutral()) ui.post(() -> autoColour(c, true));
       } catch (Exception e) { Log.w(TAG, "log check", e); }
       finally { try { r.release(); } catch (Exception ignored) {} }
     });
@@ -399,7 +403,6 @@ public class EditorActivity extends Activity {
         .setTitle("This clip looks like log footage")
         .setItems(logs, (d, i) -> {
           if (i < logs.length - 1) { c.look = logs[i].replace(" (not log)", ""); selected = c; clipTab = "Colour"; changed(true); toast(c.name + ": " + logs[i] + " → normal colour."); }
-          if (c.grade.neutral()) autoColour(c, true);
         })
         .setNegativeButton("Later", null).show();
     toast("No true blacks and washed-out colour: pick the log it was shot in to bring the colour back.");
@@ -514,7 +517,7 @@ public class EditorActivity extends Activity {
   }
 
   private void clipInspector(EditModel.Clip c) {
-    heading(c.name, (c.width + "×" + c.height) + " · " + fmt(c.durationUs()) + (CinemaMath.convertsInPost(c.look) ? " · " + c.look : ""));
+    heading(c.name, (c.width + "×" + c.height) + " · " + fmt(c.durationUs()) + (CinemaMath.convertsInPost(c.look) ? " · " + c.look : !c.shotIn.isEmpty() ? " · " + c.shotIn + " (flat)" : ""));
     LinearLayout tabs = row();
     for (String t : new String[] {"Edit", "Colour", "Transition"}) tabs.addView(chip(t, v -> { clipTab = t; buildInspector(); }, clipTab.equals(t)), lp(-2));
     inspector.addView(tabs);
@@ -538,8 +541,17 @@ public class EditorActivity extends Activity {
       for (String l : new String[] {"None", "City Log", "Flat Log", "Flat", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"})
         looks.addView(chip("None".equals(l) ? "No LUT" : l, v -> { c.look = l; changed(true); }, l.equals(c.look)), lp(-2));
       inspector.addView(scroll(looks));
-      label(CinemaMath.convertsInPost(c.look) ? (c.look.equals("Flat") ? "Flat profile" : "Log: " + c.look) + " → converted to normal colour."
-          : "No log set. If the picture is grey and washed out, the clip was shot in log: pick its log above (City Cinema clips are set automatically).");
+      if (CinemaMath.convertsInPost(c.look)) label((c.look.equals("Flat") ? "Flat profile" : "Log: " + c.look) + " → converted to normal colour. Tap No LUT to keep it flat.");
+      else if (!c.shotIn.isEmpty()) label("Shot in " + c.shotIn + ": kept flat for your grade. Grade it by hand, use a LUT made for " + c.shotIn + ", or tap " + c.shotIn + " above to convert it to normal colour.");
+      else label("Shot in log somewhere else? Pick its log above to convert it, or leave No LUT to keep it flat.");
+      LinearLayout conv = row();
+      boolean cv = convertLog();
+      conv.addView(chip(cv ? "NEW LOG CLIPS: CONVERT" : "NEW LOG CLIPS: STAY FLAT", v -> {
+        getSharedPreferences("editor", MODE_PRIVATE).edit().putBoolean("convertLog", !cv).apply();
+        toast(!cv ? "Log clips you add will be converted to normal colour." : "Log clips you add will stay flat for your own grade.");
+        buildInspector();
+      }, cv), lp(-2));
+      inspector.addView(conv);
       slider("Exposure", -300, 300, Math.round(g.exposure * 100), v -> g.exposure = v / 100.0, x -> String.format(Locale.US, "%+.1f stops", x / 100.0));
       slider("Contrast", -100, 100, Math.round(g.contrast * 100), v -> g.contrast = v / 100.0, x -> x + "");
       slider("Saturation", -100, 100, Math.round(g.saturation * 100), v -> g.saturation = v / 100.0, x -> x + "");
@@ -829,7 +841,7 @@ public class EditorActivity extends Activity {
         c.save(); c.clipRect(r);
         c.drawText(k.name, r.left + dp(5), rowV + dp(14), p);
         p.setColor(DIM);
-        c.drawText(fmt(k.durationUs()) + (k.muted ? " · muted" : "") + (CinemaMath.convertsInPost(k.look) ? " · " + k.look : "") + (k.grade.neutral() ? "" : " · graded"), r.left + dp(5), rowV + dp(28), p);
+        c.drawText(fmt(k.durationUs()) + (k.muted ? " · muted" : "") + (CinemaMath.convertsInPost(k.look) ? " · " + k.look : !k.shotIn.isEmpty() ? " · " + k.shotIn + " (flat)" : "") + (k.grade.neutral() ? "" : " · graded"), r.left + dp(5), rowV + dp(28), p);
         c.restore();
       }
       for (EditModel.Title t : project.titles) {
