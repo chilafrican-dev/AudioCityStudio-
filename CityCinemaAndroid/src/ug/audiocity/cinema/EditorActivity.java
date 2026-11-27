@@ -287,7 +287,9 @@ public class EditorActivity extends Activity {
 
   /** City Cinema clips carry their look in a JSON sidecar: log clips get their LUT automatically. */
   private String lookFromSidecar(String name) {
-    String clip = name.replaceAll("\\.(mp4|mov)$", "");
+    // copies made by file pickers get " (1)" etc. added: match the original clip name
+    String clip = name.replaceAll("\\.(mp4|mov)$", "").replaceAll(" \\(\\d+\\)$", "").replaceAll("_Rec709$", "");
+    if (name.contains("_Rec709")) return "None"; // already converted to normal colour
     Uri files = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL);
     try (Cursor c = getContentResolver().query(files, new String[] {MediaStore.Files.FileColumns._ID},
         MediaStore.Files.FileColumns.DISPLAY_NAME + " = ?", new String[] {clip + ".json"}, null)) {

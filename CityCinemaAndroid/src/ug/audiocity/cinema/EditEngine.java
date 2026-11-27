@@ -114,11 +114,11 @@ final class EditEngine {
       GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, src.texture());
       GLES30.glUniform1i(loc(clipProgram, "uTex"), 0);
       boolean log = CinemaMath.isLogLook(c.look);
-      if (log) {
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1);
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut(c.look));
-        GLES30.glUniform1i(loc(clipProgram, "uLut"), 1);
-      }
+      // The LUT sampler always gets its own texture unit: left at its default (unit 0, where the video is) two
+      // samplers of different types would share a unit and GL refuses to draw (a black picture).
+      GLES30.glActiveTexture(GLES30.GL_TEXTURE1);
+      GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, log ? lut(c.look) : lut("City Log"));
+      GLES30.glUniform1i(loc(clipProgram, "uLut"), 1);
       EditModel.Grade g = c.grade;
       GLES30.glUniform1f(loc(clipProgram, "uLutOn"), log ? 1 : 0);
       GLES30.glUniform1f(loc(clipProgram, "uAlpha"), (float) alpha);
