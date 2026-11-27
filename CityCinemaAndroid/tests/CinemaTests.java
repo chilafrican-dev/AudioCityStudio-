@@ -368,6 +368,18 @@ public class CinemaTests {
     near(CinemaMath.clippedFraction(px, 100, 50, 191), 0.1, 0.02, "clipped share of a frame");
     check(CinemaMath.protectHighlights(1.0, 0.1) <= -0.6 && CinemaMath.protectHighlights(0, 0.03) == -0.25 && CinemaMath.protectHighlights(0.5, 0.0) == 0.5, "highlight protection");
     near(CinemaMath.toneValue("Sony S-Log3", 1, 2) * 255, 191, 1, "S-Log3 with 2 stops of headroom clips at 8-bit code ~191");
+    check(CinemaMath.protectHighlights(0.8, 0.01) == 0, "a little clipping holds exposure (no hunting)");
+    for (String look : new String[] {"Rec.709", "Film", "Sony S-Log3"}) {
+      int hr = CinemaMath.isHeadroomLog(look) ? 2 : 0;
+      double[] t = CinemaMath.decodeTable(look, hr);
+      int grey = (int) Math.round(CinemaMath.toneValue(look, 0.18 / (1 << hr), hr) * 255);
+      near(Math.log(t[grey] / 0.18) / Math.log(2), 0, 0.12, look + " decode table finds 18% grey");
+      for (int i = 1; i < 256; i++) check(t[i] >= t[i - 1], look + " decode table is monotonic");
+    }
+    double[] k = CinemaMath.keepShutter(50 * 0.02 / 4, 20_000_000L, 50, 6400);
+    check(k[0] == 50 && k[1] == 20_000_000L && Math.abs(k[2] + 2) < 1e-9, "too bright: shutter kept, 2 stops of ND needed");
+    k = CinemaMath.keepShutter(800 * 0.02, 20_000_000L, 50, 6400);
+    check(k[0] == 800 && k[2] == 0, "normal: ISO 800 at the same shutter");
     near(CinemaMath.flickerSafeAngle(180, 25, 50), 180, 0.01, "50 Hz at 25 fps: 180 degrees");
     near(CinemaMath.flickerSafeAngle(180, 24, 60), 144, 0.01, "60 Hz at 24 fps: 144 degrees (180 would flicker)");
   }

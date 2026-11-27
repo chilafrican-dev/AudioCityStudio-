@@ -1,4 +1,4 @@
-# City Cinema 1.8
+# City Cinema 1.9
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -50,6 +50,11 @@ no third-party libraries.
 - Stabilization: off, optical, digital, optical + digital, or preview-matched.
 
 **Preview quality.** The viewfinder gets its own stream of up to 1920 pixels wide. Earlier versions drew the 4K buffer straight into the view, which aliased and looked harshly over-sharpened. That was the viewfinder only, not the recording.
+
+**Cinema auto exposure (all looks).** On cameras with manual exposure, auto exposure is run by City Cinema, like a cinema camera:
+- **The shutter stays at your angle** (flicker-safe with Anti-flicker set to 50/60 Hz) and only ISO moves. If even the lowest ISO is too bright, the app tells you how many stops of ND filter you need instead of changing the shutter. *Menu → Auto exposure* can allow shutter changes instead.
+- **It holds while a little of the picture clips** rather than alternating with highlight protection, and changes more slowly and smoothly during a take.
+- **White balance locks when recording starts** and unlocks when you stop, so colour doesn't drift mid-shot. *Menu → White balance while recording* turns this off.
 
 **Log auto exposure.** In the log modes with auto exposure, City Cinema meters the picture itself and drives ISO and shutter manually:
 - It decodes the log curve back to scene light and takes a centre-weighted average, aiming slightly under 18% grey.

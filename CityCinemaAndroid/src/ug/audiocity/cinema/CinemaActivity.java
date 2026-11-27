@@ -796,7 +796,7 @@ public class CinemaActivity extends Activity {
         b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom);
         b.set(CaptureRequest.CONTROL_AE_LOCK, aeLock);
         b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evIndex);
-        b.set(CaptureRequest.CONTROL_AWB_LOCK, awbLock);
+        b.set(CaptureRequest.CONTROL_AWB_LOCK, awbLock || (recording && lockWbOnRecord));
         b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO);
         List<CaptureRequest> burst = ((CameraConstrainedHighSpeedCaptureSession) s).createHighSpeedRequestList(b.build());
         s.setRepeatingBurst(burst, captureCallback, cameraHandler);
@@ -811,7 +811,7 @@ public class CinemaActivity extends Activity {
     b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO);
     int nominal = CinemaMath.nominalFps(fps);
     // ---- exposure
-    if (ownLogAe()) {
+    if (ownAe()) {
       // log modes: City Cinema's own auto exposure (meters the decoded log picture), sent as manual exposure
       if (!logAeReady) {
         logAeIso = Math.max(lens.isoRange.getLower(), Math.min(lens.isoRange.getUpper(), liveIso));
@@ -843,7 +843,7 @@ public class CinemaActivity extends Activity {
     // ---- white balance
     if (awbAuto || !lens.manualPost) {
       b.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO);
-      b.set(CaptureRequest.CONTROL_AWB_LOCK, awbLock);
+      b.set(CaptureRequest.CONTROL_AWB_LOCK, awbLock || (recording && lockWbOnRecord)); // white balance holds during a take
     } else {
       b.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF);
       b.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX);
@@ -913,7 +913,7 @@ public class CinemaActivity extends Activity {
   private int logHeadroom() {
     if (!cityLogActive()) return 0;
     int want = CinemaMath.LOG_HEADROOM;
-    if (ownLogAe()) return want; // our own log auto exposure sets the sensor ISO directly
+    if (ownAe()) return want; // our own log auto exposure sets the sensor ISO directly
     if (aeAuto || !lens.manualSensor) {
       double available = -lens.evRange.getLower() * lens.evStep.doubleValue();
       return (int) Math.max(0, Math.min(want, Math.floor(available + 1e-6)));
@@ -938,9 +938,19 @@ public class CinemaActivity extends Activity {
     scopes.clipLuma = cityLogActive() ? (int) Math.floor(255 * CinemaMath.toneValue(CinemaMath.LOOKS[lookIndex], 1, logHeadroom())) : 0;
   }
 
-  private boolean ownLogAe() {
-    return aeAuto && lens != null && lens.manualSensor && !curveIgnored && cityLogActive() && !highSpeedSession && !maxResSession;
+  /**
+   * Auto exposure run by City Cinema (when the camera allows manual exposure): it meters the picture through the
+   * look's own curve and moves ISO at a fixed cinema shutter angle, like a cinema camera, instead of letting the
+   * phone change the shutter constantly. In the logs this also avoids phones that meter after the curve and run away.
+   */
+  private boolean ownAe() {
+    return aeAuto && lens != null && lens.manualSensor && !highSpeedSession && !maxResSession;
   }
+
+  private boolean aeKeepShutter = true, lockWbOnRecord = true;
+  private long lastExposureHint;
+  private String decodeKey;
+  private double[] decode;
 
   /** Cinema motion blur: the chosen shutter angle (180 by default), nudged to be flicker-free under 50/60 Hz light. */
   private long logAePreferredShutter() {
@@ -951,20 +961,37 @@ public class CinemaActivity extends Activity {
   /** One metering step on a preview frame (analysis thread). */
   private void logAeStep(Bitmap frame) {
     long now = SystemClock.uptimeMillis();
-    if (now - lastLogMeter < 250 || !ownLogAe() || !logAeReady || aeLock) return; // AE LOCK freezes the exposure
+    if (now - lastLogMeter < 250 || !ownAe() || !logAeReady || aeLock) return; // AE LOCK freezes the exposure
     lastLogMeter = now;
     int w = frame.getWidth(), h = frame.getHeight();
     int[] px = new int[w * h];
     frame.getPixels(px, 0, w, 0, 0, w, h);
-    double metered = CinemaMath.meterLog(px, w, h, CinemaMath.LOOKS[lookIndex]);
+    // decode through the look actually applied (Rec.709 when the phone ignores custom curves)
+    String look = curveIgnored || tenBit ? "Rec.709" : CinemaMath.LOOKS[lookIndex];
+    int hr = logHeadroom();
+    String key = look + "/" + hr;
+    if (!key.equals(decodeKey)) { decode = CinemaMath.decodeTable(look, hr); decodeKey = key; }
+    double metered = CinemaMath.meterTable(px, w, h, decode);
     double target = CinemaMath.LOG_AE_TARGET * Math.pow(2, evIndex * lens.evStep.doubleValue()); // EV compensation still works
-    int clipLuma = (int) Math.floor(255 * CinemaMath.toneValue(CinemaMath.LOOKS[lookIndex], 1, logHeadroom())) - 3;
+    int clipLuma = hr > 0 ? (int) Math.floor(255 * CinemaMath.toneValue(look, 1, hr)) - 3 : 250;
     double stops = CinemaMath.protectHighlights(CinemaMath.logAeCorrection(metered, target), CinemaMath.clippedFraction(px, w, h, clipLuma));
+    if (recording) { if (Math.abs(stops) < 0.2) return; stops *= 0.5; } // smoother, steadier changes during a take
     if (stops == 0) return;
     double isoSeconds = logAeIso * (logAeExposure / 1e9) * Math.pow(2, stops);
     int isoMax = lens.isoRange.getUpper();
-    long[] e = CinemaMath.allocateExposure(isoSeconds, logAePreferredShutter(), CinemaMath.frameDurationNs(fps), lens.isoRange.getLower(),
-        Math.min(isoMax, 3200), isoMax, lens.expRange.getLower(), lens.expRange.getUpper());
+    long[] e;
+    if (aeKeepShutter) {
+      double[] k = CinemaMath.keepShutter(isoSeconds, clampExposure(logAePreferredShutter(), CinemaMath.frameDurationNs(fps)), lens.isoRange.getLower(), isoMax);
+      e = new long[] {(long) k[0], (long) k[1]};
+      if (Math.abs(k[2]) > 0.7 && now - lastExposureHint > 15_000) {
+        lastExposureHint = now;
+        message(k[2] < 0 ? String.format(Locale.US, "Too bright for %s at the lowest ISO: about %.0f stops over. Add an ND filter, or allow auto shutter in the menu.", CinemaMath.angleLabel(CinemaMath.angleForExposure(e[1], fps)), -k[2])
+            : String.format(Locale.US, "Too dark even at ISO %d: about %.0f stops under. Add light, open the shutter, or allow auto shutter in the menu.", e[0], k[2]));
+      }
+    } else {
+      e = CinemaMath.allocateExposure(isoSeconds, logAePreferredShutter(), CinemaMath.frameDurationNs(fps), lens.isoRange.getLower(),
+          Math.min(isoMax, 3200), isoMax, lens.expRange.getLower(), lens.expRange.getUpper());
+    }
     if (e[0] == logAeIso && e[1] == logAeExposure) return;
     logAeIso = (int) e[0]; logAeExposure = e[1];
     applyRepeating();
@@ -1541,7 +1568,7 @@ public class CinemaActivity extends Activity {
     @Override public void run() {
       updateStatus();
       meter.invalidate();
-      if ((scopes.needsFrames() || ownLogAe()) && !maxResSession && texture.isAvailable() && analysisHandler != null && !analysing.get() && session != null) {
+      if ((scopes.needsFrames() || ownAe()) && !maxResSession && texture.isAvailable() && analysisHandler != null && !analysing.get() && session != null) {
         int w = 480, h = Math.max(1, Math.round(480f * texture.getHeight() / Math.max(1, texture.getWidth())));
         if (grab == null || grab.getWidth() != w || grab.getHeight() != h) grab = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         texture.getBitmap(grab);
@@ -2107,6 +2134,8 @@ public class CinemaActivity extends Activity {
       "Lens: " + lens.label,
       "Export log LUTs (.cube): City Log, RED, Sony, Blackmagic",
       "ProRes speed test (can this phone record 4K ProRes?)",
+      "Auto exposure: " + (aeKeepShutter ? "keep shutter angle, ISO only (cinema)" : "ISO and shutter"),
+      "White balance while recording: " + (lockWbOnRecord ? "locked" : "follows the light"),
       "About this camera",
     };
     new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("City Cinema · Menu").setItems(items, (d, which) -> onSetting(which, hlgPossible)).show();
@@ -2154,6 +2183,8 @@ public class CinemaActivity extends Activity {
       case 13: chooseLens(); break;
       case 14: exportLuts(); break;
       case 15: proresSpeedTest(); break;
+      case 16: choose("Auto exposure", new String[] {"Keep shutter angle, change ISO only (cinema: steady motion blur; use ND in bright light)", "Change ISO and shutter (never overexposes, motion blur varies)"}, aeKeepShutter ? 0 : 1, i -> { aeKeepShutter = i == 0; savePrefs(); }); break;
+      case 17: choose("Auto white balance while recording", new String[] {"Lock when recording starts (steady colour, like a cinema camera)", "Keep adjusting during the take"}, lockWbOnRecord ? 0 : 1, i -> { lockWbOnRecord = i == 0; savePrefs(); }); break;
       default: about(); break;
     }
   }
@@ -2222,6 +2253,7 @@ public class CinemaActivity extends Activity {
     conformFps = Double.longBitsToDouble(p.getLong("conform", Double.doubleToLongBits(0)));
     hevc = p.getBoolean("hevc", true); tenBit = p.getBoolean("tenBit", false); cbr = p.getBoolean("cbr", true);
     quality = p.getInt("quality", 2); gop = p.getInt("gop", 0);
+    aeKeepShutter = p.getBoolean("aeKeepShutter", true); lockWbOnRecord = p.getBoolean("lockWbOnRecord", true);
     if (!p.getBoolean("bitrateFix16", false)) { // 1.6: earlier versions defaulted to VBR, which many encoders undershoot
       cbr = true; quality = Math.max(quality, 2);
       p.edit().putBoolean("bitrateFix16", true).apply();
@@ -2255,7 +2287,7 @@ public class CinemaActivity extends Activity {
         .putBoolean("audio", audioOn).putString("audioSource", audioSource).putInt("audioDevice", audioDeviceId).putBoolean("angle", shutterAsAngle)
         .putBoolean("tod", todTimecode).putLong("rr", recordRunBase).putBoolean("aeAuto", aeAuto).putInt("iso", iso).putFloat("shutterAngle", (float) shutterAngle)
         .putLong("shutterNs", shutterNs).putBoolean("awbAuto", awbAuto).putInt("kelvin", kelvin).putInt("tint", tint).putBoolean("mf", manualFocus)
-        .putFloat("focus", focus).putFloat("zoom", zoom).putBoolean("rawMode", rawMode).putBoolean("raw12", rawPack12).putBoolean("rawLossless", rawCompress).putString("rawKey", rawKey)
+        .putFloat("focus", focus).putFloat("zoom", zoom).putBoolean("aeKeepShutter", aeKeepShutter).putBoolean("lockWbOnRecord", lockWbOnRecord).putBoolean("rawMode", rawMode).putBoolean("raw12", rawPack12).putBoolean("rawLossless", rawCompress).putString("rawKey", rawKey)
         .putBoolean("prores", proresMode).putInt("proresProfile", proresProfile).putInt("proresW", proresSize.getWidth()).putInt("proresH", proresSize.getHeight())
         .putInt("rawW", rawSize == null ? 0 : rawSize.getWidth()).putInt("rawH", rawSize == null ? 0 : rawSize.getHeight())
         .putBoolean("zebra", scopes.zebra).putBoolean("peak", scopes.peaking).putInt("scope", scopes.scopeMode).putInt("guide", scopes.guide)

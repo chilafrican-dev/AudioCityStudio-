@@ -247,11 +247,54 @@ final class CinemaMath {
     return n == 0 ? 0 : c / (double) n;
   }
 
-  /** Highlight protection for log auto exposure: limits the correction when part of the picture clips. */
+  /**
+   * Highlight protection for auto exposure: pull down when part of the picture clips, and hold (never brighten)
+   * while a little still clips, so protection and the brightness target don't take turns and make exposure hunt.
+   */
   static double protectHighlights(double stops, double clipped) {
     if (clipped > 0.08) return Math.min(stops, -0.6);
     if (clipped > 0.02) return Math.min(stops, -0.25);
+    if (clipped > 0.005) return Math.min(stops, 0);
     return stops;
+  }
+
+  /**
+   * Scene light (18% grey = 0.18, in exposure-index units) for each 8-bit code of a look's output, by inverting its
+   * tone curve (x * 2^headroom). Rec.709 approximates the phone's own curve. Used to meter any look.
+   */
+  static double[] decodeTable(String look, int headroom) {
+    double[] t = new double[256];
+    for (int i = 0; i < 256; i++) {
+      double code = i / 255.0, lo = 0, hi = 1;
+      if (code <= toneValue(look, 0, headroom)) { t[i] = 0; continue; }
+      for (int k = 0; k < 40; k++) { double mid = (lo + hi) / 2; if (toneValue(look, mid, headroom) < code) lo = mid; else hi = mid; }
+      t[i] = (lo + hi) / 2 * (1 << headroom);
+    }
+    return t;
+  }
+
+  /** Centre-weighted geometric mean of scene light over a frame, decoded with a decodeTable. */
+  static double meterTable(int[] argb, int w, int h, double[] table) {
+    double sum = 0, weight = 0;
+    int step = Math.max(1, Math.min(w, h) / 90);
+    for (int y = 0; y < h; y += step)
+      for (int x = 0; x < w; x += step) {
+        int p = argb[y * w + x];
+        double s = Math.max(1e-3, Math.min(16, table[luma((p >> 16) & 255, (p >> 8) & 255, p & 255)]));
+        double wt = Math.abs(x - w / 2) < w / 4 && Math.abs(y - h / 2) < h / 4 ? 2 : 1;
+        sum += wt * Math.log(s); weight += wt;
+      }
+    return weight == 0 ? LOG_AE_TARGET : Math.exp(sum / weight);
+  }
+
+  /**
+   * Cinema exposure: the shutter stays at the chosen angle and only ISO moves (clamped to the sensor range).
+   * Returns {iso, exposure ns, stops still needed beyond the ISO range: negative = too bright (needs ND), positive = too dark}.
+   */
+  static double[] keepShutter(double isoSeconds, long shutterNs, int isoMin, int isoMax) {
+    double needed = isoSeconds / (shutterNs / (double) NS);
+    double iso = Math.max(isoMin, Math.min(isoMax, needed));
+    return new double[] {Math.round(iso), shutterNs, Math.log(needed / iso) / Math.log(2)};
   }
 
   /** Exposure change in stops to bring a metered value to the target: damped, with a small dead band, at most 3 stops. */
