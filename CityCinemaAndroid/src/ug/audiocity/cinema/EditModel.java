@@ -69,6 +69,11 @@ final class EditModel {
     String shotIn = ""; // the log the clip was recorded in (kept flat unless look converts it)
     /** Edit tools: playback speed (sound follows, with its pitch), framing (fit or fill, zoom, pan), turn and flip. */
     double speed = 1, zoom = 1, panX, panY, opacity = 1;
+    /** Compositing: blend mode (BLEND_MODES), separate width / height scale, rotation in degrees (clockwise), vertical flip,
+     *  and crop of each edge as a fraction of the picture (0..0.45). */
+    int blend;
+    double scaleX = 1, scaleY = 1, rotationDeg, cropL, cropR, cropT, cropB;
+    boolean flipV;
     /** Layer clips only (Project.overlays): where the clip starts on the timeline and which layer it is on (1 = just above the main track). */
     long startUs; int track = 1;
     int turn; // extra clockwise rotation: 0, 90, 180, 270
@@ -84,7 +89,9 @@ final class EditModel {
       return new JSONObject().put("uri", uri).put("name", name).put("look", look).put("sourceDurationUs", sourceDurationUs).put("inUs", inUs)
           .put("outUs", outUs).put("width", width).put("height", height).put("rotation", rotation).put("fps", fps).put("volume", volume)
           .put("muted", muted).put("hasAudio", hasAudio).put("transition", transition).put("transitionUs", transitionUs).put("grade", grade.json())
-          .put("lut", lut).put("lutStrength", lutStrength).put("shotIn", shotIn).put("speed", speed).put("zoom", zoom).put("panX", panX).put("panY", panY).put("turn", turn).put("flip", flip).put("fill", fill).put("opacity", opacity).put("startUs", startUs).put("track", track);
+          .put("lut", lut).put("lutStrength", lutStrength).put("shotIn", shotIn).put("speed", speed).put("zoom", zoom).put("panX", panX).put("panY", panY).put("turn", turn).put("flip", flip).put("fill", fill).put("opacity", opacity).put("startUs", startUs).put("track", track)
+          .put("blend", blend).put("scaleX", scaleX).put("scaleY", scaleY).put("rotationDeg", rotationDeg).put("flipV", flipV)
+          .put("cropL", cropL).put("cropR", cropR).put("cropT", cropT).put("cropB", cropB);
     }
 
     static Clip from(JSONObject j) {
@@ -98,6 +105,8 @@ final class EditModel {
       c.speed = Math.max(0.1, j.optDouble("speed", 1)); c.zoom = j.optDouble("zoom", 1); c.panX = j.optDouble("panX", 0); c.panY = j.optDouble("panY", 0);
       c.turn = j.optInt("turn", 0); c.flip = j.optBoolean("flip"); c.fill = j.optBoolean("fill");
       c.opacity = j.optDouble("opacity", 1); c.startUs = j.optLong("startUs", 0); c.track = Math.max(1, j.optInt("track", 1));
+      c.blend = j.optInt("blend", 0); c.scaleX = j.optDouble("scaleX", 1); c.scaleY = j.optDouble("scaleY", 1); c.rotationDeg = j.optDouble("rotationDeg", 0);
+      c.flipV = j.optBoolean("flipV"); c.cropL = j.optDouble("cropL", 0); c.cropR = j.optDouble("cropR", 0); c.cropT = j.optDouble("cropT", 0); c.cropB = j.optDouble("cropB", 0);
       return c;
     }
 
@@ -107,6 +116,7 @@ final class EditModel {
       c.width = width; c.height = height; c.rotation = rotation; c.fps = fps; c.volume = volume; c.muted = muted; c.hasAudio = hasAudio;
       c.transition = transition; c.transitionUs = transitionUs; c.grade = grade.copy(); c.lut = lut; c.lutStrength = lutStrength; c.shotIn = shotIn;
       c.speed = speed; c.zoom = zoom; c.panX = panX; c.panY = panY; c.turn = turn; c.flip = flip; c.fill = fill; c.opacity = opacity; c.startUs = startUs; c.track = track;
+      c.blend = blend; c.scaleX = scaleX; c.scaleY = scaleY; c.rotationDeg = rotationDeg; c.flipV = flipV; c.cropL = cropL; c.cropR = cropR; c.cropT = cropT; c.cropB = cropB;
       return c;
     }
   }
@@ -173,7 +183,11 @@ final class EditModel {
   }
 
   static final class Project {
-    static final int VERSION = 4; // 1: main track only; 2: layer tracks; 3: audio tracks; 4: track states and markers
+    static final int VERSION = 5; // 1: main track only; 2: layer tracks; 3: audio tracks; 4: track states and markers; 5: compositing, aspect
+    static final String[] ASPECTS = {"Source", "16:9", "9:16", "1:1", "4:5", "2.39:1"};
+    static final double[] ASPECT_RATIOS = {0, 16 / 9.0, 9 / 16.0, 1, 4 / 5.0, 2.39};
+    /** Frame shape of the programme: index into ASPECTS (0 = the first clip's own shape). */
+    int aspect;
     static final int MAX_TRACKS = 3;
     final List<Clip> clips = new ArrayList<>();
     /** Video layers above the main track (B-roll, picture-in-picture): placed freely, drawn above by track. */
@@ -207,7 +221,7 @@ final class EditModel {
       JSONArray mk = new JSONArray();
       for (long m : markers) mk.put(m);
       j.put("markers", mk).put("hiddenLayers", hiddenLayers).put("lockedLayers", lockedLayers).put("audioMute", audioMute).put("audioSolo", audioSolo)
-          .put("titlesHidden", titlesHidden).put("mainMuted", mainMuted);
+          .put("titlesHidden", titlesHidden).put("mainMuted", mainMuted).put("aspect", aspect);
       return j;
     }
 
@@ -225,7 +239,7 @@ final class EditModel {
       JSONArray mk = j.optJSONArray("markers");
       if (mk != null) for (int i = 0; i < mk.length(); i++) p.markers.add(mk.optLong(i));
       p.hiddenLayers = j.optInt("hiddenLayers"); p.lockedLayers = j.optInt("lockedLayers"); p.audioMute = j.optInt("audioMute"); p.audioSolo = j.optInt("audioSolo");
-      p.titlesHidden = j.optBoolean("titlesHidden"); p.mainMuted = j.optBoolean("mainMuted");
+      p.titlesHidden = j.optBoolean("titlesHidden"); p.mainMuted = j.optBoolean("mainMuted"); p.aspect = Math.max(0, Math.min(ASPECTS.length - 1, j.optInt("aspect", 0)));
       p.fadeIn = j.optBoolean("fadeIn", true); p.fadeOut = j.optBoolean("fadeOut", true); p.fadeUs = j.optLong("fadeUs", 700_000);
       return p;
     }
@@ -242,7 +256,7 @@ final class EditModel {
     for (Music m : p.audio) q.audio.add(m.copy());
     q.markers.addAll(p.markers);
     q.hiddenLayers = p.hiddenLayers; q.lockedLayers = p.lockedLayers; q.audioMute = p.audioMute; q.audioSolo = p.audioSolo;
-    q.titlesHidden = p.titlesHidden; q.mainMuted = p.mainMuted;
+    q.titlesHidden = p.titlesHidden; q.mainMuted = p.mainMuted; q.aspect = p.aspect;
     q.fadeIn = p.fadeIn; q.fadeOut = p.fadeOut; q.fadeUs = p.fadeUs;
     return q;
   }
@@ -694,5 +708,83 @@ final class EditModel {
         .putShort((short) 1).putShort((short) channels).putInt(rate).putInt(rate * channels * 2).putShort((short) (channels * 2)).putShort((short) 16)
         .put(new byte[] {'d', 'a', 't', 'a'}).putInt(data);
     return h.array();
+  }
+
+  // ---------------------------------------------------------------- compositing (shared by the GPU code and the tests)
+
+  static final String[] BLEND_MODES = {"Normal", "Multiply", "Screen", "Overlay", "Soft light", "Hard light", "Add", "Difference", "Darken", "Lighten"};
+
+  /** One channel of blend mode `mode` of layer s over d (display values 0..1); the GLSL does exactly the same. */
+  static double blend(int mode, double s, double d) {
+    switch (mode) {
+      case 1: return s * d;
+      case 2: return 1 - (1 - s) * (1 - d);
+      case 3: return d < 0.5 ? 2 * s * d : 1 - 2 * (1 - s) * (1 - d);
+      case 4: return (1 - 2 * s) * d * d + 2 * s * d;
+      case 5: return s < 0.5 ? 2 * s * d : 1 - 2 * (1 - s) * (1 - d);
+      case 6: return Math.min(1, s + d);
+      case 7: return Math.abs(s - d);
+      case 8: return Math.min(s, d);
+      case 9: return Math.max(s, d);
+      default: return s;
+    }
+  }
+
+  /**
+   * Where a clip's picture lands in an outW x outH frame: four corners (BL, BR, TL, TR) as {x, y, u, v} in
+   * normalised device coordinates and texture coordinates. Fit or fill, zoom (below 1 = picture-in-picture), separate
+   * width / height scale, pan (+-1 = against the frame's edge), rotation (clockwise degrees), rotation of the file,
+   * extra 90-degree turns and flips.
+   */
+  static float[] clipQuad(Clip c, int outW, int outH) {
+    int rot = ((c.rotation + c.turn) % 360 + 360) % 360;
+    int dw = rot % 180 == 0 ? Math.max(1, c.width) : Math.max(1, c.height), dh = rot % 180 == 0 ? Math.max(1, c.height) : Math.max(1, c.width);
+    double base = c.fill ? Math.max(outW / (double) dw, outH / (double) dh) : Math.min(outW / (double) dw, outH / (double) dh);
+    double scale = base * Math.max(0.05, c.zoom);
+    double sx = dw * scale / outW * c.scaleX, sy = dh * scale / outH * c.scaleY;
+    double ox = c.panX * (1 - sx), oy = -c.panY * (1 - sy);
+    float[][] uv = rot == 90 ? new float[][] {{1, 0}, {1, 1}, {0, 0}, {0, 1}} : rot == 180 ? new float[][] {{1, 1}, {0, 1}, {1, 0}, {0, 0}}
+        : rot == 270 ? new float[][] {{0, 1}, {0, 0}, {1, 1}, {1, 0}} : new float[][] {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+    if (c.flip) uv = new float[][] {uv[1], uv[0], uv[3], uv[2]};  // mirror left-right
+    if (c.flipV) uv = new float[][] {uv[2], uv[3], uv[0], uv[1]}; // mirror top-bottom
+    double[][] corner = {{-sx, -sy}, {sx, -sy}, {-sx, sy}, {sx, sy}};
+    double a = Math.toRadians(-c.rotationDeg), cos = Math.cos(a), sin = Math.sin(a);
+    float[] q = new float[16];
+    for (int k = 0; k < 4; k++) {
+      double px = corner[k][0] * outW / 2, py = corner[k][1] * outH / 2; // rotate in pixels so the picture keeps its shape
+      double rx = px * cos - py * sin, ry = px * sin + py * cos;
+      q[k * 4] = (float) (ox + rx / (outW / 2.0)); q[k * 4 + 1] = (float) (oy + ry / (outH / 2.0));
+      q[k * 4 + 2] = uv[k][0]; q[k * 4 + 3] = uv[k][1];
+    }
+    return q;
+  }
+
+  /** The programme's frame size: its aspect ratio with the first clip's short side (at most 3840 on the long side), even. */
+  static int[] outputSize(Project p) {
+    int w = 1920, h = 1080;
+    if (!p.clips.isEmpty()) {
+      Clip c = p.clips.get(0);
+      w = c.rotation % 180 == 0 ? c.width : c.height; h = c.rotation % 180 == 0 ? c.height : c.width;
+    }
+    w = Math.max(2, w); h = Math.max(2, h);
+    if (p.aspect > 0) {
+      double r = Project.ASPECT_RATIOS[p.aspect];
+      int shortSide = Math.min(w, h);
+      if (r >= 1) { h = shortSide; w = (int) Math.round(shortSide * r); } else { w = shortSide; h = (int) Math.round(shortSide / r); }
+    }
+    int longSide = Math.max(w, h);
+    if (longSide > 3840) { w = (int) ((long) w * 3840 / longSide); h = (int) ((long) h * 3840 / longSide); }
+    return new int[] {w & ~1, h & ~1};
+  }
+
+  /** Export size for a preset short side (2160, 1080, 720) in the programme's shape. */
+  static int[] exportSize(Project p, int shortSide) {
+    int[] o = outputSize(p);
+    double r = p.aspect > 0 ? Project.ASPECT_RATIOS[p.aspect] : o[0] / (double) o[1]; // the exact ratio, not the rounded size
+    int w, h;
+    if (r >= 1) { h = shortSide; w = (int) Math.round(shortSide * r); } else { w = shortSide; h = (int) Math.round(shortSide / r); }
+    int longSide = Math.max(w, h);
+    if (longSide > 3840) { w = (int) ((long) w * 3840 / longSide); h = (int) ((long) h * 3840 / longSide); }
+    return new int[] {w & ~1, h & ~1};
   }
 }

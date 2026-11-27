@@ -754,12 +754,29 @@ public class EditorActivity extends Activity {
       fr.addView(chip("FILL", v -> { c.fill = true; changed(true); }, c.fill), lp(-2));
       fr.addView(chip("ROTATE ↻", v -> { c.turn = (c.turn + 90) % 360; changed(true); }), lp(-2));
       fr.addView(chip("FLIP ↔", v -> { c.flip = !c.flip; changed(true); }, c.flip), lp(-2));
-      fr.addView(chip("RESET", v -> { c.fill = false; c.zoom = 1; c.panX = c.panY = 0; c.turn = 0; c.flip = false; changed(true); }), lp(-2));
+      fr.addView(chip("FLIP ↕", v -> { c.flipV = !c.flipV; changed(true); }, c.flipV), lp(-2));
+      fr.addView(chip("RESET", v -> {
+        c.fill = false; c.zoom = 1; c.panX = c.panY = 0; c.turn = 0; c.flip = c.flipV = false;
+        c.scaleX = c.scaleY = 1; c.rotationDeg = 0; c.cropL = c.cropR = c.cropT = c.cropB = 0; changed(true);
+      }), lp(-2));
       inspector.addView(scroll(fr));
       slider("Opacity", 0, 100, Math.round(c.opacity * 100), v -> c.opacity = v / 100.0, x -> x + "%");
       slider("Zoom / crop", 25, 400, Math.round(c.zoom * 100), v -> c.zoom = v / 100.0, x -> x + "%" + (x < 100 ? " (picture-in-picture)" : ""));
       slider("Move left / right", -100, 100, Math.round(c.panX * 100), v -> c.panX = v / 100.0, x -> x + "");
       slider("Move up / down", -100, 100, Math.round(c.panY * 100), v -> c.panY = v / 100.0, x -> x + "");
+      slider("Rotation", -180, 180, Math.round(c.rotationDeg), v -> c.rotationDeg = v, x -> x + "°");
+      slider("Width", 25, 400, Math.round(c.scaleX * 100), v -> c.scaleX = v / 100.0, x -> x + "%");
+      slider("Height", 25, 400, Math.round(c.scaleY * 100), v -> c.scaleY = v / 100.0, x -> x + "%");
+      label("Crop (edges of the picture)");
+      slider("Crop left", 0, 45, Math.round(c.cropL * 100), v -> c.cropL = v / 100.0, x -> x + "%");
+      slider("Crop right", 0, 45, Math.round(c.cropR * 100), v -> c.cropR = v / 100.0, x -> x + "%");
+      slider("Crop top", 0, 45, Math.round(c.cropT * 100), v -> c.cropT = v / 100.0, x -> x + "%");
+      slider("Crop bottom", 0, 45, Math.round(c.cropB * 100), v -> c.cropB = v / 100.0, x -> x + "%");
+      // compositing
+      label("Blend mode: how this clip mixes with what is under it" + (layer ? "" : " (the main track sits on black)"));
+      LinearLayout bm = row();
+      for (int k = 0; k < EditModel.BLEND_MODES.length; k++) { final int m = k; bm.addView(chip(EditModel.BLEND_MODES[k], v -> { c.blend = m; changed(true); }, c.blend == k), lp(-2)); }
+      inspector.addView(scroll(bm));
     } else if (clipTab.equals("Colour")) {
       EditModel.Grade g = c.grade;
       LinearLayout looks = row();
@@ -941,6 +958,11 @@ public class EditorActivity extends Activity {
     r.addView(chip(project.fadeOut ? "FADE OUT ✓" : "FADE OUT", v -> { project.fadeOut = !project.fadeOut; changed(true); }, project.fadeOut), lp(-2));
     inspector.addView(r);
     slider("Fade length", 100, 3000, project.fadeUs / 1000, v -> project.fadeUs = v * 1000, x -> String.format(Locale.US, "%.1f s", x / 1000.0));
+    int[] size = EditModel.outputSize(project);
+    label("Frame: " + EditModel.Project.ASPECTS[project.aspect] + " · " + size[0] + "×" + size[1] + " (clips fit or fill it: Edit → FIT / FILL)");
+    LinearLayout ar = row();
+    for (int k = 0; k < EditModel.Project.ASPECTS.length; k++) { final int a = k; ar.addView(chip(EditModel.Project.ASPECTS[k], v -> { snapshot(); project.aspect = a; changed(true); }, project.aspect == k), lp(-2)); }
+    inspector.addView(scroll(ar));
     label("Tap a clip, title or the music on the timeline to edit it. Drag the timeline to move the playhead (the white line).");
     if (project.clips.isEmpty()) label("Start with + VIDEO: pick clips from anywhere on the phone (City Cinema, camera, downloads).");
   }
@@ -962,13 +984,8 @@ public class EditorActivity extends Activity {
   }
 
   /** Output size: the first clip's displayed size (rotation aware), even, at most 4K wide. */
-  static int[] outputSize(EditModel.Project p) {
-    if (p.clips.isEmpty()) return new int[] {1920, 1080};
-    EditModel.Clip c = p.clips.get(0);
-    int w = c.rotation % 180 == 0 ? c.width : c.height, h = c.rotation % 180 == 0 ? c.height : c.width;
-    if (w > 3840) { h = h * 3840 / w; w = 3840; }
-    return new int[] {w & ~1, h & ~1};
-  }
+  /** Output size: the programme's frame shape (PROJECT → frame), at most 3840 on the long side. */
+  static int[] outputSize(EditModel.Project p) { return EditModel.outputSize(p); }
 
   private void togglePlay() { if (playing) stopPlayback(); else startPlayback(false); }
 
@@ -1032,7 +1049,8 @@ public class EditorActivity extends Activity {
     if (project.clips.isEmpty()) { toast("Add a video first."); return; }
     stopPlayback();
     int[] src = outputSize(project);
-    String[] sizes = {"Source " + src[0] + "×" + src[1], "4K 3840×2160", "1080p 1920×1080", "720p 1280×720"};
+    int[] k4 = EditModel.exportSize(project, 2160), hd = EditModel.exportSize(project, 1080), sd = EditModel.exportSize(project, 720);
+    String[] sizes = {"Project " + src[0] + "×" + src[1], "4K " + k4[0] + "×" + k4[1], "1080p " + hd[0] + "×" + hd[1], "720p " + sd[0] + "×" + sd[1]};
     double fps0 = project.clips.get(0).fps;
     double[] rates = {fps0, 24, 25, 30, 60};
     String[] rateNames = {"Source (" + CinemaMath.fpsLabel(fps0) + ")", "24", "25", "30", "60"};
@@ -1050,9 +1068,8 @@ public class EditorActivity extends Activity {
         .setPositiveButton("Export", (d, w) -> {
           EditModel.Project p = EditModel.snapshot(project);
           EditEngine.ExportSettings s = new EditEngine.ExportSettings();
-          int[][] dims = {src, {3840, 2160}, {1920, 1080}, {1280, 720}};
-          s.width = dims[sel[0]][0]; s.height = dims[sel[0]][1];
-          if (sel[0] > 0 && src[1] > src[0]) { int t = s.width; s.width = s.height; s.height = t; } // keep portrait projects portrait
+          int[] dims = sel[0] == 0 ? src : EditModel.exportSize(project, new int[] {0, 2160, 1080, 720}[sel[0]]);
+          s.width = dims[0]; s.height = dims[1];
           s.fps = rates[sel[1]]; s.hevc = sel[2] == 0;
           CinemaRecorder.EncoderCaps caps = CinemaRecorder.caps(s.hevc ? MediaFormat.MIMETYPE_VIDEO_HEVC : MediaFormat.MIMETYPE_VIDEO_AVC);
           s.bitrate = CinemaMath.bitrate(s.width, s.height, s.fps, 2, s.hevc, false, false);

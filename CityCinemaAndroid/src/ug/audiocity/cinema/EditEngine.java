@@ -53,18 +53,36 @@ final class EditEngine {
 
   /** Draws layers and titles with the current GL context (preview GLSurfaceView or the exporter's EGL surface). */
   static final class Compositor {
-    private int clipProgram, titleProgram;
+    private int clipProgram, titleProgram, copyProgram;
+    // the frame is built in two off-screen buffers (16-bit float where the GPU can render to it): each layer reads what is
+    // under it from one and writes the result into the other
+    private final int[] fbo = new int[2], fboTex = new int[2];
+    private int fboW, fboH, cur;
+    boolean halfFloat;
     private final Map<String, Integer> luts = new HashMap<>();
     private final Map<EditModel.Title, int[]> titleTextures = new HashMap<>();
     private final FloatBuffer quad = ByteBuffer.allocateDirect(16 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
     private final float[] identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
     void init() {
-      clipProgram = program(VS,
+      clipProgram = program(VS_CLIP,
           "#version 300 es\n#extension GL_OES_EGL_image_external_essl3 : require\nprecision highp float;\n"
               + "uniform samplerExternalOES uTex; uniform mediump sampler3D uLut; uniform float uLutOn, uAlpha, uBright;\n"
               + "uniform mediump sampler3D uLut2; uniform float uLut2On, uLut2Strength; uniform vec3 uDomMin, uDomMax; uniform float uL2Scale, uL2Off;\n"
-              + "uniform float uExposure, uContrast, uSat, uTemp, uTint, uShadows, uHighlights, uFilm, uFilmStrength;\nin vec2 vTex; out vec4 o;\n"
+              + "uniform float uExposure, uContrast, uSat, uTemp, uTint, uShadows, uHighlights, uFilm, uFilmStrength;\n"
+              + "uniform sampler2D uDst; uniform vec2 uDstSize; uniform int uBlend; uniform vec4 uCrop;\n"
+              + "in vec2 vTex; in vec2 vQ; out vec4 o;\n"
+              + "float bl(int m, float s, float d) {\n" // same as EditModel.blend
+              + "  if (m == 1) return s * d;\n"
+              + "  if (m == 2) return 1.0 - (1.0 - s) * (1.0 - d);\n"
+              + "  if (m == 3) return d < 0.5 ? 2.0 * s * d : 1.0 - 2.0 * (1.0 - s) * (1.0 - d);\n"
+              + "  if (m == 4) return (1.0 - 2.0 * s) * d * d + 2.0 * s * d;\n"
+              + "  if (m == 5) return s < 0.5 ? 2.0 * s * d : 1.0 - 2.0 * (1.0 - s) * (1.0 - d);\n"
+              + "  if (m == 6) return min(1.0, s + d);\n"
+              + "  if (m == 7) return abs(s - d);\n"
+              + "  if (m == 8) return min(s, d);\n"
+              + "  if (m == 9) return max(s, d);\n"
+              + "  return s;\n}\n"
               + "vec3 film(vec3 c, float look, float k) {\n"
               + "  float y = dot(c, vec3(0.2126, 0.7152, 0.0722)); vec3 f = c;\n"
               + "  if (look == 1.0) f = vec3(c.r + 0.10 * y - 0.03, c.g + 0.02 * y, c.b - 0.10 * y + 0.07);\n"
@@ -74,6 +92,7 @@ final class EditEngine {
               + "  else if (look == 5.0) f = vec3((y - 0.5) * 1.1 + 0.5);\n"
               + "  return clamp(c + (clamp(f, 0.0, 1.0) - c) * k, 0.0, 1.0);\n}\n"
               + "void main() {\n"
+              + "  if (vQ.x < uCrop.x || vQ.x > 1.0 - uCrop.y || vQ.y > 1.0 - uCrop.z || vQ.y < uCrop.w) discard;\n" // crop L, R, T, B
               + "  vec3 c = texture(uTex, vTex).rgb;\n"
               + "  if (uLutOn > 0.5) c = texture(uLut, c * (32.0 / 33.0) + 0.5 / 33.0).rgb;\n"
               + "  if (uLut2On > 0.5) { vec3 t = clamp((c - uDomMin) / max(uDomMax - uDomMin, vec3(1e-6)), 0.0, 1.0);\n"
@@ -87,7 +106,11 @@ final class EditEngine {
               + "  if (uFilm > 0.5) c = film(c, uFilm, uFilmStrength);\n"
               + "  float y = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
               + "  c = clamp(vec3(y) + (c - vec3(y)) * (1.0 + uSat), 0.0, 1.0);\n"
-              + "  o = vec4(c * uBright, uAlpha);\n}\n");
+              + "  vec3 s = c * uBright;\n"
+              + "  vec3 d = texture(uDst, gl_FragCoord.xy / uDstSize).rgb;\n" // what is already in the frame underneath
+              + "  vec3 b = vec3(bl(uBlend, s.r, d.r), bl(uBlend, s.g, d.g), bl(uBlend, s.b, d.b));\n"
+              + "  o = vec4(mix(d, b, uAlpha), 1.0);\n}\n");
+      copyProgram = program(VS, "#version 300 es\nprecision highp float;\nuniform sampler2D uTex;\nin vec2 vTex; out vec4 o;\nvoid main() { o = vec4(texture(uTex, vTex).rgb, 1.0); }\n");
       titleProgram = program(VS,
           "#version 300 es\nprecision mediump float;\nuniform sampler2D uTex; uniform float uAlpha;\nin vec2 vTex; out vec4 o;\n"
               + "void main() { vec4 c = texture(uTex, vec2(vTex.x, 1.0 - vTex.y)); o = vec4(c.rgb, c.a * uAlpha); }\n");
@@ -103,19 +126,13 @@ final class EditEngine {
     /** Draws one clip frame, rotated and letterboxed into the output, through its LUT and grade. */
     void drawClip(FrameSource src, EditModel.Clip c, double alpha, double brightness, int outW, int outH) {
       if (clipProgram == 0 || !src.hasFrame()) return;
-      int rot = ((c.rotation + c.turn) % 360 + 360) % 360;
-      int dw = rot % 180 == 0 ? Math.max(1, c.width) : Math.max(1, c.height), dh = rot % 180 == 0 ? Math.max(1, c.height) : Math.max(1, c.width);
-      // fit (letterbox) or fill (crop to the frame), then zoom; pan moves a zoomed picture up to its edges
-      double scale = (c.fill ? Math.max(outW / (double) dw, outH / (double) dh) : Math.min(outW / (double) dw, outH / (double) dh)) * Math.max(1, c.zoom);
-      float sx = (float) (dw * scale / outW), sy = (float) (dh * scale / outH);
-      // +-1 lines the picture's edge up with the frame's: a zoomed-in picture shows that side, a picture-in-picture moves there
-      float ox = (float) (c.panX * (1 - sx)), oy = (float) (-c.panY * (1 - sy));
-      // texture corners for BL, BR, TL, TR of the displayed picture, by rotation (clockwise)
-      float[][] uv = rot == 90 ? new float[][] {{1, 0}, {1, 1}, {0, 0}, {0, 1}} : rot == 180 ? new float[][] {{1, 1}, {0, 1}, {1, 0}, {0, 0}}
-          : rot == 270 ? new float[][] {{0, 1}, {0, 0}, {1, 1}, {1, 0}} : new float[][] {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
-      if (c.flip) uv = new float[][] {uv[1], uv[0], uv[3], uv[2]}; // mirror left-right
+      // write into the other buffer: first what is already there, then this clip over it (reading it back as uDst)
+      int under = fboTex[cur];
+      cur = 1 - cur;
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[cur]);
+      copy(under);
       quad.clear();
-      quad.put(new float[] {ox - sx, oy - sy, uv[0][0], uv[0][1], ox + sx, oy - sy, uv[1][0], uv[1][1], ox - sx, oy + sy, uv[2][0], uv[2][1], ox + sx, oy + sy, uv[3][0], uv[3][1]});
+      quad.put(EditModel.clipQuad(c, outW, outH));
       GLES30.glUseProgram(clipProgram);
       bindQuad(clipProgram, src.transform());
       GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
@@ -140,6 +157,12 @@ final class EditEngine {
         GLES30.glUniform1f(loc(clipProgram, "uL2Scale"), (user.size - 1f) / user.size);
         GLES30.glUniform1f(loc(clipProgram, "uL2Off"), 0.5f / user.size);
       }
+      GLES30.glActiveTexture(GLES30.GL_TEXTURE3);
+      GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, under);
+      GLES30.glUniform1i(loc(clipProgram, "uDst"), 3);
+      GLES30.glUniform2f(loc(clipProgram, "uDstSize"), fboW, fboH);
+      GLES30.glUniform1i(loc(clipProgram, "uBlend"), c.blend);
+      GLES30.glUniform4f(loc(clipProgram, "uCrop"), (float) c.cropL, (float) c.cropR, (float) c.cropT, (float) c.cropB);
       EditModel.Grade g = c.grade;
       GLES30.glUniform1f(loc(clipProgram, "uLutOn"), log ? 1 : 0);
       GLES30.glUniform1f(loc(clipProgram, "uAlpha"), (float) alpha);
@@ -287,6 +310,63 @@ final class EditEngine {
     private static int loc(int prog, String name) { return GLES30.glGetUniformLocation(prog, name); }
 
     static final String VS = "#version 300 es\nin vec4 aPos; in vec4 aTex; uniform mat4 uSt; out vec2 vTex;\nvoid main() { gl_Position = aPos; vTex = (uSt * aTex).xy; }\n";
+    /** Clip vertices come as BL, BR, TL, TR: vQ is the position inside the displayed picture (for crop). */
+    static final String VS_CLIP = "#version 300 es\nin vec4 aPos; in vec4 aTex; uniform mat4 uSt; out vec2 vTex; out vec2 vQ;\n"
+        + "void main() { gl_Position = aPos; vTex = (uSt * aTex).xy; vQ = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)); }\n";
+
+    /** Starts a frame of w x h in the off-screen buffers (black). */
+    void begin(int w, int h) {
+      if (w != fboW || h != fboH) {
+        if (fboW > 0) { GLES30.glDeleteFramebuffers(2, fbo, 0); GLES30.glDeleteTextures(2, fboTex, 0); }
+        GLES30.glGenFramebuffers(2, fbo, 0); GLES30.glGenTextures(2, fboTex, 0);
+        halfFloat = true;
+        for (int i = 0; i < 2; i++) {
+          if (!makeTarget(i, w, h, true)) { halfFloat = false; makeTarget(i, w, h, false); }
+        }
+        fboW = w; fboH = h;
+      }
+      cur = 0;
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[cur]);
+      GLES30.glViewport(0, 0, w, h);
+      GLES30.glDisable(GLES30.GL_BLEND);
+      GLES30.glClearColor(0, 0, 0, 1);
+      GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT);
+    }
+
+    private boolean makeTarget(int i, int w, int h, boolean f16) {
+      GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTex[i]);
+      if (f16) GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, w, h, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null);
+      else GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, w, h, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE);
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[i]);
+      GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, fboTex[i], 0);
+      return GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) == GLES30.GL_FRAMEBUFFER_COMPLETE;
+    }
+
+    /** Full-frame copy of a texture into whatever is bound. */
+    private void copy(int tex) {
+      quad.clear();
+      quad.put(new float[] {-1, -1, 0, 0, 1, -1, 1, 0, -1, 1, 0, 1, 1, 1, 1, 1});
+      GLES30.glUseProgram(copyProgram);
+      bindQuad(copyProgram, identity);
+      GLES30.glActiveTexture(GLES30.GL_TEXTURE3);
+      GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex);
+      GLES30.glUniform1i(loc(copyProgram, "uTex"), 3);
+      GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    /** Puts the finished frame into framebuffer `target` at (x, y, w, h), then leaves blending on for titles. */
+    void finish(int target, int x, int y, int w, int h) {
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, target);
+      GLES30.glViewport(x, y, w, h);
+      GLES30.glDisable(GLES30.GL_BLEND);
+      copy(fboTex[cur]);
+      GLES30.glEnable(GLES30.GL_BLEND);
+      GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA);
+    }
 
     static int program(String vs, String fs) {
       int v = shader(GLES30.GL_VERTEX_SHADER, vs), f = shader(GLES30.GL_FRAGMENT_SHADER, fs);
@@ -442,8 +522,10 @@ final class EditEngine {
 
     /** Renders timeline time t into the rectangle (x, y, w, h) of the current surface (black around it). */
     void render(EditModel.Project p, long t, int x, int y, int outW, int outH) {
+      int[] target = new int[1];
+      GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, target, 0); // the screen or the encoder's surface
       compositor.clear();
-      GLES30.glViewport(x, y, outW, outH);
+      compositor.begin(outW, outH);
       List<EditModel.Layer> layers = EditModel.layersAt(p, t);
       List<Long> used = new ArrayList<>();
       for (EditModel.Layer l : layers) {
@@ -461,6 +543,7 @@ final class EditEngine {
         Map.Entry<Long, FrameSource> e = it.next();
         if (!used.contains(e.getKey())) { e.getValue().release(); it.remove(); }
       }
+      compositor.finish(target[0], x, y, outW, outH);
       if (!p.titlesHidden) for (EditModel.Title title : p.titles) compositor.drawTitle(title, EditModel.titleAlpha(title, t), outW, outH);
     }
 

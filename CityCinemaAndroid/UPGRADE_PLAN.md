@@ -55,7 +55,12 @@ already integer microseconds (good); project format is unversioned JSON (add a v
      All edits are clamped to the media and tested; drags are one undo step each.
    - Phase 3 left: insert/overwrite edits from a source monitor, clip grouping, automatic scrolling during playback
      (the timeline already follows the playhead, which stays centred).
-4. GPU compositing: per-layer transform with opacity and blend modes, FP16 intermediates, PiP.
+4. GPU compositing — **done in 4.3**: the frame is built layer by layer in off-screen buffers (RGBA16F where the GPU
+   can render to it, else RGBA8), each layer reading what is under it: **10 blend modes** (Normal, Multiply, Screen,
+   Overlay, Soft light, Hard light, Add, Difference, Darken, Lighten; GLSL matches the tested Java), **crop** of each
+   edge, **rotation** to any angle, separate **width / height**, **vertical flip**; **project frame shape** 16:9, 9:16,
+   1:1, 4:5, 2.39:1 (preview, export sizes). Fixed: picture-in-picture zoom below 100% had no effect since 3.8.
+   Shaders checked with glslangValidator (compile and link).
 5. Colour: lift/gamma/gain/offset wheels, curves, HSL qualifier, masks, before/after; LUT manager (rename, delete,
    favourites, thumbnails).
 6. Audio: per-track mixer, pan, EQ / HPF / LPF / compressor / limiter / gate, LUFS + true-peak meters, ducking,

@@ -107,6 +107,7 @@ public class EditTests {
     audioTrackTests();
     trackStateTests();
     editOperationTests();
+    compositingTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -121,6 +122,46 @@ public class EditTests {
   /** Audio tracks: trimmed and muted sound clips, splitting, snapping to sound edges, the voice-over WAV header. */
   /** Track headers: hidden layers aren't drawn, muted/soloed audio tracks, muted camera sound; markers. */
   /** Ripple trims, roll, slip, slide and in-place trims keep the programme consistent and stay inside the media. */
+  /** Blend modes, the clip quad (fit, PiP, rotation, flips) and programme / export sizes for each aspect ratio. */
+  static void compositingTests() {
+    near(EditModel.blend(0, 0.3, 0.8), 0.3, 1e-12, "normal");
+    near(EditModel.blend(1, 0.5, 0.5), 0.25, 1e-12, "multiply");
+    near(EditModel.blend(2, 0.5, 0.5), 0.75, 1e-12, "screen");
+    check(EditModel.blend(1, 1, 0.4) == 0.4 && EditModel.blend(2, 0, 0.4) == 0.4, "white multiply and black screen leave the picture");
+    near(EditModel.blend(3, 0.5, 0.3), 0.3, 1e-12, "overlay with grey leaves it");
+    near(EditModel.blend(4, 0.5, 0.3), 0.3, 1e-12, "soft light with grey leaves it");
+    check(EditModel.blend(6, 0.7, 0.6) == 1 && Math.abs(EditModel.blend(7, 0.2, 0.7) - 0.5) < 1e-12 && EditModel.blend(8, 0.2, 0.7) == 0.2 && EditModel.blend(9, 0.2, 0.7) == 0.7, "add, difference, darken, lighten");
+    for (int m = 0; m < EditModel.BLEND_MODES.length; m++) for (double sv = 0; sv <= 1; sv += 0.25) for (double dv = 0; dv <= 1; dv += 0.25) {
+      double v = EditModel.blend(m, sv, dv);
+      check(v >= -1e-12 && v <= 1 + 1e-12, EditModel.BLEND_MODES[m] + " stays in range");
+    }
+    EditModel.Clip c = new EditModel.Clip(); c.width = 1920; c.height = 1080;
+    float[] q = EditModel.clipQuad(c, 1920, 1080);
+    check(near(q[0], -1) && near(q[1], -1) && near(q[12], 1) && near(q[13], 1), "same shape fills the frame");
+    c.zoom = 0.5; c.panX = 1; c.panY = 1; // picture-in-picture in the bottom-right corner
+    q = EditModel.clipQuad(c, 1920, 1080);
+    check(near(q[0], 0) && near(q[4], 1) && near(q[1], -1) && near(q[9], 0), "half-size picture-in-picture, bottom right");
+    c.zoom = 1; c.panX = c.panY = 0; c.rotationDeg = 90;
+    q = EditModel.clipQuad(c, 1080, 1080); // square frame: a 90-degree turn of a fitted 16:9 picture
+    check(Math.abs(q[0]) < 1.01 && near(Math.abs(q[0]), 0.5625f) && near(Math.abs(q[1]), 1), "rotation keeps the picture's shape");
+    c.rotationDeg = 0; c.flipV = true;
+    q = EditModel.clipQuad(c, 1920, 1080);
+    check(q[3] == 1 && q[15] == 0, "vertical flip swaps top and bottom");
+    // programme sizes
+    EditModel.Project p = new EditModel.Project();
+    EditModel.Clip k = new EditModel.Clip(); k.width = 3840; k.height = 2160; p.clips.add(k);
+    int[][] want = {{3840, 2160}, {3840, 2160}, {2160, 3840}, {2160, 2160}, {2160, 2700}, {3840, 1606}};
+    for (int a = 0; a < want.length; a++) { p.aspect = a; int[] o = EditModel.outputSize(p); check(o[0] == want[a][0] && o[1] == want[a][1], EditModel.Project.ASPECTS[a] + " size " + o[0] + "x" + o[1]); }
+    p.aspect = 2;
+    int[] e = EditModel.exportSize(p, 1080);
+    check(e[0] == 1080 && e[1] == 1920, "9:16 export at 1080 is 1080x1920");
+    p.aspect = 5;
+    e = EditModel.exportSize(p, 1080);
+    check(e[0] == 2580 && e[1] == 1080, "2.39:1 at 1080 is 2580x1080");
+  }
+
+  static boolean near(float a, float b) { return Math.abs(a - b) < 1e-4; }
+
   static void editOperationTests() {
     EditModel.Project p = new EditModel.Project();
     EditModel.Clip a = clip(0, 4_000_000, 10_000_000), b = clip(2_000_000, 6_000_000, 10_000_000), c = clip(1_000_000, 5_000_000, 10_000_000);
