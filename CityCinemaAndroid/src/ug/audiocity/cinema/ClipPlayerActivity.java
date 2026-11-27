@@ -63,7 +63,7 @@ import javax.microedition.khronos.opengles.GL10;
 public class ClipPlayerActivity extends Activity {
   static final String TAG = "CityCinemaPlayer";
   static final int BG = CinemaActivity.BG, TEXT = CinemaActivity.TEXT, DIM = CinemaActivity.DIM, ACCENT = CinemaActivity.ACCENT;
-  static final String[] LUT_LOOKS = {"None", "City Log", "Flat Log", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"};
+  static final String[] LUT_LOOKS = {"None", "City Log", "Flat Log", "Flat", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"};
 
   static final class Clip { long id; Uri uri; String name, mime; long durationMs, size; Bitmap thumb; String look; }
 
@@ -243,7 +243,7 @@ public class ClipPlayerActivity extends Activity {
           .setPositiveButton("OK", null).show();
       return;
     }
-    setLut(k.look != null && java.util.Arrays.asList(LUT_LOOKS).contains(k.look) && CinemaMath.isLogLook(k.look) ? k.look : "None");
+    setLut(k.look != null && java.util.Arrays.asList(LUT_LOOKS).contains(k.look) && CinemaMath.convertsInPost(k.look) ? k.look : "None");
     Surface surface = renderer.surface();
     if (surface == null) { ui.postDelayed(() -> play(k), 100); return; }
     try {
@@ -316,7 +316,7 @@ public class ClipPlayerActivity extends Activity {
     final Clip k = current;
     if (k == null) { toastLike("Choose a clip first."); return; }
     if (k.name.endsWith(".mov")) { toastLike("ProRes clips can't be decoded on the phone; apply the LUT in Resolve or Final Cut."); return; }
-    final String look = !"None".equals(lut) ? lut : k.look != null && CinemaMath.isLogLook(k.look) ? k.look : null;
+    final String look = !"None".equals(lut) ? lut : k.look != null && CinemaMath.convertsInPost(k.look) ? k.look : null;
     if (look == null) { toastLike("This clip isn't log. Pick its log under LUT if it is."); return; }
     releasePlayer();
     final TextView status = text("Converting " + k.name + " with " + look + " → Rec.709 …  0%", 14, TEXT);

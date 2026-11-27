@@ -116,7 +116,7 @@ final class EditEngine {
       GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
       GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, src.texture());
       GLES30.glUniform1i(loc(clipProgram, "uTex"), 0);
-      boolean log = CinemaMath.isLogLook(c.look);
+      boolean log = CinemaMath.convertsInPost(c.look);
       // The LUT sampler always gets its own texture unit: left at its default (unit 0, where the video is) two
       // samplers of different types would share a unit and GL refuses to draw (a black picture).
       GLES30.glActiveTexture(GLES30.GL_TEXTURE1);

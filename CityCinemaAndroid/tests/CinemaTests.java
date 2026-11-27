@@ -417,6 +417,15 @@ public class CinemaTests {
       }
     }
     check(CinemaMath.logRec709Cube("Sony S-Log3").contains("S-Gamut3.Cine primaries"), "cube names the gamut");
+    // the Flat profile (not log) is undone exactly in post: colours and contrast come back to Rec.709
+    for (double x = 0; x <= 1.0001; x += 0.01) {
+      double code = CinemaMath.toneValue("Flat", x, 0);
+      near(CinemaMath.flatToRec709(code), CinemaMath.rec709(x), 1e-9, "Flat undone at " + x);
+    }
+    double[] red = CinemaMath.logToRec709("Flat", CinemaMath.toneValue("Flat", 0.30, 0), CinemaMath.toneValue("Flat", 0.05, 0), CinemaMath.toneValue("Flat", 0.02, 0));
+    near(red[0], CinemaMath.rec709(0.30), 1e-9, "Flat red back"); near(red[2], CinemaMath.rec709(0.02), 1e-9, "Flat blue back");
+    check(CinemaMath.convertsInPost("Flat") && CinemaMath.convertsInPost("Sony S-Log3") && !CinemaMath.convertsInPost("Rec.709") && !CinemaMath.convertsInPost("None"), "looks converted in post");
+    check(!CinemaMath.isLogLook("Flat"), "Flat is not a log for the camera");
   }
 
   static double enc(String look, double s) { return "Flat Log".equals(look) ? CinemaMath.acLog(s) : CinemaMath.logEncode(look, s); }

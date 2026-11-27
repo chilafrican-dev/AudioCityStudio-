@@ -164,12 +164,12 @@ public class EditorActivity extends Activity {
     } catch (Exception e) { Log.w(TAG, "load", e); }
     // clips without a log: look for their sidecar again (exact name first), else check the picture
     final java.util.List<EditModel.Clip> plain = new java.util.ArrayList<>();
-    for (EditModel.Clip c : project.clips) if (!CinemaMath.isLogLook(c.look) && !c.name.contains("_Rec709")) plain.add(c);
+    for (EditModel.Clip c : project.clips) if (!CinemaMath.convertsInPost(c.look) && !c.name.contains("_Rec709")) plain.add(c);
     if (!plain.isEmpty()) jobs.execute(() -> {
       for (EditModel.Clip c : plain) {
         String look = lookFromSidecar(c.name);
         if (look == null) { noSidecar.add(c.id); ui.post(() -> checkForLog(c)); }
-        else if (CinemaMath.isLogLook(look)) ui.post(() -> { c.look = look; changed(true); toast(c.name + ": " + look + " found → normal colour."); });
+        else if (CinemaMath.convertsInPost(look)) ui.post(() -> { c.look = look; changed(true); toast(c.name + ": " + look + " found → normal colour."); });
       }
     });
   }
@@ -322,7 +322,7 @@ public class EditorActivity extends Activity {
             byte[] buf = new byte[4096]; int n;
             while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
             String look = new JSONObject(new String(b.toByteArray(), StandardCharsets.UTF_8)).optString("look", "None");
-            return CinemaMath.isLogLook(look) ? look : "None";
+            return CinemaMath.convertsInPost(look) ? look : "None";
           }
         }
       }
@@ -338,7 +338,7 @@ public class EditorActivity extends Activity {
   private final java.util.Set<Long> logChecked = new java.util.HashSet<>();
 
   private void checkForLog(EditModel.Clip c) {
-    if (!noSidecar.contains(c.id) || CinemaMath.isLogLook(c.look) || c.name.contains("_Rec709") || !logChecked.add(c.id)) return;
+    if (!noSidecar.contains(c.id) || CinemaMath.convertsInPost(c.look) || c.name.contains("_Rec709") || !logChecked.add(c.id)) return;
     jobs.execute(() -> {
       android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
       try {
@@ -355,12 +355,12 @@ public class EditorActivity extends Activity {
   }
 
   private void askLog(EditModel.Clip c) {
-    if (isFinishing() || !project.clips.contains(c) || CinemaMath.isLogLook(c.look)) return;
-    String[] logs = {"City Log", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5", "Flat Log", "It's not log"};
+    if (isFinishing() || !project.clips.contains(c) || CinemaMath.convertsInPost(c.look)) return;
+    String[] logs = {"City Log", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5", "Flat Log", "Flat (not log)", "It's not log"};
     new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
         .setTitle("This clip looks like log footage")
         .setItems(logs, (d, i) -> {
-          if (i < logs.length - 1) { c.look = logs[i]; selected = c; clipTab = "Colour"; changed(true); toast(c.name + ": " + logs[i] + " → normal colour."); }
+          if (i < logs.length - 1) { c.look = logs[i].replace(" (not log)", ""); selected = c; clipTab = "Colour"; changed(true); toast(c.name + ": " + logs[i] + " → normal colour."); }
         })
         .setNegativeButton("Later", null).show();
     toast("No true blacks and washed-out colour: pick the log it was shot in to bring the colour back.");
@@ -475,7 +475,7 @@ public class EditorActivity extends Activity {
   }
 
   private void clipInspector(EditModel.Clip c) {
-    heading(c.name, (c.width + "×" + c.height) + " · " + fmt(c.durationUs()) + (CinemaMath.isLogLook(c.look) ? " · " + c.look : ""));
+    heading(c.name, (c.width + "×" + c.height) + " · " + fmt(c.durationUs()) + (CinemaMath.convertsInPost(c.look) ? " · " + c.look : ""));
     LinearLayout tabs = row();
     for (String t : new String[] {"Edit", "Colour", "Transition"}) tabs.addView(chip(t, v -> { clipTab = t; buildInspector(); }, clipTab.equals(t)), lp(-2));
     inspector.addView(tabs);
@@ -496,10 +496,10 @@ public class EditorActivity extends Activity {
     } else if (clipTab.equals("Colour")) {
       EditModel.Grade g = c.grade;
       LinearLayout looks = row();
-      for (String l : new String[] {"None", "City Log", "Flat Log", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"})
+      for (String l : new String[] {"None", "City Log", "Flat Log", "Flat", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"})
         looks.addView(chip("None".equals(l) ? "No LUT" : l, v -> { c.look = l; changed(true); }, l.equals(c.look)), lp(-2));
       inspector.addView(scroll(looks));
-      label(CinemaMath.isLogLook(c.look) ? "Log: " + c.look + " → converted to normal colour."
+      label(CinemaMath.convertsInPost(c.look) ? (c.look.equals("Flat") ? "Flat profile" : "Log: " + c.look) + " → converted to normal colour."
           : "No log set. If the picture is grey and washed out, the clip was shot in log: pick its log above (City Cinema clips are set automatically).");
       slider("Exposure", -300, 300, Math.round(g.exposure * 100), v -> g.exposure = v / 100.0, x -> String.format(Locale.US, "%+.1f stops", x / 100.0));
       slider("Contrast", -100, 100, Math.round(g.contrast * 100), v -> g.contrast = v / 100.0, x -> x + "");
@@ -522,7 +522,7 @@ public class EditorActivity extends Activity {
       inspector.addView(scroll(lutRow));
       if (!c.lut.isEmpty()) {
         slider("LUT strength", 0, 100, Math.round(c.lutStrength * 100), v -> c.lutStrength = v / 100.0, x -> x + "%");
-        if (CinemaMath.isLogLook(c.look)) label("Note: the clip's log is converted first (" + c.look + "). If your LUT expects log input, set the log above to No LUT.");
+        if (CinemaMath.convertsInPost(c.look)) label("Note: the clip's log is converted first (" + c.look + "). If your LUT expects log input, set the log above to No LUT.");
       }
       LinearLayout films = row();
       for (int k = 0; k < EditModel.FILM_LOOKS.length; k++) { final int f = k; films.addView(chip(EditModel.FILM_LOOKS[k], v -> { g.film = f; changed(true); }, g.film == k), lp(-2)); }
@@ -780,7 +780,7 @@ public class EditorActivity extends Activity {
       for (int i = 0; i < project.clips.size(); i++) {
         EditModel.Clip k = project.clips.get(i);
         RectF r = new RectF(x(s[i]) + 1, rowV, x(s[i] + k.durationUs()) - 1, rowV + rowVh);
-        p.setColor(CinemaMath.isLogLook(k.look) ? 0xff3a4a5e : 0xff34503f);
+        p.setColor(CinemaMath.convertsInPost(k.look) ? 0xff3a4a5e : 0xff34503f);
         c.drawRoundRect(r, dp(4), dp(4), p);
         if (k.transition > 0 && i > 0) { p.setColor(0x66ffffff); float tx = x(s[i]); c.drawRect(tx, rowV, x(s[i] + EditModel.transitionUs(project, i)), rowV + rowVh, p); }
         if (k == selected) { p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(2)); p.setColor(ACCENT); c.drawRoundRect(r, dp(4), dp(4), p); p.setStyle(Paint.Style.FILL); }
@@ -788,7 +788,7 @@ public class EditorActivity extends Activity {
         c.save(); c.clipRect(r);
         c.drawText(k.name, r.left + dp(5), rowV + dp(14), p);
         p.setColor(DIM);
-        c.drawText(fmt(k.durationUs()) + (k.muted ? " · muted" : "") + (CinemaMath.isLogLook(k.look) ? " · " + k.look : "") + (k.grade.neutral() ? "" : " · graded"), r.left + dp(5), rowV + dp(28), p);
+        c.drawText(fmt(k.durationUs()) + (k.muted ? " · muted" : "") + (CinemaMath.convertsInPost(k.look) ? " · " + k.look : "") + (k.grade.neutral() ? "" : " · graded"), r.left + dp(5), rowV + dp(28), p);
         c.restore();
       }
       for (EditModel.Title t : project.titles) {

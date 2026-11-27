@@ -503,7 +503,14 @@ final class CinemaMath {
   static String lutName(String look) { return look.replace(' ', '_').replace('.', '_') + "_to_Rec709.cube"; }
 
   /** Rendering of one log RGB code triple to Rec.709 display: decode, gamut back to Rec.709, tone map, BT.709. */
+  /** Looks the editor and player turn back into normal colour: the logs, and the (non-log) Flat profile. */
+  static boolean convertsInPost(String look) { return look != null && (isLogLook(look) || "Flat".equals(look)); }
+
+  /** Undoes the Flat profile's curve (same Rec.709 primaries, so only the tone curve changes). */
+  static double flatToRec709(double code) { return clamp01(Math.pow(Math.max(0, (code - 0.06) / 0.88), 1 / 0.82)); }
+
   static double[] logToRec709(String look, double r, double g, double b) {
+    if ("Flat".equals(look)) return new double[] {flatToRec709(r), flatToRec709(g), flatToRec709(b)};
     double[] lin = {Math.max(0, decodeLook(look, r)), Math.max(0, decodeLook(look, g)), Math.max(0, decodeLook(look, b))};
     double[] rgb = mul(invert(rec709ToGamut(look)), lin);
     double[] out = new double[3];
