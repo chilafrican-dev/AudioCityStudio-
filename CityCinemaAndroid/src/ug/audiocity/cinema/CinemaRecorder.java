@@ -102,7 +102,7 @@ final class CinemaRecorder {
   private MediaFormat videoFormat, audioFormat;
   private boolean muxerStarted;
   private int pendingVideo;
-  private long baseUs = -1, lastVideoUs = -1, lastAudioUs = -1, lastSlot = -1;
+  private long baseUs = -1, lastVideoUs = -1, lastAudioUs = -1, lastSlot = -1, audioShiftUs = Long.MIN_VALUE;
   private final List<Pending> pending = new ArrayList<>();
   private volatile boolean recording;
   volatile long framesWritten, droppedFrames, bytesWritten, recordStartedMs;
@@ -131,6 +131,9 @@ final class CinemaRecorder {
     f.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, c.gopSeconds);
     f.setInteger(MediaFormat.KEY_PRIORITY, 0);
     if (c.fps > 60) f.setInteger(MediaFormat.KEY_OPERATING_RATE, CinemaMath.nominalFps(c.fps));
+    // If the camera delivers frames faster than the project rate, the encoder drops the extras before encoding.
+    // (Encoded frames must never be dropped afterwards: later frames depend on them.)
+    else if (android.os.Build.VERSION.SDK_INT >= 29) f.setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, (float) CinemaMath.exactFps(c.fps));
     f.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED);
     if (c.tenBitHlg) {
       f.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10);
@@ -166,7 +169,7 @@ final class CinemaRecorder {
     muxer = new MediaMuxer(mp4, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
     muxer.setOrientationHint(config.orientationHint);
     videoTrack = audioTrack = -1; videoFormat = audioFormat = null; muxerStarted = false;
-    baseUs = lastVideoUs = lastAudioUs = lastSlot = -1; pending.clear(); pendingVideo = 0;
+    baseUs = lastVideoUs = lastAudioUs = lastSlot = -1; audioShiftUs = Long.MIN_VALUE; pending.clear(); pendingVideo = 0;
     stopRequestedAt = -1; framesWritten = droppedFrames = bytesWritten = 0; recordStartedMs = SystemClock.elapsedRealtime();
     boolean withAudio = config.audio && config.conformFps <= 0 && audio != null && audio.isRunning();
     audioEngine = withAudio ? audio : null;
@@ -278,20 +281,27 @@ final class CinemaRecorder {
   }
 
   private void writeStarted(boolean isVideo, ByteBuffer buf, MediaCodec.BufferInfo info) {
-    long pts = info.presentationTimeUs - baseUs;
-    if (pts < 0) return; // audio from before the first frame
     if (!isVideo && audioTrack < 0) return;
+    if (!isVideo && audioShiftUs == Long.MIN_VALUE) {
+      // Safety net: if audio and video timestamps come from different clocks (some phones misreport the camera's
+      // clock), the first audio sample lands minutes away from the first frame. Re-align audio to the video then.
+      long gap = info.presentationTimeUs - baseUs;
+      audioShiftUs = Math.abs(gap) > 2_000_000L ? gap : 0;
+      if (audioShiftUs != 0) Log.w(TAG, "audio clock differs from the camera clock by " + gap / 1000 + " ms; re-aligned");
+    }
+    long pts = info.presentationTimeUs - baseUs - (isVideo ? 0 : audioShiftUs);
+    if (pts < 0) return; // audio from before the first frame
     if (isVideo) {
       // Constant frame rate: snap each frame to its slot on the exact (e.g. 24000/1001) frame grid. A dropped frame
-      // leaves a gap instead of shifting later frames, so sync holds; two frames in one slot (camera running slightly
-      // fast in auto exposure) keep only the first. Off-speed takes are re-timed onto the playback grid.
+      // leaves a gap instead of shifting later frames, so sync holds. Encoded frames are never discarded (the frames
+      // after them depend on them): a frame that lands in an occupied slot takes the next one. Off-speed takes are
+      // re-timed onto the playback grid.
       double frameUs = 1e6 / CinemaMath.exactFps(config.fps);
-      long slot = Math.round(pts / frameUs);
-      if (slot <= lastSlot) return;
+      long slot = Math.max(Math.round(pts / frameUs), lastSlot + 1);
       lastSlot = slot;
       pts = Math.round(slot * (config.conformFps > 0 ? 1e6 / CinemaMath.exactFps(config.conformFps) : frameUs));
     }
-    if (isVideo) { if (pts <= lastVideoUs) return; lastVideoUs = pts; } else { if (pts <= lastAudioUs) return; lastAudioUs = pts; }
+    if (isVideo) lastVideoUs = pts; else { if (pts <= lastAudioUs) return; lastAudioUs = pts; }
     MediaCodec.BufferInfo out = new MediaCodec.BufferInfo();
     out.set(info.offset, info.size, pts, info.flags & ~MediaCodec.BUFFER_FLAG_END_OF_STREAM);
     buf.position(info.offset); buf.limit(info.offset + info.size);
@@ -333,7 +343,8 @@ final class CinemaRecorder {
     private MediaCodec aac;
     private long wavDataBytes;
     private final Object takeLock = new Object();
-    boolean realtimeClock;
+    /** Whether the camera's timestamps use the boot-time clock (measured by the activity: some phones misreport it). */
+    volatile boolean realtimeClock;
     String inputName = "Built-in mic";
 
     boolean isRunning() { return running; }

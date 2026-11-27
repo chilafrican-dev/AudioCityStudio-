@@ -283,6 +283,11 @@ public class CinemaTests {
       check(w.audioFramesWritten() == 480 + 960 + 960, "a gap is filled with silence");
       a.add(new float[960 * 2], 960, 1_030_000_000L, w);          // a repeated chunk adds nothing
       check(w.audioFramesWritten() == 2400, "overlapping audio is not written twice");
+      MovWriter.AudioAligner skewed = new MovWriter.AudioAligner(2, 48_000);
+      skewed.videoStarted(1_000_000_000L, w);
+      long before = w.audioFramesWritten();
+      skewed.add(new float[960 * 2], 960, 1_000_000_000L + 900 * CinemaMath.NS, w); // audio clock 15 minutes off
+      check(w.audioFramesWritten() - before == 960, "audio on a different clock is re-aligned, not padded with 15 minutes of silence");
       w.writeVideo(ByteBuffer.wrap(new byte[100]), 3);
       check(w.videoFrames() == 3, "one frame can fill several slots");
       w.finish();

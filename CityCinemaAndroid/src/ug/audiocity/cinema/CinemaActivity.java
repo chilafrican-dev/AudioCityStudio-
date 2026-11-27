@@ -145,6 +145,22 @@ public class CinemaActivity extends Activity {
   private volatile float[] liveGains;
   private volatile ColorSpaceTransform liveTransform;
   private volatile Integer liveAfState;
+  private volatile boolean clockMeasured, cameraBootClock;
+
+  /**
+   * Which clock the camera's frame timestamps use, measured rather than trusted: some phones report "unknown" yet use
+   * the boot-time clock, which differs from the monotonic clock by all the time the phone has slept, putting the
+   * sound minutes away from the picture. Audio timestamps then use the same clock.
+   */
+  private void measureCameraClock(Long ts) {
+    if (ts == null) return;
+    long boot = Math.abs(ts - SystemClock.elapsedRealtimeNanos()), mono = Math.abs(ts - System.nanoTime());
+    if (Math.abs(SystemClock.elapsedRealtimeNanos() - System.nanoTime()) < 50_000_000L) return; // clocks agree: can't tell yet
+    cameraBootClock = boot < mono;
+    audio.realtimeClock = cameraBootClock;
+    clockMeasured = true;
+    Log.i(TAG, "camera clock: " + (cameraBootClock ? "boot time" : "monotonic") + " (reported " + (lens.realtimeClock ? "realtime" : "unknown") + ")");
+  }
   /** Whether the camera really applies our tone curves (some report support but ignore them). */
   private volatile boolean curveIgnored, curveHonoured;
   private int curveChecks;
@@ -748,7 +764,7 @@ public class CinemaActivity extends Activity {
     c.conformFps = fps > 60 ? conformFps : 0; c.hevc = hevc || tenBit; c.tenBitHlg = tenBit; c.cbr = cbr;
     c.gopSeconds = gop == 0 ? 1f : gop == 1 ? 0.5f : 0f;
     c.bitrate = targetBitrate();
-    c.audio = audioOn; c.realtimeClock = lens != null && lens.realtimeClock;
+    c.audio = audioOn; c.realtimeClock = clockMeasured ? cameraBootClock : lens != null && lens.realtimeClock;
     c.orientationHint = lens == null ? 0 : lens.front ? (lens.sensorOrientation + displayDegrees()) % 360 : (lens.sensorOrientation - displayDegrees() + 360) % 360;
     return c;
   }
@@ -1056,6 +1072,7 @@ public class CinemaActivity extends Activity {
       Long e = res.get(CaptureResult.SENSOR_EXPOSURE_TIME); if (e != null) liveExposure = e;
       Float f = res.get(CaptureResult.LENS_FOCUS_DISTANCE); if (f != null) liveFocus = f;
       liveAfState = res.get(CaptureResult.CONTROL_AF_STATE);
+      if (!clockMeasured) measureCameraClock(res.get(CaptureResult.SENSOR_TIMESTAMP));
       // Some phones list custom tone curves but quietly ignore them: check what the camera says it actually applied.
       Integer tm = res.get(CaptureResult.TONEMAP_MODE);
       Integer asked = r.get(CaptureRequest.TONEMAP_MODE);
@@ -1599,7 +1616,7 @@ public class CinemaActivity extends Activity {
     if (!audioOn || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { audio.stop(); return; }
     AudioDeviceInfo dev = null;
     if (audioDeviceId != 0) for (AudioDeviceInfo d : ((AudioManager) getSystemService(AUDIO_SERVICE)).getDevices(AudioManager.GET_DEVICES_INPUTS)) if (d.getId() == audioDeviceId) dev = d;
-    try { audio.start(CinemaRecorder.sourceFor(audioSource), dev, lens != null && lens.realtimeClock); }
+    try { audio.start(CinemaRecorder.sourceFor(audioSource), dev, clockMeasured ? cameraBootClock : lens != null && lens.realtimeClock); }
     catch (SecurityException e) { message("Microphone permission is needed for sound."); }
     audio.gainDb = prefs.getFloat("gain", 0);
   }

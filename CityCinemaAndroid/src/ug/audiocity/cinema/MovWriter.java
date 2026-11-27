@@ -270,7 +270,7 @@ final class MovWriter {
   /** Aligns audio chunks to the first video frame: pads with silence or trims, so audio and picture start together. */
   static final class AudioAligner {
     private final int channels, rate;
-    private long videoStartNs = -1, written;
+    private long videoStartNs = -1, written, clockShiftNs = Long.MIN_VALUE;
     private final ArrayDeque<Object[]> early = new ArrayDeque<>();
 
     AudioAligner(int channels, int rate) { this.channels = channels; this.rate = rate; }
@@ -288,6 +288,9 @@ final class MovWriter {
         if (early.size() < 400) early.add(new Object[] {samples.clone(), frames, ptsNs});
         return;
       }
+      // Safety net: audio more than 2 s from the first frame means the two used different clocks; re-align.
+      if (clockShiftNs == Long.MIN_VALUE) clockShiftNs = Math.abs(ptsNs - videoStartNs) > 2 * CinemaMath.NS ? ptsNs - videoStartNs : 0;
+      ptsNs -= clockShiftNs;
       long start = Math.round((ptsNs - videoStartNs) * (double) rate / CinemaMath.NS);
       if (start + frames <= written) return;            // entirely before what we already have
       if (start > written) {                             // gap: fill with silence (keeps sync after a hiccup)
