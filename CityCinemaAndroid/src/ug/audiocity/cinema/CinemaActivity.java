@@ -164,6 +164,9 @@ public class CinemaActivity extends Activity {
   /** Whether the camera really applies our tone curves (some report support but ignore them). */
   private volatile boolean curveIgnored, curveHonoured;
   private int curveChecks;
+  /** When the phone last reported using City Cinema's curve, and when a curve was last requested (live log indicator). */
+  private volatile long lastCurveOkMs, lastCurveAskMs;
+  private long lastLogWarnMs;
   // what the camera did during the current take
   private volatile int takeFrames, takeCurveFrames, takeEis = -1, takeCcMode = -1;
   private volatile float sentCurveTop = -1, resultCurveTop = -1;
@@ -1105,6 +1108,8 @@ public class CinemaActivity extends Activity {
       }
       if (asked != null && asked == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE) {
         boolean honoured = tm != null && tm == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE;
+        lastCurveOkMs = honoured ? SystemClock.uptimeMillis() : lastCurveOkMs;
+        lastCurveAskMs = SystemClock.uptimeMillis();
         curveChecks = honoured ? 0 : curveChecks + 1;
         if (honoured) curveHonoured = true;
         if (!curveIgnored && curveChecks > 30 && !curveHonoured) { curveIgnored = true; applyRepeating(); ui.post(() -> { message("This phone ignores custom tone curves, so log looks can't be applied. The phone's own processing is used and the log exposure offset is turned off."); refreshUi(); }); }
@@ -1733,12 +1738,34 @@ public class CinemaActivity extends Activity {
 
   private long lastSlowStatus;
 
+  /**
+   * Live "is the log really being recorded" check: the phone's capture results say which tone mapping it used for
+   * each frame. In a log look the profile cell gets a tick when City Cinema's curve is in use and a cross when the
+   * phone is using its own processing (typically because of stabilisation), and a message says what to try.
+   */
+  private void updateLogIndicator() {
+    if (lookCell == null || lens == null) return;
+    String look = CinemaMath.LOOKS[lookIndex];
+    boolean wants = !rawMode && !tenBit && !curveIgnored && lens.curvePoints >= 16 && CinemaMath.isLogLook(look) && session != null && texture != null && texture.isAvailable();
+    if (!wants || lastCurveAskMs == 0) { lookCell.caption.setText("PROFILE"); lookCell.caption.setTextColor(DIM); return; }
+    long now = SystemClock.uptimeMillis();
+    boolean ok = now - lastCurveOkMs < 1500;
+    lookCell.caption.setText(ok ? "PROFILE ✓ LOG ACTIVE" : "PROFILE ✗ NOT LOG");
+    lookCell.caption.setTextColor(ok ? OK : REC);
+    if (!ok && now - lastCurveAskMs < 1500 && now - lastLogWarnMs > 20_000) {
+      lastLogWarnMs = now;
+      String eis = stabilization >= 2 ? " Digital stabilisation (" + STAB_SHORT[stabilization] + ") is on: set it to OIS or OFF." : "";
+      message("The phone is NOT applying the " + look + " curve right now, so the picture is not log." + eis);
+    }
+  }
+
   private void updateStatus() {
     String tc;
     if (todTimecode) tc = startTimecodeFor(System.currentTimeMillis());
     else tc = CinemaMath.timecode(recordRunBase + (recording ? CinemaMath.framesFor(SystemClock.elapsedRealtimeNanos() - recordStartNs, fps) : 0), fps);
     tcView.setText(tc);
     tcView.setTextColor(recording ? REC : TEXT);
+    updateLogIndicator();
     recLabel.setVisibility(recording ? View.VISIBLE : View.INVISIBLE);
     if (recording) {
       long ms = (SystemClock.elapsedRealtimeNanos() - recordStartNs) / 1_000_000;
