@@ -136,6 +136,24 @@ public class EditTests {
       // errors
       String[] bad = {"LUT_3D_SIZE 2\n0 0 0\n", "0 0 0\n", "LUT_3D_SIZE 99\n", "hello", "LUT_3D_SIZE 2\n0 0 x\n"};
       for (String s : bad) { boolean threw = false; try { cube(s); } catch (java.io.IOException e) { threw = true; } check(threw, "rejects a broken .cube: " + s.replace('\n', '|')); }
+      // built-in cinematic pack
+      for (String nm : CinematicLuts.NAMES) {
+        CubeLut l = CinematicLuts.build(nm);
+        check(l.size == 33 && l.data.length == 33 * 33 * 33 * 3, nm + " size");
+        double diff = 0;
+        for (int i = 0; i < l.data.length; i++) check(l.data[i] >= 0 && l.data[i] <= 1, nm + " in range");
+        for (float[] p : new float[][] {{0.2f, 0.4f, 0.6f}, {0.8f, 0.5f, 0.3f}, {0.5f, 0.5f, 0.5f}}) { float[] o2 = l.apply(p[0], p[1], p[2]); for (int i = 0; i < 3; i++) diff += Math.abs(o2[i] - p[i]); }
+        check(diff > 0.05, nm + " actually changes the picture");
+        float[] black = l.apply(0, 0, 0), white = l.apply(1, 1, 1);
+        check(CinematicLuts.luma(new double[] {white[0], white[1], white[2]}) > CinematicLuts.luma(new double[] {black[0], black[1], black[2]}) + 0.4, nm + " keeps tonal range");
+        CubeLut back = cube(CinematicLuts.cube(nm));
+        float[] p1 = back.apply(0.3f, 0.6f, 0.2f), p2 = l.apply(0.3f, 0.6f, 0.2f);
+        for (int i = 0; i < 3; i++) near(p1[i], p2[i], 2e-5, nm + " .cube export reads back");
+      }
+      float[] noir = CinematicLuts.build("Noir").apply(0.9f, 0.2f, 0.1f);
+      check(noir[0] == noir[1] && noir[1] == noir[2], "Noir is black and white");
+      float[] to = CinematicLuts.build("Teal & Orange").apply(0.15f, 0.15f, 0.15f);
+      check(to[2] > to[0], "Teal & Orange: teal shadows");
       // half floats for the GPU texture
       for (float f : new float[] {0, 0.001f, 0.18f, 0.5f, 1, 1.5f, -0.25f}) near(CubeLut.fromHalf(CubeLut.toHalf(f)), f, Math.max(1e-6, Math.abs(f) * 1e-3), "half float " + f);
     } catch (java.io.IOException e) { throw new AssertionError(e); }

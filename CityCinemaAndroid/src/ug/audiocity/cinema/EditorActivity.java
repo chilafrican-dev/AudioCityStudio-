@@ -310,6 +310,39 @@ public class EditorActivity extends Activity {
     return "None";
   }
 
+  /** Opens free LUT sites in the browser; downloaded .cube files come in with IMPORT .cube. */
+  private void lutSources() {
+    String[] names = {"FreeVisuals: free LUTs", "Uppbeat: free LUTs", "PremiumBeat: free LUT collections", "No Film School: 56 free cinematic LUTs"};
+    String[] urls = {"https://www.freevisuals.net/free-luts", "https://uppbeat.io/luts", "https://www.premiumbeat.com/blog/29-free-luts-for-video/",
+        "https://nofilmschool.com/download-these-free-56-cinematic-luts"};
+    new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Get LUTs online")
+        .setItems(names, (d, i) -> {
+          try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(urls[i]))); } catch (Exception e) { toast("No browser found."); }
+        })
+        .setMessage(null).setNegativeButton("Close", null).show();
+    toast("Download a .cube LUT in your browser (check the site's licence), unzip it if needed, then use IMPORT .cube here.");
+  }
+
+  /** Writes the built-in cinematic looks as .cube files to Documents/City Cinema/LUTs (for desktop editors). */
+  private void exportLutPack() {
+    jobs.execute(() -> {
+      int ok = 0;
+      for (String nm : CinematicLuts.NAMES) {
+        try {
+          ContentValues v = new ContentValues();
+          v.put(MediaStore.MediaColumns.DISPLAY_NAME, "CityCinema_" + nm.replaceAll("[^A-Za-z0-9]+", "_") + ".cube");
+          v.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
+          v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/City Cinema/LUTs");
+          Uri u = getContentResolver().insert(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
+          if (u == null) continue;
+          try (java.io.OutputStream o = getContentResolver().openOutputStream(u)) { if (o != null) { o.write(CinematicLuts.cube(nm).getBytes(StandardCharsets.US_ASCII)); ok++; } }
+        } catch (Exception e) { Log.w(TAG, "lut pack", e); }
+      }
+      final int n = ok;
+      ui.post(() -> toast(n + " cinematic LUTs saved to Documents/City Cinema/LUTs (Rec.709 input), for Resolve, Premiere, Final Cut or CapCut desktop."));
+    });
+  }
+
   private void pickLut() {
     Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
     i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -419,12 +452,15 @@ public class EditorActivity extends Activity {
       slider("Shadows", -100, 100, Math.round(g.shadows * 100), v -> g.shadows = v / 100.0, x -> x + "");
       slider("Highlights", -100, 100, Math.round(g.highlights * 100), v -> g.highlights = v / 100.0, x -> x + "");
       // creative / custom LUT (.cube)
-      label("LUT (.cube)" + (c.lut.isEmpty() ? "" : ": " + c.lut));
+      label("Cinematic LUT" + (c.lut.isEmpty() ? "" : ": " + CinematicLuts.nameOf(c.lut).replaceAll("\\.cube$", "")));
       LinearLayout lutRow = row();
       lutRow.addView(chip("None", v -> { c.lut = ""; changed(true); }, c.lut.isEmpty()), lp(-2));
+      for (String nm : CinematicLuts.NAMES) { String key = CinematicLuts.key(nm); lutRow.addView(chip("★ " + nm, v -> { c.lut = key; changed(true); }, key.equals(c.lut)), lp(-2)); }
       String[] files = EditEngine.lutDir(this).list();
       if (files != null) { java.util.Arrays.sort(files); for (String f : files) lutRow.addView(chip(f.replaceAll("\\.cube$", ""), v -> { c.lut = f; changed(true); }, f.equals(c.lut)), lp(-2)); }
       lutRow.addView(chip("IMPORT .cube", v -> pickLut()), lp(-2));
+      lutRow.addView(chip("GET LUTS ONLINE", v -> lutSources()), lp(-2));
+      lutRow.addView(chip("EXPORT PACK", v -> exportLutPack()), lp(-2));
       inspector.addView(scroll(lutRow));
       if (!c.lut.isEmpty()) {
         slider("LUT strength", 0, 100, Math.round(c.lutStrength * 100), v -> c.lutStrength = v / 100.0, x -> x + "%");

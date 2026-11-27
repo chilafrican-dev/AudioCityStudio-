@@ -214,7 +214,8 @@ final class EditEngine {
     private CubeLut userLut(String name) {
       if (userLuts.containsKey(name)) return userLuts.get(name);
       CubeLut l = null;
-      if (lutDir != null) {
+      if (CinematicLuts.isBuiltin(name)) l = CinematicLuts.build(CinematicLuts.nameOf(name));
+      else if (lutDir != null) {
         try (java.io.Reader r = new java.io.InputStreamReader(new java.io.FileInputStream(new java.io.File(lutDir, name)), java.nio.charset.StandardCharsets.UTF_8)) { l = CubeLut.parse(r); }
         catch (IOException | RuntimeException e) { Log.w(TAG, "LUT " + name, e); }
       }

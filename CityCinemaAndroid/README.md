@@ -93,6 +93,11 @@ Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra)
   - Order: log conversion (if the clip is log) → your LUT → the grade sliders.
   - LUTs run on the GPU as 16-bit-float 3D textures, so gradients don't band.
   - If a LUT expects log input (e.g. a downloaded S-Log3 LUT), set the clip's log to *No LUT*.
+- **Cinematic LUT pack (built in, marked ★):** Teal & Orange, Golden Hour Film, Cool Thriller, Bleach Bypass, Vintage Fade, Day for Night, Noir, Desert Heat, Moody Forest, Neon Night, Soft Pastel, Code Green.
+  - City Cinema's own designs, so they ship with the app with no licence limits. They expect normal-colour (Rec.709) input; log clips are converted first.
+  - Skin tones are protected in the warm/teal looks.
+  - **EXPORT PACK** writes all 12 as 33³ `.cube` files to `Documents/City Cinema/LUTs`, for Resolve, Premiere, Final Cut, CapCut desktop or monitors.
+- **GET LUTS ONLINE** opens well-known free LUT sources (FreeVisuals, Uppbeat, PremiumBeat, No Film School). Download a `.cube` there, then load it with **IMPORT .cube**. These packs are free to use but not licensed for bundling in another app, so they aren't built in.
 - Copy a grade, including its LUT, to all clips.
 
 *Transitions and titles*
