@@ -312,6 +312,11 @@ final class CinemaRecorder {
     volatile boolean clipped;
     private long holdUntilL, holdUntilR;
     private volatile CinemaRecorder target;
+    /** Receives gain-adjusted float PCM during a take (ProRes MOV audio). */
+    interface PcmSink { void onPcm(float[] interleaved, int frames, int channels, long ptsNs); }
+    private volatile PcmSink sink;
+
+    void setSink(PcmSink s) { sink = s; }
     private volatile boolean inTake;
     /** Camera-clock time of the current/last take's first WAV sample, or -1. */
     volatile long wavStartNs = -1;
@@ -427,6 +432,8 @@ final class CinemaRecorder {
         synchronized (takeLock) {
           if (!inTake) continue;
           if (wavStartNs < 0) wavStartNs = ptsNs;
+          PcmSink pcmSink = sink;
+          if (pcmSink != null) pcmSink.onPcm(f, frames, channels, ptsNs);
           if (wav != null) {
             pcm32.clear(); for (int i = 0; i < n; i++) pcm32.putFloat(f[i]); pcm32.flip();
             try { while (pcm32.hasRemaining()) wavDataBytes += wav.write(pcm32); } catch (IOException e) { Log.w(TAG, "wav", e); wav = null; }

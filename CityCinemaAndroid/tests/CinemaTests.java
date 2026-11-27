@@ -31,6 +31,7 @@ public class CinemaTests {
     bitrate();
     wav();
     dng();
+    audioAlign();
     if (args.length > 0) writeSampleDngs(args[0]);
     System.out.println("CinemaTests: " + passed + " checks passed");
   }
@@ -255,5 +256,26 @@ public class CinemaTests {
   /** Writes sample DNGs so an external reader (LibRaw) can verify them: see tools/verify_dng.py. */
   static void writeSampleDngs(String dir) throws IOException {
     for (int bits : new int[] {12, 16}) try (FileOutputStream o = new FileOutputStream(dir + "/sample" + bits + ".dng")) { o.write(sampleFile(bits)); }
+  }
+
+  /** Audio that starts before frame 0 is trimmed; a gap is filled with silence, so sound stays in sync. */
+  static void audioAlign() throws IOException {
+    java.io.File f = java.io.File.createTempFile("align", ".mov");
+    try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "rw")) {
+      MovWriter.Config c = new MovWriter.Config(); c.width = 64; c.height = 32; c.audioChannels = 2;
+      MovWriter w = new MovWriter(raf.getChannel(), c);
+      MovWriter.AudioAligner a = new MovWriter.AudioAligner(2, 48_000);
+      a.add(new float[960 * 2], 960, 990_000_000L, w);           // before video starts: held back
+      check(w.audioFramesWritten() == 0, "audio waits for the first video frame");
+      a.videoStarted(1_000_000_000L, w);                          // frame 0 at t = 1 s: first 10 ms of that chunk trimmed
+      check(w.audioFramesWritten() == 480, "audio before frame 0 is trimmed");
+      a.add(new float[960 * 2], 960, 1_030_000_000L, w);          // 20 ms gap after the first chunk
+      check(w.audioFramesWritten() == 480 + 960 + 960, "a gap is filled with silence");
+      a.add(new float[960 * 2], 960, 1_030_000_000L, w);          // a repeated chunk adds nothing
+      check(w.audioFramesWritten() == 2400, "overlapping audio is not written twice");
+      w.writeVideo(ByteBuffer.wrap(new byte[100]), 3);
+      check(w.videoFrames() == 3, "one frame can fill several slots");
+      w.finish();
+    } finally { f.delete(); }
   }
 }

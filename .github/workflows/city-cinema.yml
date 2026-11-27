@@ -26,7 +26,7 @@ jobs:
         run: |
           SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses > /dev/null
-          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264"
 
       - name: Host tests
         run: ./run-tests.sh
@@ -37,6 +37,11 @@ jobs:
           mkdir -p /tmp/dng
           java -cp "build/test/tests:build/test/classes:$ANDROID_SDK_ROOT/platforms/android-35/android.jar" ug.audiocity.cinema.CinemaTests /tmp/dng
           /tmp/venv/bin/python -I tools/verify_dng.py /tmp/dng
+
+      - name: Verify the ProRes encoder and .mov writer with FFmpeg
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+          ./tools/prores-check.sh "$(command -v ffmpeg)" /tmp/venv/bin/python 1920 1080 12
 
       - name: Restore the signing key (from the CINEMA_KEYSTORE_BASE64 secret)
         env:
@@ -49,7 +54,9 @@ jobs:
             echo "::warning::No CINEMA_KEYSTORE_BASE64 secret: a new key is generated, so this APK cannot update an install signed with a different key."
           fi
 
-      - name: Build and sign the APK
+      - name: Build and sign the APK (with the native ProRes encoder)
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
         run: ./build.sh
 
       - name: Upload APK

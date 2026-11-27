@@ -1,4 +1,4 @@
-# City Cinema 1.1
+# City Cinema 1.2
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -44,6 +44,20 @@ no third-party libraries.
 - Anamorphic desqueeze preview at 1.33x, 1.5x, 1.8x or 2x.
 - A red tally border while recording, plus storage time remaining, battery level and a thermal warning.
 
+**ProRes 422**
+- Menu → Recording → **ProRes 422** records **Proxy, LT, 422 or HQ** (`apco`/`apcs`/`apcn`/`apch`) into a QuickTime `.mov`, 10-bit 4:2:2. Files open in Final Cut Pro, DaVinci Resolve, Premiere and FFmpeg.
+- Android has no ProRes encoder, so City Cinema includes its own (`jni/prores.c`), written in C from the bitstream Apple published as **SMPTE RDD 36**. Several cores encode frames in parallel.
+- Data rates follow Apple's published targets (at 1080p29.97: Proxy 45, LT 102, 422 147, HQ 220 Mb/s). A per-slice quantiser keeps each slice on budget.
+- The `.mov` also holds:
+  - **24-bit PCM** audio, aligned sample-accurately to frame 0
+  - a QuickTime **timecode track** with reel name, record-run or time of day, and drop-frame at 29.97/59.94
+  - `colr` color tags and the orientation
+  - an optional 32-bit float WAV, plus a JSON sidecar
+- If the encoders can't keep up, the next frame fills the missing frame numbers: it is stored once and referenced again, so the file stays constant frame rate and in sync. `ENC xx fps · BUF` on screen shows encoder speed and backlog.
+- The source is the camera's 8-bit YUV (BT.709 primaries, BT.601 matrix, as flagged in the file), mapped to 10-bit legal range. Looks such as AC Log are baked in, as on a camera.
+- **Speed:** on a desktop core the encoder does about 18–24 fps at 1080p and about 4–6 fps at 4K. A modern phone running 4–7 encoder threads should manage 1080p and 1440p in real time. **4K ProRes will usually drop frames on phones.** Watch `ENC`.
+- *ProRes is a trademark of Apple Inc. This is an independent implementation of the published bitstream; it is not an Apple-licensed or Apple-certified encoder. Check Apple's licensing before distributing the app commercially.*
+
 **RAW video (CinemaDNG)**
 - Menu → Recording → **CinemaDNG RAW** records the sensor's Bayer data as a folder of DNG frames per clip. DaVinci Resolve and other CinemaDNG tools open the folder as one clip.
 - Every frame is a valid DNG 1.4 containing:
@@ -76,7 +90,7 @@ Files are saved to `Movies/City Cinema` (MP4), `Music/City Cinema` (WAV) and `Do
 
 City Cinema can only use what the phone's Camera2 HAL and hardware encoder expose:
 - Manual exposure, manual white balance, custom tone curves, high frame rates and 10-bit each need the matching camera capability. The Menu → About screen shows what your phone supports, and unsupported controls fall back to auto.
-- There is no ProRes: Android phones don't expose a ProRes encoder. RAW is uncompressed CinemaDNG, which needs the Camera2 RAW capability.
+- ProRes uses the CPU (no phone has a ProRes hardware encoder), so it is limited by processor speed and heat. RAW is uncompressed CinemaDNG and needs the Camera2 RAW capability.
 - RAW data rates are very high. For example, 12 MP at 24 fps in 12-bit is about 430 MB/s, which is more than most phones can write steadily. A binned or smaller RAW size, or a lower frame rate, gives drop-free recording. Watch `RAW BUF`.
 - "AC Log" is a tone curve applied to the ISP's output. It flattens and protects highlights, but it can't recover range the ISP has already clipped.
 - The camera stays locked to landscape. The preview analysis for scopes, peaking and zebras runs at about 12 fps on a 480-pixel-wide copy of the picture, so peaking is coarser than the recorded image.
@@ -89,10 +103,12 @@ export ANDROID_SDK_ROOT=/path/to/Android/Sdk   # platform 35 + build-tools 35.0.
 ./build.sh                                      # -> CityCinema.apk
 ```
 
+With `ANDROID_NDK_ROOT` set (NDK 26), `build.sh` also compiles the native ProRes encoder. Without it the app still builds, but without ProRes. `tools/prores-check.sh <ffmpeg> <python>` encodes test frames on the host and checks them with FFmpeg.
+
 **On GitHub:** the workflow `.github/workflows/city-cinema.yml` runs the tests and builds `CityCinema.apk` on every push that touches this folder. Download it from the run's **Artifacts**.
 
 **Signing:** to keep updates installable over each other, store your keystore, base64-encoded, as the repository secret `CINEMA_KEYSTORE_BASE64`. Without it, every build gets a fresh development key.
 
 ## Status
 
-The host tests pass, and in CI the sample DNGs (12- and 16-bit, with GainMap and CinemaDNG tags) are decoded with LibRaw, which confirms every sample, the levels, the CFA pattern and the as-shot white balance (`tools/verify_dng.py`). `CinemaTests` covers shutter/angle maths, flicker-free angles, ISO stops, white balance round trips, tone curves, false color, guides, drop-frame timecode, ramps, bitrate and the WAV header). The app has **not yet been run on a phone**. Before relying on it for a shoot, test on your device: recording, audio sync, 10-bit, high frame rate, and the look/WB on your sensor.
+The host tests pass. In CI, the ProRes encoder and `.mov` writer are checked end to end: test frames at 1080p (and locally also at 4K and at widths that are not a multiple of 16) are decoded by FFmpeg for every profile. FFmpeg confirms profile, 10-bit 4:2:2, frame rate, timecode, reel and 24-bit audio. Luma PSNR is 35 (Proxy), 39 (LT), 43 (422) and 50.6 dB (HQ) on a deliberately noisy test picture, and chroma is 56–63 dB. Also in CI, the sample DNGs (12- and 16-bit, with GainMap and CinemaDNG tags) are decoded with LibRaw, which confirms every sample, the levels, the CFA pattern and the as-shot white balance (`tools/verify_dng.py`). `CinemaTests` covers shutter/angle maths, flicker-free angles, ISO stops, white balance round trips, tone curves, false color, guides, drop-frame timecode, ramps, bitrate and the WAV header). The app has **not yet been run on a phone**. Before relying on it for a shoot, test on your device: recording, audio sync, 10-bit, high frame rate, and the look/WB on your sensor.

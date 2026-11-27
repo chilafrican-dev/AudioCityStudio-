@@ -151,6 +151,12 @@ public class CinemaActivity extends Activity {
   private Size videoSize = new Size(1920, 1080);
   /** RAW mode records CinemaDNG frame sequences instead of MP4. */
   private boolean rawMode = false, rawPack12 = true;
+  /** ProRes mode records ProRes 422 (software encoder) into a QuickTime .mov. Exclusive with rawMode. */
+  private boolean proresMode = false;
+  private int proresProfile = 3;
+  private Size proresSize = new Size(1920, 1080);
+  private ProResRecorder prores;
+  private Size proresDims;
   private Size rawSize;
   private double fps = 24, conformFps = 0;
   private boolean hevc = true, tenBit = false, cbr = false, wavOn = true, shutterAsAngle = true, todTimecode = false, audioOn = true;
@@ -241,9 +247,10 @@ public class CinemaActivity extends Activity {
     final Object done = new Object();
     final boolean[] finished = {false};
     if (cameraHandler != null) cameraHandler.post(() -> {
-      if (recording) { if (rawMode) stopRawOnCamera(); else stopRecordingOnCamera(); }
+      if (recording) { if (rawMode) stopRawOnCamera(); else if (proresMode) stopProResOnCamera(); else stopRecordingOnCamera(); }
       closeCamera();
       if (raw != null) { raw.release(); raw = null; }
+      if (prores != null) { prores.release(); prores = null; }
       synchronized (done) { finished[0] = true; done.notifyAll(); }
     });
     synchronized (done) { long until = SystemClock.elapsedRealtime() + 6000; while (!finished[0] && SystemClock.elapsedRealtime() < until) { try { done.wait(200); } catch (InterruptedException e) { break; } } }
@@ -380,7 +387,7 @@ public class CinemaActivity extends Activity {
   }
 
   /** The recorded frame: the RAW size in RAW mode, otherwise the video size. */
-  private Size frameSize() { return rawMode && rawSize != null ? rawSize : videoSize; }
+  private Size frameSize() { return rawMode && rawSize != null ? rawSize : proresMode ? proresSize : videoSize; }
 
   /** RAW sizes the sensor can deliver at the current frame rate. */
   private List<Size> rawSizesForRate() {
@@ -452,6 +459,13 @@ public class CinemaActivity extends Activity {
     if (lens.fpsRanges != null) for (Range<Integer> r : lens.fpsRanges) maxAe = Math.max(maxAe, r.getUpper());
     List<Integer> hs = new ArrayList<>();
     if (lens.highSpeed) for (Range<Integer> r : lens.map.getHighSpeedVideoFpsRanges()) hs.add(r.getUpper());
+    if (proresMode) {
+      List<Size> sizes = proresSizesAll();
+      long min = sizes.isEmpty() ? Long.MAX_VALUE : Long.MAX_VALUE;
+      for (Size sz : sizes) min = Math.min(min, lens.map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, sz));
+      for (double f : CinemaMath.FRAME_RATES) if (f <= 60 && CinemaMath.frameDurationNs(f) + 1000 >= min && (CinemaMath.nominalFps(f) <= maxAe || lens.manualSensor)) out.add(f);
+      return out;
+    }
     if (rawMode && lens.raw) {
       Size smallest = lens.rawSizes[lens.rawSizes.length - 1];
       long min = lens.map.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, smallest);
@@ -467,6 +481,18 @@ public class CinemaActivity extends Activity {
 
   /** Keeps the saved format inside what the selected lens and encoder can do. */
   private void validateFormat() {
+    if (proresMode && !ProRes.AVAILABLE) { proresMode = false; message("This build has no ProRes encoder. Switched to MP4."); }
+    if (proresMode) {
+      rawMode = false; tenBit = false;
+      List<Double> rates = availableRates();
+      if (!rates.isEmpty() && !rates.contains(fps)) fps = rates.contains(24.0) ? 24 : rates.get(0);
+      List<Size> ps = proresSizes();
+      if (!ps.isEmpty() && !ps.contains(proresSize)) {
+        Size pick = ps.get(ps.size() - 1);
+        for (Size sz : ps) if (sz.getWidth() == 1920 && sz.getHeight() == 1080) pick = sz;
+        proresSize = pick;
+      }
+    }
     if (rawMode && !lens.raw) { rawMode = false; message(lens.label + " can't record RAW. Switched to MP4."); }
     if (rawMode) {
       tenBit = false;
@@ -519,11 +545,15 @@ public class CinemaActivity extends Activity {
         closeCamera();
         if (encoderSurface == null) encoderSurface = MediaCodec.createPersistentInputSurface();
         if (recorder == null) recorder = new CinemaRecorder(encoderSurface);
+        if (!rawMode && raw != null) { raw.release(); raw = null; }
+        if (!proresMode && prores != null) { prores.release(); prores = null; }
         if (rawMode) {
           if (raw != null && (raw.isRecording() || !rawSize.equals(rawDims))) { raw.release(); raw = null; }
           if (raw == null) { raw = new RawRecorder(rawSize.getWidth(), rawSize.getHeight()); rawDims = rawSize; }
+        } else if (proresMode) {
+          if (prores != null && (prores.isRecording() || !proresSize.equals(proresDims))) { prores.release(); prores = null; }
+          if (prores == null) { prores = new ProResRecorder(proresSize.getWidth(), proresSize.getHeight()); proresDims = proresSize; }
         } else {
-          if (raw != null) { raw.release(); raw = null; }
           recorder.prepare(recorderConfig());
         }
         manager.openCamera(lens.id, cameraExecutor, deviceCallback);
@@ -546,13 +576,13 @@ public class CinemaActivity extends Activity {
     try {
       SurfaceTexture st = texture.getSurfaceTexture();
       if (st == null || device == null) { opening = false; return; }
-      Size buffer = rawMode ? previewSizeFor(rawSize) : videoSize;
+      Size buffer = rawMode ? previewSizeFor(rawSize) : proresMode ? previewSizeFor(proresSize) : videoSize;
       st.setDefaultBufferSize(buffer.getWidth(), buffer.getHeight());
       if (previewSurface != null) previewSurface.release();
       previewSurface = new Surface(st);
-      OutputConfiguration preview = new OutputConfiguration(previewSurface), video = new OutputConfiguration(rawMode ? raw.surface() : encoderSurface);
+      OutputConfiguration preview = new OutputConfiguration(previewSurface), video = new OutputConfiguration(rawMode ? raw.surface() : proresMode ? prores.surface() : encoderSurface);
       if (tenBit && Build.VERSION.SDK_INT >= 33) { preview.setDynamicRangeProfile(DynamicRangeProfiles.HLG10); video.setDynamicRangeProfile(DynamicRangeProfiles.HLG10); }
-      highSpeedSession = fps > 60 && !rawMode;
+      highSpeedSession = fps > 60 && !rawMode && !proresMode;
       SessionConfiguration config = new SessionConfiguration(highSpeedSession ? SessionConfiguration.SESSION_HIGH_SPEED : SessionConfiguration.SESSION_REGULAR,
           Arrays.asList(preview, video), cameraExecutor, new CameraCaptureSession.StateCallback() {
             @Override public void onConfigured(CameraCaptureSession s) { session = s; opening = false; triedFallback = false; applyRepeating(); ui.post(() -> refreshUi()); }
@@ -568,7 +598,8 @@ public class CinemaActivity extends Activity {
     triedFallback = true;
     String what = tenBit ? "10-bit HLG" : fps > 60 ? CinemaMath.fpsLabel(fps) + " fps" : "this format";
     message("Camera couldn't run " + what + ". Switched to a safer format.");
-    if (rawMode) { List<Size> rs = rawSizesForRate(); int i = rs.indexOf(rawSize); if (i >= 0 && i + 1 < rs.size()) rawSize = rs.get(i + 1); else { rawMode = false; message("This camera couldn't stream RAW here. Switched to MP4."); } }
+    if (proresMode) { List<Size> ps = proresSizes(); int i = ps.indexOf(proresSize); if (i >= 0 && i + 1 < ps.size()) proresSize = ps.get(i + 1); else { proresMode = false; message("This camera couldn't stream YUV for ProRes here. Switched to MP4."); } }
+    else if (rawMode) { List<Size> rs = rawSizesForRate(); int i = rs.indexOf(rawSize); if (i >= 0 && i + 1 < rs.size()) rawSize = rs.get(i + 1); else { rawMode = false; message("This camera couldn't stream RAW here. Switched to MP4."); } }
     else if (tenBit) tenBit = false; else if (fps > 60) fps = 30; else { hevc = false; List<Size> s = videoSizes(); if (s.size() > 1) videoSize = s.get(1); }
     ui.post(this::reopen);
   }
@@ -629,7 +660,7 @@ public class CinemaActivity extends Activity {
     try {
       CaptureRequest.Builder b = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
       b.addTarget(previewSurface);
-      if (recording) b.addTarget(rawMode ? raw.surface() : encoderSurface);
+      if (recording) b.addTarget(rawMode ? raw.surface() : proresMode ? prores.surface() : encoderSurface);
       if (rawMode) b.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON);
       if (highSpeedSession) {
         int f = CinemaMath.nominalFps(fps);
@@ -771,8 +802,8 @@ public class CinemaActivity extends Activity {
     recordBusy = true;
     cameraHandler.post(() -> {
       try {
-        if (recording) { if (rawMode) stopRawOnCamera(); else stopRecordingOnCamera(); }
-        else { if (rawMode) startRawOnCamera(); else startRecordingOnCamera(); }
+        if (recording) { if (rawMode) stopRawOnCamera(); else if (proresMode) stopProResOnCamera(); else stopRecordingOnCamera(); }
+        else { if (rawMode) startRawOnCamera(); else if (proresMode) startProResOnCamera(); else startRecordingOnCamera(); }
       } finally { recordBusy = false; ui.post(this::refreshUi); }
     });
   }
@@ -893,6 +924,156 @@ public class CinemaActivity extends Activity {
   }
 
   private static void closeQuietly(java.io.Closeable c) { if (c != null) try { c.close(); } catch (IOException ignored) {} }
+
+  // ================================================================== ProRes recording
+
+  /** YUV sizes the camera streams that suit ProRes (16:9-ish, 720p to 4K DCI), largest first. */
+  private List<Size> proresSizesAll() {
+    List<Size> out = new ArrayList<>();
+    Size[] sizes = lens == null ? null : lens.map.getOutputSizes(ImageFormat.YUV_420_888);
+    if (sizes == null) return out;
+    for (Size s : sizes) {
+      double ar = s.getWidth() / (double) s.getHeight();
+      if (s.getHeight() >= 720 && s.getWidth() <= 4096 && ar >= 1.3 && ar <= 2.0 && s.getWidth() % 2 == 0 && s.getHeight() % 2 == 0) out.add(s);
+    }
+    Collections.sort(out, (a, b) -> Long.compare((long) b.getWidth() * b.getHeight(), (long) a.getWidth() * a.getHeight()));
+    return out;
+  }
+
+  /** ProRes sizes the camera can deliver at the current frame rate. */
+  private List<Size> proresSizes() {
+    List<Size> out = new ArrayList<>();
+    long frameNs = CinemaMath.frameDurationNs(fps);
+    for (Size s : proresSizesAll()) if (lens.map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, s) <= frameNs + 1000) out.add(s);
+    return out;
+  }
+
+  private void chooseProResOptions() {
+    if (recording) return;
+    List<Size> sizes = proresSizes();
+    String[] options = new String[sizes.size() * 4];
+    int sel = 0, k = 0;
+    for (Size sz : sizes) for (int pr = 3; pr >= 0; pr--) {
+      options[k] = ProRes.NAMES[pr] + " · " + sz.getWidth() + "×" + sz.getHeight() + " · " + CinemaMath.formatBitrate(ProRes.bitrate(sz.getWidth(), sz.getHeight(), fps, pr));
+      if (sz.equals(proresSize) && pr == proresProfile) sel = k;
+      k++;
+    }
+    choose("ProRes profile and size", options, sel, i -> { proresSize = sizes.get(i / 4); proresProfile = 3 - i % 4; reopen(); });
+  }
+
+  private Uri movUri;
+  private ParcelFileDescriptor movFd;
+
+  private void startProResOnCamera() {
+    if (prores == null) { message("ProRes isn't ready yet."); return; }
+    long free = new StatFs(Environment.getExternalStorageDirectory().getPath()).getAvailableBytes();
+    if (free < 500L * 1024 * 1024) { message("Storage is almost full."); return; }
+    String date = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
+    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date);
+    ContentResolver cr = getContentResolver();
+    try {
+      ContentValues v = new ContentValues();
+      v.put(MediaStore.MediaColumns.DISPLAY_NAME, clipName + ".mov");
+      v.put(MediaStore.MediaColumns.MIME_TYPE, "video/quicktime");
+      v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/City Cinema");
+      v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+      movUri = cr.insert(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
+      if (movUri == null) throw new IOException("Couldn't create the .mov file.");
+      movFd = cr.openFileDescriptor(movUri, "rw");
+      FileChannel channel = new FileOutputStream(movFd.getFileDescriptor()).getChannel();
+      wavUri = null; wavFd = null; wavChannel = null;
+      boolean withAudio = audioOn && audio.isRunning();
+      if (withAudio && wavOn) {
+        ContentValues a = new ContentValues();
+        a.put(MediaStore.MediaColumns.DISPLAY_NAME, clipName + ".wav");
+        a.put(MediaStore.MediaColumns.MIME_TYPE, "audio/x-wav");
+        a.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/City Cinema");
+        a.put(MediaStore.MediaColumns.IS_PENDING, 1);
+        wavUri = cr.insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), a);
+        if (wavUri != null) { wavFd = cr.openFileDescriptor(wavUri, "rw"); wavChannel = new FileOutputStream(wavFd.getFileDescriptor()).getChannel(); }
+      }
+      takeStartWall = System.currentTimeMillis();
+      MovWriter.Config c = new MovWriter.Config();
+      c.width = proresSize.getWidth(); c.height = proresSize.getHeight();
+      c.fourcc = ProRes.FOURCC[proresProfile]; c.compressorName = "Apple " + ProRes.NAMES[proresProfile];
+      c.fps = fps; c.primaries = 1; c.transfer = 1; c.matrix = 6; // camera YUV: BT.709 primaries, BT.601 matrix
+      c.audioChannels = withAudio ? audio.channels : 0; c.sampleRate = CinemaRecorder.AudioEngine.RATE;
+      c.startTimecodeFrames = todTimecode ? todFrames(takeStartWall) : recordRunBase;
+      c.dropFrame = CinemaMath.isDropFrameRate(fps);
+      c.rotationDegrees = relativeRotation() == 180 ? 180 : 0;
+      c.reelName = String.format(Locale.US, "%c%03d", cameraLetter, reel);
+      prores.start(channel, c, proresProfile);
+      if (withAudio) { audio.setSink(prores); audio.beginTake(null, wavChannel); }
+      recording = true;
+      recordStartNs = SystemClock.elapsedRealtimeNanos();
+      applyRepeatingOnCamera();
+      ui.post(() -> { scopes.invalidate(); refreshUi(); });
+    } catch (IOException | RuntimeException e) {
+      Log.w(TAG, "prores start", e);
+      recording = false;
+      audio.setSink(null);
+      if (prores.isRecording()) prores.stop(1000);
+      closeQuietly(movFd); movFd = null;
+      if (movUri != null) try { cr.delete(movUri, null, null); } catch (RuntimeException ignored) {}
+      cleanupFailedTake();
+      message("Couldn't start ProRes: " + e.getMessage());
+    }
+  }
+
+  private void stopProResOnCamera() {
+    if (!recording) return;
+    recording = false;
+    applyRepeatingOnCamera();
+    long durationNs = SystemClock.elapsedRealtimeNanos() - recordStartNs;
+    boolean hadAudio = audio.isRunning() && audioOn;
+    if (hadAudio) audio.endTake();
+    audio.setSink(null);
+    ui.post(() -> message("Finishing ProRes encode…"));
+    long slots = prores.stop(60_000);
+    long encodedFrames = prores.encoded.get(), drops = prores.dropped, errors = prores.errors;
+    closeQuietly(movFd); movFd = null;
+    wavChannel = null; closeQuietly(wavFd); wavFd = null;
+    ContentResolver cr = getContentResolver();
+    if (slots > 0) {
+      ContentValues done = new ContentValues(); done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+      cr.update(movUri, done, null, null);
+      if (wavUri != null) cr.update(wavUri, done, null, null);
+      writeProResSidecar(slots, encodedFrames, drops, errors, durationNs);
+      recordRunBase += slots;
+      clip++;
+      savePrefs();
+      message("Saved " + clipName + ".mov · " + ProRes.NAMES[proresProfile] + (drops > 0 ? " · " + drops + " dropped (filled)" : "") + (errors > 0 ? " · " + errors + " errors" : ""));
+    } else {
+      if (movUri != null) try { cr.delete(movUri, null, null); } catch (RuntimeException ignored) {}
+      if (wavUri != null) try { cr.delete(wavUri, null, null); } catch (RuntimeException ignored) {}
+      message("No ProRes frames were encoded; nothing was saved.");
+    }
+    movUri = null; wavUri = null;
+    ui.post(() -> { scopes.invalidate(); refreshUi(); });
+  }
+
+  private void writeProResSidecar(long slots, long encodedFrames, long drops, long errors, long durationNs) {
+    try {
+      JSONObject j = new JSONObject();
+      j.put("clip", clipName).put("format", ProRes.NAMES[proresProfile] + " (" + ProRes.FOURCC[proresProfile] + "), 10-bit 4:2:2, QuickTime")
+          .put("camera", String.valueOf(cameraLetter)).put("reel", reel).put("clipNumber", clip)
+          .put("startedAt", new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(new Date(takeStartWall)))
+          .put("startTimecode", startTimecodeFor(takeStartWall)).put("device", Build.MANUFACTURER + " " + Build.MODEL).put("lens", lens.label)
+          .put("resolution", proresSize.getWidth() + "x" + proresSize.getHeight()).put("fps", CinemaMath.fpsLabel(fps))
+          .put("colour", "BT.709 primaries and transfer, BT.601 matrix (camera YCbCr), limited range")
+          .put("look", CinemaMath.LOOKS[lookIndex]).put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()))
+          .put("whiteBalance", awbAuto ? "auto" : kelvin + "K tint " + tint)
+          .put("frameSlots", slots).put("framesEncoded", encodedFrames).put("droppedFramesFilled", drops).put("errors", errors)
+          .put("durationSeconds", durationNs / 1e9).put("encoderThreads", prores.encoderThreads())
+          .put("audio", audioOn ? "24-bit PCM 48 kHz in the .mov" + (wavUri != null ? " + " + clipName + ".wav (32-bit float)" : "") : "none");
+      ContentValues v = new ContentValues();
+      v.put(MediaStore.MediaColumns.DISPLAY_NAME, clipName + ".json");
+      v.put(MediaStore.MediaColumns.MIME_TYPE, "application/json");
+      v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/City Cinema");
+      Uri u = getContentResolver().insert(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
+      if (u != null) try (OutputStream o = getContentResolver().openOutputStream(u)) { if (o != null) o.write(j.toString(2).getBytes(StandardCharsets.UTF_8)); }
+    } catch (Exception e) { Log.w(TAG, "prores sidecar", e); }
+  }
 
   // ================================================================== RAW (CinemaDNG) recording
 
@@ -1096,8 +1277,12 @@ public class CinemaActivity extends Activity {
       String buf = "";
       RawRecorder r = raw;
       if (rawMode && r != null) buf = String.format(Locale.US, "  RAW BUF %d/%d%s", r.backlog(), r.poolSize(), r.dropped > 0 ? "  DROP " + r.dropped : "");
+      ProResRecorder pr = prores;
+      if (proresMode && pr != null) buf = String.format(Locale.US, "  ENC %.0f fps · BUF %d/%d%s", pr.throughputFps(), pr.backlog(), pr.poolSize(), pr.dropped > 0 ? "  DROP " + pr.dropped : "");
       recLabel.setText(String.format(Locale.US, "● REC %s  %d:%02d%s", clipName == null ? "" : clipName.substring(0, 9), ms / 60000, (ms / 1000) % 60, buf));
-      recLabel.setTextColor(r != null && rawMode && (r.dropped > 0 || r.backlog() >= r.poolSize() - 1) ? ACCENT : REC);
+      boolean strained = (rawMode && r != null && (r.dropped > 0 || r.backlog() >= r.poolSize() - 1))
+          || (proresMode && pr != null && (pr.dropped > 0 || pr.backlog() >= pr.poolSize() - 1));
+      recLabel.setTextColor(strained ? ACCENT : REC);
     }
     // exposure readouts: live values in auto, set values in manual
     long exp = aeAuto ? liveExposure : exposureNs();
@@ -1113,7 +1298,9 @@ public class CinemaActivity extends Activity {
     if (nowMs - lastSlowStatus < 2000) return;
     lastSlowStatus = nowMs;
     long free = rawMode ? rawFreeBytes() : new StatFs(Environment.getExternalStorageDirectory().getPath()).getAvailableBytes();
-    long bitsPerSecond = rawMode ? rawBytesPerSecond() * 8 + (audioOn && wavOn ? 48_000 * 64 : 0) : targetBitrate() + (audioOn ? 320_000 + (wavOn ? 48_000 * 64 : 0) : 0);
+    long bitsPerSecond = rawMode ? rawBytesPerSecond() * 8 + (audioOn && wavOn ? 48_000 * 64 : 0)
+        : proresMode ? ProRes.bitrate(proresSize.getWidth(), proresSize.getHeight(), fps, proresProfile) + (audioOn ? 48_000 * 48 + (wavOn ? 48_000 * 64 : 0) : 0)
+        : targetBitrate() + (audioOn ? 320_000 + (wavOn ? 48_000 * 64 : 0) : 0);
     double minutes = CinemaMath.minutesRemaining(free, bitsPerSecond);
     // Stop cleanly before the card is full, so the clip (and its last frames) are kept intact.
     if (recording && free < Math.max(300L * 1024 * 1024, bitsPerSecond / 8 * 4) && !recordBusy) { message("Storage full: recording stopped."); toggleRecord(); }
@@ -1277,10 +1464,11 @@ public class CinemaActivity extends Activity {
     lensView.setText(lens.label);
     String codec = tenBit ? "HEVC 10-bit HLG" : hevc ? "HEVC" : "H.264";
     String speed = fps > 60 && conformFps > 0 ? " → " + CinemaMath.fpsLabel(conformFps) : "";
-    if (rawMode && rawSize != null) formatView.setText("RAW " + rawSize.getWidth() + "×" + rawSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  CinemaDNG " + (rawPack12 && lens.whiteLevel <= 4095 ? 12 : 16) + "-bit  " + rawBytesPerSecond() / 1_000_000 + " MB/s");
+    if (proresMode) formatView.setText(ProRes.NAMES[proresProfile] + "  " + proresSize.getWidth() + "×" + proresSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  " + CinemaMath.formatBitrate(ProRes.bitrate(proresSize.getWidth(), proresSize.getHeight(), fps, proresProfile)));
+    else if (rawMode && rawSize != null) formatView.setText("RAW " + rawSize.getWidth() + "×" + rawSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  CinemaDNG " + (rawPack12 && lens.whiteLevel <= 4095 ? 12 : 16) + "-bit  " + rawBytesPerSecond() / 1_000_000 + " MB/s");
     else formatView.setText(resolutionName(videoSize) + "  " + CinemaMath.fpsLabel(fps) + speed + "p  " + codec + "  " + CinemaMath.formatBitrate(targetBitrate()));
     fpsCell.set(CinemaMath.fpsLabel(fps) + speed, false);
-    lookCell.set(rawMode ? "RAW" : tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
+    lookCell.set(rawMode ? "RAW" : proresMode ? CinemaMath.LOOKS[lookIndex] : tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
     recButton.recording = recording; recButton.invalidate();
     for (Toggle t : toggles) t.sync();
     scopes.invalidate();
@@ -1556,7 +1744,7 @@ public class CinemaActivity extends Activity {
 
   private void formatPanel() {
     Size fs = frameSize();
-    panelHeader("FORMAT", (rawMode ? "RAW " : resolutionName(fs) + " ") + fs.getWidth() + "×" + fs.getHeight() + " · " + CinemaMath.fpsLabel(fps) + " fps");
+    panelHeader("FORMAT", (rawMode ? "RAW " : proresMode ? ProRes.NAMES[proresProfile] + " " : resolutionName(fs) + " ") + fs.getWidth() + "×" + fs.getHeight() + " · " + CinemaMath.fpsLabel(fps) + " fps");
     LinearLayout c = chips();
     for (double f : availableRates()) addChip(c, CinemaMath.fpsLabel(f), Math.abs(f - fps) < 0.001, () -> { if (recording) return; fps = f; if (f <= 60) conformFps = 0; reopen(); });
     if (fps > 60) {
@@ -1565,6 +1753,12 @@ public class CinemaActivity extends Activity {
       for (double f : new double[] {23.976, 24, 25, 29.97, 30}) addChip(o, "Slow-mo → " + CinemaMath.fpsLabel(f), Math.abs(conformFps - f) < 0.001, () -> { conformFps = f; reopen(); });
     }
     LinearLayout r = chips();
+    if (proresMode) {
+      for (Size s : proresSizes()) addChip(r, s.getWidth() + "×" + s.getHeight(), s.equals(proresSize), () -> { if (recording) return; proresSize = s; reopen(); });
+      LinearLayout pp = chips();
+      for (int i = 0; i < 4; i++) { final int k = i; addChip(pp, ProRes.SHORT[i], proresProfile == i, () -> { if (recording) return; proresProfile = k; savePrefs(); refreshUi(); }); }
+      return;
+    }
     if (rawMode) {
       for (Size s : rawSizesForRate()) addChip(r, "RAW " + s.getWidth() + "×" + s.getHeight(), s.equals(rawSize), () -> { if (recording) return; rawSize = s; reopen(); });
       addChip(r, rawPack12 ? "12-bit" : "16-bit", false, this::chooseRawOptions);
@@ -1580,7 +1774,8 @@ public class CinemaActivity extends Activity {
     CinemaRecorder.EncoderCaps hevcCaps = CinemaRecorder.caps(MediaFormat.MIMETYPE_VIDEO_HEVC);
     boolean hlgPossible = lens.hlg && hevcCaps.main10 && fps <= 60;
     String[] items = {
-      "Recording: " + (rawMode ? "CinemaDNG RAW" : "MP4 (H.264 / HEVC)") + (lens.raw ? "" : " · RAW not offered by this lens"),
+      "Recording: " + (rawMode ? "CinemaDNG RAW" : proresMode ? ProRes.NAMES[proresProfile] : "MP4 (H.264 / HEVC)"),
+      proresMode ? "ProRes: " + ProRes.NAMES[proresProfile] + " · " + proresSize.getWidth() + "×" + proresSize.getHeight() + " · " + CinemaMath.formatBitrate(ProRes.bitrate(proresSize.getWidth(), proresSize.getHeight(), fps, proresProfile)) :
       "RAW: " + (rawSize != null ? rawSize.getWidth() + "×" + rawSize.getHeight() : "–") + " · " + (rawPack12 && lens.whiteLevel <= 4095 ? "12-bit packed" : "16-bit") + " · " + rawBytesPerSecond() / 1_000_000 + " MB/s",
       "Codec: " + (tenBit ? "HEVC 10-bit" : hevc ? "HEVC (H.265)" : "H.264"),
       "Dynamic range: " + (tenBit ? "HDR HLG 10-bit BT.2020" : "SDR 8-bit BT.709") + (hlgPossible ? "" : " (10-bit not supported here)"),
@@ -1605,12 +1800,22 @@ public class CinemaActivity extends Activity {
     boolean busy = recording;
     if (item == 0) {
       if (busy) return;
-      if (!lens.raw) { message(lens.label + " doesn't offer RAW output (needs the Camera2 RAW capability and a Bayer sensor)."); return; }
-      choose("Recording format", new String[] {"MP4 · H.264 / HEVC, sound inside", "CinemaDNG RAW · DNG frame sequence + WAV (needs fast storage)"}, rawMode ? 1 : 0, i -> { rawMode = i == 1; reopen(); });
+      String[] formats = {"MP4 · H.264 / HEVC, sound inside",
+          "ProRes 422 (.mov) · Proxy / LT / 422 / HQ, 24-bit sound, timecode" + (ProRes.AVAILABLE ? "" : " (not in this build)"),
+          "CinemaDNG RAW · DNG frame sequence + WAV" + (lens.raw ? "" : " (not offered by this lens)")};
+      choose("Recording format", formats, rawMode ? 2 : proresMode ? 1 : 0, i -> {
+        if (i == 1 && !ProRes.AVAILABLE) { message("This build has no ProRes encoder (built without the NDK)."); return; }
+        if (i == 2 && !lens.raw) { message(lens.label + " doesn't offer RAW output (needs the Camera2 RAW capability and a Bayer sensor)."); return; }
+        proresMode = i == 1; rawMode = i == 2; reopen();
+      });
       return;
     }
-    if (item == 1) { if (!rawMode) { message("Switch Recording to CinemaDNG RAW first."); return; } chooseRawOptions(); return; }
-    if (rawMode && item >= 2 && item <= 6) { message("Codec settings apply to MP4. RAW frames are uncompressed CinemaDNG."); return; }
+    if (item == 1) {
+      if (proresMode) { chooseProResOptions(); return; }
+      if (!rawMode) { message("Switch Recording to ProRes or CinemaDNG RAW first."); return; }
+      chooseRawOptions(); return;
+    }
+    if ((rawMode || proresMode) && item >= 2 && item <= 6) { message("Codec settings apply to MP4. " + (rawMode ? "RAW frames are uncompressed CinemaDNG." : "ProRes has its own profiles (Menu → ProRes).")); return; }
     int which = item - 2;
     switch (which) {
       case 0: if (busy) break; choose("Codec", new String[] {"HEVC (H.265) · smaller files", "H.264 · most compatible"}, hevc ? 0 : 1, i -> { hevc = i == 0; if (!hevc) tenBit = false; reopen(); }); break;
@@ -1668,7 +1873,7 @@ public class CinemaActivity extends Activity {
         + "\nZoom " + lens.minZoom + "–" + lens.maxZoom + "x · min focus " + (lens.minFocus > 0 ? focusLabel(lens.minFocus) : "fixed")
         + "\nHEVC encoder: " + h.name + " · max " + CinemaMath.formatBitrate(h.maxBitrate) + " · Main10 " + yes(h.main10)
         + "\nH.264 encoder: " + a.name + " · max " + CinemaMath.formatBitrate(a.maxBitrate)
-        + "\nRAW (CinemaDNG): " + (lens.raw ? "yes, " + lens.rawSizes[0].getWidth() + "×" + lens.rawSizes[0].getHeight() + ", white level " + lens.whiteLevel + ", " + new String[] {"RGGB", "GRBG", "GBRG", "BGGR"}[lens.cfa] : "no")
+        + "\nProRes 422: " + (ProRes.AVAILABLE ? "yes (software encoder, " + Runtime.getRuntime().availableProcessors() + " cores)" : "not in this build") + "\nRAW (CinemaDNG): " + (lens.raw ? "yes, " + lens.rawSizes[0].getWidth() + "×" + lens.rawSizes[0].getHeight() + ", white level " + lens.whiteLevel + ", " + new String[] {"RGGB", "GRBG", "GBRG", "BGGR"}[lens.cfa] : "no")
         + "\n\nClips: Movies/City Cinema · WAV: Music/City Cinema · metadata: Documents/City Cinema"
         + "\nRAW clips: " + rawRoot().getPath() + " (one folder of DNG frames + WAV + JSON per clip; copy them off over USB. They are removed if the app is uninstalled.)"
         + "\nVolume keys start and stop recording. Tap the picture to set the focus/exposure point; double-tap to clear it. Tap the timecode to reset it.";
@@ -1702,6 +1907,8 @@ public class CinemaActivity extends Activity {
     cameraLetter = (char) p.getInt("camLetter", 'A'); wavOn = p.getBoolean("wav", true); audioOn = p.getBoolean("audio", true);
     audioSource = p.getString("audioSource", "Camcorder"); audioDeviceId = p.getInt("audioDevice", 0);
     rawMode = p.getBoolean("rawMode", false); rawPack12 = p.getBoolean("raw12", true);
+    proresMode = p.getBoolean("prores", false) && !rawMode; proresProfile = p.getInt("proresProfile", 3);
+    proresSize = new Size(p.getInt("proresW", 1920), p.getInt("proresH", 1080));
     if (p.contains("rawW")) rawSize = new Size(p.getInt("rawW", 0), p.getInt("rawH", 0));
     shutterAsAngle = p.getBoolean("angle", true); todTimecode = p.getBoolean("tod", false); recordRunBase = p.getLong("rr", 0);
     aeAuto = p.getBoolean("aeAuto", true); iso = p.getInt("iso", 400); shutterAngle = p.getFloat("shutterAngle", 180); shutterNs = p.getLong("shutterNs", 0);
@@ -1726,6 +1933,7 @@ public class CinemaActivity extends Activity {
         .putBoolean("tod", todTimecode).putLong("rr", recordRunBase).putBoolean("aeAuto", aeAuto).putInt("iso", iso).putFloat("shutterAngle", (float) shutterAngle)
         .putLong("shutterNs", shutterNs).putBoolean("awbAuto", awbAuto).putInt("kelvin", kelvin).putInt("tint", tint).putBoolean("mf", manualFocus)
         .putFloat("focus", focus).putFloat("zoom", zoom).putBoolean("rawMode", rawMode).putBoolean("raw12", rawPack12)
+        .putBoolean("prores", proresMode).putInt("proresProfile", proresProfile).putInt("proresW", proresSize.getWidth()).putInt("proresH", proresSize.getHeight())
         .putInt("rawW", rawSize == null ? 0 : rawSize.getWidth()).putInt("rawH", rawSize == null ? 0 : rawSize.getHeight())
         .putBoolean("zebra", scopes.zebra).putBoolean("peak", scopes.peaking).putInt("scope", scopes.scopeMode).putInt("guide", scopes.guide)
         .putBoolean("grid", scopes.grid).putBoolean("level", scopes.level).putBoolean("center", scopes.center).putInt("zebraIre", scopes.zebraIre)
