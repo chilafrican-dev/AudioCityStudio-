@@ -59,3 +59,19 @@ already integer microseconds (good); project format is unversioned JSON (add a v
 10. Export presets, size estimate, cancel, foreground service; long-project and A/V sync tests.
 
 Each phase ships as its own version and leaves the app building and the tests green.
+
+## Design target (mockups received after 3.9)
+
+Three mockups (camera, editor, AI edit) are the visual target. Rule: a control appears only when the function
+behind it works. Mapping:
+
+| Mockup element | Status |
+|---|---|
+| Camera top bar: lens, res, fps, shutter, ISO, WB, codec, bitrate, timecode, storage free + time left, battery %, temperature | working (storage size and battery °C added in 3.9.1) |
+| Camera: REC.709 VIEW, zebra, peaking, false colour, grid, waveform, parade, histogram, vectorscope, stabilisation, AF/lock, lens, zoom, audio meters, USB mic | working; layout restyle (left rail, stepper controls, scope strip) pending |
+| Camera: LUT dropdown (monitor creative LUT), 4-scope strip at once | not built |
+| Editor: media browser panel, V1-V3 + A1-A3 tracks | tracks working (3 layers + main, MUSIC/VOICE/FX); browser, track headers (eye/lock/M/S) pending |
+| Editor: thumbnails / waveforms in clips, keyframes, blend modes, effects & transitions browser, scopes in editor | not built (Phases 3-7) |
+| Editor: export panel with presets and size estimate | pending (Phase 10) |
+| AI Edit page (scene detection, best takes, styles, beat sync, automatic finishing) | not built (Phase 8) |
+

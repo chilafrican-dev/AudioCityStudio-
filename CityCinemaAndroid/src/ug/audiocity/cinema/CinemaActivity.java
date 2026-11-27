@@ -1745,13 +1745,15 @@ public class CinemaActivity extends Activity {
     double minutes = CinemaMath.minutesRemaining(free, bitsPerSecond);
     // Stop cleanly before the card is full, so the clip (and its last frames) are kept intact.
     if (recording && free < Math.max(300L * 1024 * 1024, bitsPerSecond / 8 * 4) && !recordBusy) { message("Storage full: recording stopped."); toggleRecord(); }
-    storageView.setText(CinemaMath.formatMinutes(minutes));
+    storageView.setText(CinemaMath.formatMinutes(minutes) + " · " + CinemaMath.formatBytes(free) + " free");
     storageView.setTextColor(minutes < 10 ? REC : TEXT);
     Intent bat = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
     int level = bat == null ? -1 : bat.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) * 100 / Math.max(1, bat.getIntExtra(BatteryManager.EXTRA_SCALE, 100));
     int thermal = ((PowerManager) getSystemService(POWER_SERVICE)).getCurrentThermalStatus();
     String heat = thermal >= PowerManager.THERMAL_STATUS_SEVERE ? "  HOT" : thermal >= PowerManager.THERMAL_STATUS_MODERATE ? "  WARM" : "";
-    batteryView.setText((level >= 0 ? level + "%" : "") + heat);
+    int tenthsC = bat == null ? Integer.MIN_VALUE : bat.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE); // battery temperature, 0.1 C
+    String temp = tenthsC == Integer.MIN_VALUE ? "" : String.format(Locale.US, "  %d°C", Math.round(tenthsC / 10f));
+    batteryView.setText((level >= 0 ? level + "%" : "") + temp + heat);
     batteryView.setTextColor(level >= 0 && level < 15 || thermal >= PowerManager.THERMAL_STATUS_SEVERE ? REC : thermal >= PowerManager.THERMAL_STATUS_MODERATE ? ACCENT : TEXT);
   }
 

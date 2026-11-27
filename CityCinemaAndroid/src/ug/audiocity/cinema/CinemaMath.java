@@ -936,4 +936,12 @@ final class CinemaMath {
       reductionDb = (float) (20 * Math.log10(Math.max(1e-6, gain)));
     }
   }
+
+  /** "98 GB", "1.24 TB", "512 MB" (decimal units, as phones show storage). */
+  static String formatBytes(long b) {
+    if (b >= 1_000_000_000_000L) return String.format(Locale.US, "%.2f TB", b / 1e12);
+    if (b >= 10_000_000_000L) return String.format(Locale.US, "%.0f GB", b / 1e9);
+    if (b >= 1_000_000_000L) return String.format(Locale.US, "%.1f GB", b / 1e9);
+    return String.format(Locale.US, "%.0f MB", b / 1e6);
+  }
 }

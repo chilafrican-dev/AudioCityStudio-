@@ -472,6 +472,7 @@ public class CinemaTests {
   }
 
   static void vectorAndLimiterTests() {
+    check(CinemaMath.formatBytes(98_400_000_000L).equals("98 GB") && CinemaMath.formatBytes(1_240_000_000_000L).equals("1.24 TB") && CinemaMath.formatBytes(3_500_000_000L).equals("3.5 GB") && CinemaMath.formatBytes(512_000_000L).equals("512 MB"), "storage sizes");
     int[] grey = CinemaMath.vectorPoint(128, 128, 128, 129);
     check(grey[0] == 64 && grey[1] == 64, "grey sits in the centre of the vectorscope");
     int[] red = CinemaMath.vectorPoint(191, 0, 0, 129), blue = CinemaMath.vectorPoint(0, 0, 191, 129), yellow = CinemaMath.vectorPoint(191, 191, 0, 129);
