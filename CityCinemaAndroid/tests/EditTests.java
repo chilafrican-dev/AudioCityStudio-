@@ -98,7 +98,46 @@ public class EditTests {
     for (int i = 10; i < total - 10; i++) err = Math.max(err, Math.abs(out[i * 2] - Math.sin(2 * Math.PI * 1000 * i / 48_000.0)));
     check(err < 0.02, "resampled sine matches (max error " + err + ")");
     for (int i = 0; i < total; i++) check(out[i * 2] == out[i * 2 + 1], "mono goes to both channels");
+    cubeTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
+
+  static CubeLut cube(String text) throws java.io.IOException { return CubeLut.parse(new java.io.StringReader(text)); }
+
+  static void cubeTests() {
+    try {
+      // identity 3D LUT with title, comments and blank lines
+      StringBuilder b = new StringBuilder("# made by hand\nTITLE \"Identity\"\n\nLUT_3D_SIZE 17\n");
+      for (int z = 0; z < 17; z++) for (int y = 0; y < 17; y++) for (int x = 0; x < 17; x++) b.append(x / 16.0).append(' ').append(y / 16.0).append(' ').append(z / 16.0).append('\n');
+      CubeLut id = cube(b.toString());
+      check(id.size == 17 && "Identity".equals(id.title), "3D size and title");
+      float[] o = id.apply(0.3f, 0.6f, 0.9f);
+      near(o[0], 0.3, 1e-5, "identity r"); near(o[1], 0.6, 1e-5, "identity g"); near(o[2], 0.9, 1e-5, "identity b");
+      // red varies fastest: a LUT that swaps red and blue
+      b = new StringBuilder("LUT_3D_SIZE 2\n");
+      for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) b.append(z).append(' ').append(y).append(' ').append(x).append('\n');
+      o = cube(b.toString()).apply(1, 0, 0);
+      check(o[0] == 0 && o[2] == 1, "red is the fastest axis");
+      // domain
+      b = new StringBuilder("LUT_3D_SIZE 2\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 2 2 2\n");
+      for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) b.append(x).append(' ').append(y).append(' ').append(z).append('\n');
+      near(cube(b.toString()).apply(1, 1, 1)[0], 0.5, 1e-6, "DOMAIN_MAX 2 maps input 1 to the middle");
+      // 1D LUT: squares each channel
+      b = new StringBuilder("LUT_1D_SIZE 256\n");
+      for (int i = 0; i < 256; i++) { double v = i / 255.0; b.append(v * v).append(' ').append(v * v).append(' ').append(v * v).append('\n'); }
+      CubeLut one = cube(b.toString());
+      near(one.apply(0.5f, 0.5f, 0.5f)[0], 0.25, 0.003, "1D LUT expanded to 3D");
+      // our own exported log LUT reads back exactly at its grid points
+      CubeLut slog = cube(CinemaMath.logRec709Cube("Sony S-Log3"));
+      double[] want = CinemaMath.logToRec709("Sony S-Log3", 0.5, 0.25, 0.75);
+      float[] got = slog.apply(0.5f, 0.25f, 0.75f);
+      for (int i = 0; i < 3; i++) near(got[i], want[i], 1e-5, "City Cinema cube reads back");
+      // errors
+      String[] bad = {"LUT_3D_SIZE 2\n0 0 0\n", "0 0 0\n", "LUT_3D_SIZE 99\n", "hello", "LUT_3D_SIZE 2\n0 0 x\n"};
+      for (String s : bad) { boolean threw = false; try { cube(s); } catch (java.io.IOException e) { threw = true; } check(threw, "rejects a broken .cube: " + s.replace('\n', '|')); }
+      // half floats for the GPU texture
+      for (float f : new float[] {0, 0.001f, 0.18f, 0.5f, 1, 1.5f, -0.25f}) near(CubeLut.fromHalf(CubeLut.toHalf(f)), f, Math.max(1e-6, Math.abs(f) * 1e-3), "half float " + f);
+    } catch (java.io.IOException e) { throw new AssertionError(e); }
+  }
 }

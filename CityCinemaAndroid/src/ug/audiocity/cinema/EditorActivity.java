@@ -65,7 +65,7 @@ import javax.microedition.khronos.opengles.GL10;
 public class EditorActivity extends Activity {
   static final String TAG = "CityCinemaEditor";
   static final int BG = CinemaActivity.BG, TEXT = CinemaActivity.TEXT, DIM = CinemaActivity.DIM, ACCENT = CinemaActivity.ACCENT;
-  static final int PICK_VIDEO = 11, PICK_MUSIC = 12;
+  static final int PICK_VIDEO = 11, PICK_MUSIC = 12, PICK_LUT = 13;
 
   private EditModel.Project project = new EditModel.Project();
   private volatile EditModel.Project shown = new EditModel.Project(); // snapshot drawn by the preview
@@ -201,6 +201,7 @@ public class EditorActivity extends Activity {
   @Override protected void onActivityResult(int code, int result, Intent data) {
     super.onActivityResult(code, result, data);
     if (result != RESULT_OK || data == null) return;
+    if (code == PICK_LUT) { importLut(data.getData()); return; }
     java.util.List<Uri> uris = new java.util.ArrayList<>();
     if (data.getClipData() != null) for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
     else if (data.getData() != null) uris.add(data.getData());
@@ -309,6 +310,43 @@ public class EditorActivity extends Activity {
     return "None";
   }
 
+  private void pickLut() {
+    Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+    i.addCategory(Intent.CATEGORY_OPENABLE);
+    i.setType("*/*"); // .cube has no standard type
+    startActivityForResult(i, PICK_LUT);
+  }
+
+  /** Validates a .cube file and keeps a copy in the app's LUT folder, then applies it to the selected clip. */
+  private void importLut(Uri u) {
+    if (u == null) return;
+    jobs.execute(() -> {
+      String name = displayName(u);
+      if (name == null) name = "LUT.cube";
+      name = name.replaceAll("[^A-Za-z0-9 ._()+-]", "_");
+      if (!name.toLowerCase(Locale.US).endsWith(".cube")) name += ".cube";
+      try (java.io.InputStream in = getContentResolver().openInputStream(u)) {
+        if (in == null) throw new java.io.IOException("can't read the file");
+        java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[65536]; int n;
+        while ((n = in.read(buf)) > 0) { b.write(buf, 0, n); if (b.size() > 64 * 1024 * 1024) throw new java.io.IOException("file too large for a LUT"); }
+        byte[] bytes = b.toByteArray();
+        CubeLut lut = CubeLut.parse(new java.io.InputStreamReader(new java.io.ByteArrayInputStream(bytes), StandardCharsets.UTF_8));
+        try (FileOutputStream o = new FileOutputStream(new File(EditEngine.lutDir(this), name))) { o.write(bytes); }
+        final String file = name;
+        final String info = (lut.title.isEmpty() ? name : lut.title) + " · " + lut.size + "³";
+        ui.post(() -> {
+          if (selected instanceof EditModel.Clip) { ((EditModel.Clip) selected).lut = file; }
+          changed(true);
+          toast("LUT imported: " + info + (selected instanceof EditModel.Clip ? " (applied to the selected clip)" : ""));
+        });
+      } catch (Exception e) {
+        final String why = e.getMessage();
+        ui.post(() -> toast("That isn't a usable .cube LUT: " + why));
+      }
+    });
+  }
+
   private void addTitle() {
     EditModel.Title t = new EditModel.Title();
     t.startUs = playhead;
@@ -380,13 +418,25 @@ public class EditorActivity extends Activity {
       slider("Tint", -100, 100, Math.round(g.tint * 100), v -> g.tint = v / 100.0, x -> (x > 0 ? "magenta " : x < 0 ? "green " : "") + Math.abs(x));
       slider("Shadows", -100, 100, Math.round(g.shadows * 100), v -> g.shadows = v / 100.0, x -> x + "");
       slider("Highlights", -100, 100, Math.round(g.highlights * 100), v -> g.highlights = v / 100.0, x -> x + "");
+      // creative / custom LUT (.cube)
+      label("LUT (.cube)" + (c.lut.isEmpty() ? "" : ": " + c.lut));
+      LinearLayout lutRow = row();
+      lutRow.addView(chip("None", v -> { c.lut = ""; changed(true); }, c.lut.isEmpty()), lp(-2));
+      String[] files = EditEngine.lutDir(this).list();
+      if (files != null) { java.util.Arrays.sort(files); for (String f : files) lutRow.addView(chip(f.replaceAll("\\.cube$", ""), v -> { c.lut = f; changed(true); }, f.equals(c.lut)), lp(-2)); }
+      lutRow.addView(chip("IMPORT .cube", v -> pickLut()), lp(-2));
+      inspector.addView(scroll(lutRow));
+      if (!c.lut.isEmpty()) {
+        slider("LUT strength", 0, 100, Math.round(c.lutStrength * 100), v -> c.lutStrength = v / 100.0, x -> x + "%");
+        if (CinemaMath.isLogLook(c.look)) label("Note: the clip's log is converted first (" + c.look + "). If your LUT expects log input, set the log above to No LUT.");
+      }
       LinearLayout films = row();
       for (int k = 0; k < EditModel.FILM_LOOKS.length; k++) { final int f = k; films.addView(chip(EditModel.FILM_LOOKS[k], v -> { g.film = f; changed(true); }, g.film == k), lp(-2)); }
       inspector.addView(scroll(films));
       if (g.film > 0) slider("Look strength", 0, 100, Math.round(g.filmStrength * 100), v -> g.filmStrength = v / 100.0, x -> x + "%");
       LinearLayout r = row();
       r.addView(chip("RESET", v -> { c.grade = new EditModel.Grade(); changed(true); }), lp(-2));
-      r.addView(chip("COPY TO ALL CLIPS", v -> { for (EditModel.Clip k : project.clips) { k.grade = g.copy(); k.look = k == c || CinemaMath.isLogLook(k.look) ? k.look : k.look; } changed(true); toast("Grade copied to every clip."); }), lp(-2));
+      r.addView(chip("COPY TO ALL CLIPS", v -> { for (EditModel.Clip k : project.clips) { k.grade = g.copy(); k.lut = c.lut; k.lutStrength = c.lutStrength; } changed(true); toast("Grade and LUT copied to every clip."); }), lp(-2));
       inspector.addView(r);
     } else {
       if (i == 0) { label("The first clip fades in from black when the project's fade in is on (PROJECT)."); return; }

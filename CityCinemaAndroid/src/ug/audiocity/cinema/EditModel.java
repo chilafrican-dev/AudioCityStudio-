@@ -61,13 +61,17 @@ final class EditModel {
     int transition; // into this clip: 0 cut, 1 dissolve, 2 dip to black
     long transitionUs = 500_000;
     Grade grade = new Grade();
+    /** A user-imported .cube LUT (file name in the app's LUT folder; "" = none), applied after the log LUT. */
+    String lut = "";
+    double lutStrength = 1;
 
     long durationUs() { return Math.max(0, outUs - inUs); }
 
     JSONObject json() throws JSONException {
       return new JSONObject().put("uri", uri).put("name", name).put("look", look).put("sourceDurationUs", sourceDurationUs).put("inUs", inUs)
           .put("outUs", outUs).put("width", width).put("height", height).put("rotation", rotation).put("fps", fps).put("volume", volume)
-          .put("muted", muted).put("hasAudio", hasAudio).put("transition", transition).put("transitionUs", transitionUs).put("grade", grade.json());
+          .put("muted", muted).put("hasAudio", hasAudio).put("transition", transition).put("transitionUs", transitionUs).put("grade", grade.json())
+          .put("lut", lut).put("lutStrength", lutStrength);
     }
 
     static Clip from(JSONObject j) {
@@ -77,6 +81,7 @@ final class EditModel {
       c.width = j.optInt("width"); c.height = j.optInt("height"); c.rotation = j.optInt("rotation"); c.fps = j.optDouble("fps", 30);
       c.volume = j.optDouble("volume", 1); c.muted = j.optBoolean("muted"); c.hasAudio = j.optBoolean("hasAudio", true);
       c.transition = j.optInt("transition"); c.transitionUs = j.optLong("transitionUs", 500_000); c.grade = Grade.from(j.optJSONObject("grade"));
+      c.lut = j.optString("lut", ""); c.lutStrength = j.optDouble("lutStrength", 1);
       return c;
     }
 
@@ -84,7 +89,7 @@ final class EditModel {
       Clip c = new Clip();
       c.id = id; c.uri = uri; c.name = name; c.look = look; c.sourceDurationUs = sourceDurationUs; c.inUs = inUs; c.outUs = outUs;
       c.width = width; c.height = height; c.rotation = rotation; c.fps = fps; c.volume = volume; c.muted = muted; c.hasAudio = hasAudio;
-      c.transition = transition; c.transitionUs = transitionUs; c.grade = grade.copy();
+      c.transition = transition; c.transitionUs = transitionUs; c.grade = grade.copy(); c.lut = lut; c.lutStrength = lutStrength;
       return c;
     }
   }

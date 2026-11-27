@@ -1,4 +1,4 @@
-# City Cinema 3.0
+# City Cinema 3.1
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -87,7 +87,13 @@ Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra)
 - City Cinema log clips get their LUT automatically, and any clip can be set to the log it was shot in.
 - Exposure, contrast, saturation, temperature, tint, shadows and highlights.
 - Film looks with adjustable strength: Teal & Orange, Warm Film, Cool Night, Bleach Bypass, Mono.
-- Copy a grade to all clips.
+- **LUT import:** **IMPORT .cube** in a clip's Colour tab loads any `.cube` LUT: 3D up to 65³ (Resolve, Adobe, camera makers, LUT packs) or 1D, including DOMAIN and input-range keywords.
+  - LUTs are checked on import and kept in the app for every project.
+  - Each clip gets a LUT choice and a strength slider.
+  - Order: log conversion (if the clip is log) → your LUT → the grade sliders.
+  - LUTs run on the GPU as 16-bit-float 3D textures, so gradients don't band.
+  - If a LUT expects log input (e.g. a downloaded S-Log3 LUT), set the clip's log to *No LUT*.
+- Copy a grade, including its LUT, to all clips.
 
 *Transitions and titles*
 - Transitions: cut, dissolve (with an equal-power audio crossfade) or dip to black, with adjustable length.

@@ -63,6 +63,7 @@ final class EditEngine {
       clipProgram = program(VS,
           "#version 300 es\n#extension GL_OES_EGL_image_external_essl3 : require\nprecision highp float;\n"
               + "uniform samplerExternalOES uTex; uniform mediump sampler3D uLut; uniform float uLutOn, uAlpha, uBright;\n"
+              + "uniform mediump sampler3D uLut2; uniform float uLut2On, uLut2Strength; uniform vec3 uDomMin, uDomMax; uniform float uL2Scale, uL2Off;\n"
               + "uniform float uExposure, uContrast, uSat, uTemp, uTint, uShadows, uHighlights, uFilm, uFilmStrength;\nin vec2 vTex; out vec4 o;\n"
               + "vec3 film(vec3 c, float look, float k) {\n"
               + "  float y = dot(c, vec3(0.2126, 0.7152, 0.0722)); vec3 f = c;\n"
@@ -75,6 +76,8 @@ final class EditEngine {
               + "void main() {\n"
               + "  vec3 c = texture(uTex, vTex).rgb;\n"
               + "  if (uLutOn > 0.5) c = texture(uLut, c * (32.0 / 33.0) + 0.5 / 33.0).rgb;\n"
+              + "  if (uLut2On > 0.5) { vec3 t = clamp((c - uDomMin) / max(uDomMax - uDomMin, vec3(1e-6)), 0.0, 1.0);\n"
+              + "    c = mix(c, texture(uLut2, t * uL2Scale + uL2Off).rgb, uLut2Strength); }\n"
               + "  vec3 wb = vec3(1.0 + 0.12 * uTemp, 1.0 - 0.08 * uTint, 1.0 - 0.12 * uTemp);\n"
               + "  vec3 lin = pow(max(c, 0.0), vec3(2.2)) * exp2(uExposure) * wb;\n"
               + "  c = pow(min(lin, vec3(1.0)), vec3(1.0 / 2.2));\n"
@@ -119,6 +122,19 @@ final class EditEngine {
       GLES30.glActiveTexture(GLES30.GL_TEXTURE1);
       GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, log ? lut(c.look) : lut("City Log"));
       GLES30.glUniform1i(loc(clipProgram, "uLut"), 1);
+      // user LUT on unit 2 (always bound, for the same reason)
+      CubeLut user = c.lut != null && !c.lut.isEmpty() ? userLut(c.lut) : null;
+      GLES30.glActiveTexture(GLES30.GL_TEXTURE2);
+      GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, user != null ? userLutTexture(c.lut, user) : lut("City Log"));
+      GLES30.glUniform1i(loc(clipProgram, "uLut2"), 2);
+      GLES30.glUniform1f(loc(clipProgram, "uLut2On"), user != null ? 1 : 0);
+      if (user != null) {
+        GLES30.glUniform1f(loc(clipProgram, "uLut2Strength"), (float) Math.max(0, Math.min(1, c.lutStrength)));
+        GLES30.glUniform3f(loc(clipProgram, "uDomMin"), user.domainMin[0], user.domainMin[1], user.domainMin[2]);
+        GLES30.glUniform3f(loc(clipProgram, "uDomMax"), user.domainMax[0], user.domainMax[1], user.domainMax[2]);
+        GLES30.glUniform1f(loc(clipProgram, "uL2Scale"), (user.size - 1f) / user.size);
+        GLES30.glUniform1f(loc(clipProgram, "uL2Off"), 0.5f / user.size);
+      }
       EditModel.Grade g = c.grade;
       GLES30.glUniform1f(loc(clipProgram, "uLutOn"), log ? 1 : 0);
       GLES30.glUniform1f(loc(clipProgram, "uAlpha"), (float) alpha);
@@ -186,6 +202,42 @@ final class EditEngine {
       }
       for (int i = 0; i < lines.length; i++) c.drawText(lines[i], left, top + lineH * i + p.getTextSize(), p);
       return b;
+    }
+
+    // ---- user .cube LUTs (parsed once, uploaded as 16-bit float 3D textures)
+    private java.io.File lutDir;
+    private final Map<String, CubeLut> userLuts = new HashMap<>();
+    private final Map<String, Integer> userLutTextures = new HashMap<>();
+
+    void setLutDir(java.io.File dir) { lutDir = dir; }
+
+    private CubeLut userLut(String name) {
+      if (userLuts.containsKey(name)) return userLuts.get(name);
+      CubeLut l = null;
+      if (lutDir != null) {
+        try (java.io.Reader r = new java.io.InputStreamReader(new java.io.FileInputStream(new java.io.File(lutDir, name)), java.nio.charset.StandardCharsets.UTF_8)) { l = CubeLut.parse(r); }
+        catch (IOException | RuntimeException e) { Log.w(TAG, "LUT " + name, e); }
+      }
+      userLuts.put(name, l);
+      return l;
+    }
+
+    private int userLutTexture(String name, CubeLut l) {
+      Integer t = userLutTextures.get(name);
+      if (t != null) return t;
+      int[] id = new int[1];
+      GLES30.glGenTextures(1, id, 0);
+      ByteBuffer data = ByteBuffer.allocateDirect(l.data.length * 2).order(ByteOrder.nativeOrder());
+      for (float v : l.data) data.putShort(CubeLut.toHalf(v));
+      data.flip();
+      GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, id[0]);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR);
+      for (int p : new int[] {GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_TEXTURE_WRAP_R}) GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, p, GLES30.GL_CLAMP_TO_EDGE);
+      GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2);
+      GLES30.glTexImage3D(GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB16F, l.size, l.size, l.size, 0, GLES30.GL_RGB, GLES30.GL_HALF_FLOAT, data);
+      userLutTextures.put(name, id[0]);
+      return id[0];
     }
 
     private int lut(String look) {
@@ -370,7 +422,7 @@ final class EditEngine {
 
     FrameRenderer(Context ctx) { this.ctx = ctx; }
 
-    void init() { compositor.init(); }
+    void init() { compositor.init(); compositor.setLutDir(lutDir(ctx)); }
 
     void render(EditModel.Project p, long t, int outW, int outH) { render(p, t, 0, 0, outW, outH); }
 
@@ -554,6 +606,9 @@ final class EditEngine {
   }
 
   // ================================================================================================ export
+
+  /** Where imported .cube LUTs live (app storage, shared by all projects). */
+  static java.io.File lutDir(Context ctx) { java.io.File d = new java.io.File(ctx.getFilesDir(), "luts"); d.mkdirs(); return d; }
 
   interface Progress { void at(float fraction, String stage); }
 
