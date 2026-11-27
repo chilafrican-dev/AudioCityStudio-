@@ -20,6 +20,7 @@ public class CinemaTests {
   }
 
   public static void main(String[] args) throws IOException {
+    nameAndHighlightTests();
     ccmTests();
     frameRates();
     shutter();
@@ -430,6 +431,28 @@ public class CinemaTests {
   }
 
   /** The colour matrix from sensor calibration undoes the sensor's own colour mixing (no grey, colourless log). */
+  static void nameAndHighlightTests() {
+    check(CinemaMath.lookTag("Sony S-Log3").equals("_SLOG3") && CinemaMath.lookTag("Rec.709").isEmpty() && CinemaMath.lookTag("HLG").isEmpty(), "look tags");
+    for (String[] t : CinemaMath.LOOK_TAGS) {
+      String n = CinemaMath.clipName('A', 1, 1, "20261127") + CinemaMath.lookTag(t[0]);
+      check(t[0].equals(CinemaMath.lookFromName(n + ".mp4")), "tag read back " + t[0]);
+      check(t[0].equals(CinemaMath.lookFromName(n + " (3).mp4")), "tag read back with (3) " + t[0]);
+      check(t[0].equals(CinemaMath.lookFromName(n + ".mov")), "tag read back .mov " + t[0]);
+      check(CinemaMath.lookFromName(n + "_Rec709.mp4") == null, "709 copy is normal colour " + t[0]);
+    }
+    check(CinemaMath.lookFromName("A001_C001_20261127.mp4") == null && CinemaMath.lookFromName("VID_20261127_1200.mp4") == null, "untagged names");
+    for (String look : new String[] {"Sony S-Log3", "City Log", "RED Log3G10", "BMD Film Gen 5", "Flat Log"}) {
+      double grey = "Flat Log".equals(look) ? CinemaMath.acLog(0.18) : CinemaMath.logEncode(look, 0.18);
+      check(CinemaMath.highlightFade(look, grey) == 0, look + ": mid tones keep their colour");
+      double one = "Flat Log".equals(look) ? CinemaMath.acLog(0.45) : CinemaMath.logEncode(look, 0.9); // Flat Log has no headroom: 0.45 is 1.2 stops under its clip
+      check(CinemaMath.highlightFade(look, one) == 0, look + ": bright colours keep their colour");
+      double clip = "Flat Log".equals(look) ? CinemaMath.acLog(1) : CinemaMath.logEncode(look, 4);
+      check(CinemaMath.highlightFade(look, clip) > 0.99, look + ": clipped highlights go neutral");
+      double[] o = CinemaMath.logToRec709(look, clip, clip - 0.03, clip); // a pink speckle at the clip point
+      near(o[1], o[0], 1e-9, look + ": no pink in clipped highlights");
+    }
+  }
+
   static void ccmTests() {
     double[] toXyz = CinemaMath.rgbToXyz(CinemaMath.gamutPrimaries("Rec.709"));
     double[] a = {0.55, 0.35, 0.10, 0.20, 0.65, 0.15, 0.08, 0.32, 0.60}; // sensor RGB from linear Rec.709: strong overlap

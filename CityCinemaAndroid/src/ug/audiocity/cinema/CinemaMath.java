@@ -559,6 +559,23 @@ final class CinemaMath {
 
   static double[] logToRec709(String look, double r, double g, double b) {
     if ("Flat".equals(look)) return new double[] {flatToRec709(r), flatToRec709(g), flatToRec709(b)};
+    double[] o = logToRec709Raw(look, r, g, b);
+    // Near the sensor's clip point the channels clip unevenly and video compression adds chroma noise (pink/green
+    // speckle in blown skies): fade highlights to neutral there, like a cinema camera's highlight handling.
+    double t = highlightFade(look, Math.max(r, Math.max(g, b)));
+    if (t > 0) { double mx = Math.max(o[0], Math.max(o[1], o[2])); for (int i = 0; i < 3; i++) o[i] += (mx - o[i]) * t; }
+    return o;
+  }
+
+  /** 0 below the top of a log's range, rising to 1 at the code where the sensor clips. */
+  static double highlightFade(String look, double code) {
+    double clip = "Flat Log".equals(look) ? acLog(1) : logEncode(look, isHeadroomLog(look) ? 1 << LOG_HEADROOM : 1);
+    double x = (code - (clip - 0.09)) / 0.07;
+    x = clamp01(x);
+    return x * x * (3 - 2 * x);
+  }
+
+  private static double[] logToRec709Raw(String look, double r, double g, double b) {
     double[] lin = {Math.max(0, decodeLook(look, r)), Math.max(0, decodeLook(look, g)), Math.max(0, decodeLook(look, b))};
     double[] rgb = mul(invert(rec709ToGamut(look)), lin);
     double[] out = new double[3];
@@ -724,6 +741,27 @@ final class CinemaMath {
   }
 
   /** Camera-style clip name: A001_C007_20261127 → reel A001, clip 7. */
+  static final String[][] LOOK_TAGS = {{"City Log", "CLOG"}, {"Flat Log", "FLOG"}, {"Sony S-Log3", "SLOG3"}, {"RED Log3G10", "RLOG"},
+      {"BMD Film Gen 5", "BMDFILM"}, {"Flat", "FLAT"}};
+
+  /**
+   * "_SLOG3" etc. for looks that are converted in post, so the file name itself says how to convert it: it survives
+   * copies, sharing and reinstalls, when the JSON sidecar can't be found. Empty for normal-colour looks.
+   */
+  static String lookTag(String look) {
+    for (String[] t : LOOK_TAGS) if (t[0].equals(look)) return "_" + t[1];
+    return "";
+  }
+
+  /** The look named by a file name's tag ("A001_C001_20261127_SLOG3 (2).mp4" is Sony S-Log3), or null. */
+  static String lookFromName(String name) {
+    if (name == null || name.contains("_Rec709")) return null;
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("_([A-Z0-9]+)(?: \\(\\d+\\))?(?:\\.[A-Za-z0-9]+)?$").matcher(name);
+    if (!m.find()) return null;
+    for (String[] t : LOOK_TAGS) if (t[1].equals(m.group(1))) return t[0];
+    return null;
+  }
+
   static String clipName(char camera, int reel, int clip, String yyyymmdd) {
     return String.format(Locale.US, "%c%03d_C%03d_%s", camera, reel, clip, yyyymmdd);
   }

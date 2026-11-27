@@ -302,6 +302,8 @@ public class EditorActivity extends Activity {
   /** City Cinema clips carry their look in a JSON sidecar: log clips get their LUT automatically. */
   private String lookFromSidecar(String name) {
     if (name.contains("_Rec709")) return "None"; // already converted to normal colour
+    String tagged = CinemaMath.lookFromName(name); // City Cinema puts the log in the file name ("_SLOG3")
+    if (tagged != null) return tagged;
     String exact = name.replaceAll("\\.(mp4|mov)$", "");
     String look = sidecarLook(exact);
     // copies made by file pickers get " (1)" etc. added: then try the original clip name

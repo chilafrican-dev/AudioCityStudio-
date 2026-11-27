@@ -1144,7 +1144,7 @@ public class CinemaActivity extends Activity {
     long free = new StatFs(Environment.getExternalStorageDirectory().getPath()).getAvailableBytes();
     if (free < 300L * 1024 * 1024) { message("Storage is almost full."); return; }
     String date = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
-    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date);
+    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date) + CinemaMath.lookTag(tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex]);
     ContentResolver cr = getContentResolver();
     try {
       ContentValues v = new ContentValues();
@@ -1198,6 +1198,7 @@ public class CinemaActivity extends Activity {
       ContentValues done = new ContentValues(); done.put(MediaStore.MediaColumns.IS_PENDING, 0);
       cr.update(mp4Uri, done, null, null);
       if (wavUri != null) cr.update(wavUri, done, null, null);
+      clipName = savedName(mp4Uri, clipName, ".mp4"); // final name: Android settles name clashes on publish
       writeSidecar(frames, dropped, bytes, durationNs);
       recordRunBase += CinemaMath.framesFor(durationNs, fps);
       clip++;
@@ -1307,7 +1308,7 @@ public class CinemaActivity extends Activity {
     long free = new StatFs(Environment.getExternalStorageDirectory().getPath()).getAvailableBytes();
     if (free < 500L * 1024 * 1024) { message("Storage is almost full."); return; }
     String date = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
-    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date);
+    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date) + CinemaMath.lookTag(tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex]);
     ContentResolver cr = getContentResolver();
     try {
       ContentValues v = new ContentValues();
@@ -1377,6 +1378,7 @@ public class CinemaActivity extends Activity {
       ContentValues done = new ContentValues(); done.put(MediaStore.MediaColumns.IS_PENDING, 0);
       cr.update(movUri, done, null, null);
       if (wavUri != null) cr.update(wavUri, done, null, null);
+      clipName = savedName(movUri, clipName, ".mov");
       writeProResSidecar(slots, encodedFrames, drops, errors, durationNs);
       recordRunBase += slots;
       clip++;

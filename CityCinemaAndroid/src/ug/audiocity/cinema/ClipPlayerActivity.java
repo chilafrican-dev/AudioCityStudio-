@@ -198,7 +198,10 @@ public class ClipPlayerActivity extends Activity {
         }
       } catch (RuntimeException e) { Log.w(TAG, "query", e); }
       Map<String, String> looks = sidecarLooks();
-      for (Clip k : found) k.look = looks.get(k.name.replaceAll("\\.(mp4|mov)$", ""));
+      for (Clip k : found) {
+        k.look = CinemaMath.lookFromName(k.name);
+        if (k.look == null) k.look = looks.get(k.name.replaceAll("\\.(mp4|mov)$", ""));
+      }
       ui.post(() -> { clips.clear(); clips.addAll(found); adapter.notifyDataSetChanged(); emptyView.setVisibility(clips.isEmpty() ? View.VISIBLE : View.GONE); });
       for (Clip k : found) {
         try { k.thumb = getContentResolver().loadThumbnail(k.uri, new Size(320, 180), null); } catch (Exception e) { k.thumb = null; }
