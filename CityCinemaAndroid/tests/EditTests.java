@@ -105,6 +105,7 @@ public class EditTests {
     toolTests();
     layerTests();
     audioTrackTests();
+    trackStateTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -117,6 +118,45 @@ public class EditTests {
   /** Speed changes the clip's length and maps timeline time to source time; split keeps both halves in sync. */
   /** Layer tracks: drawn above the main track in track order, extend the timeline, snap, split, keep their sound. */
   /** Audio tracks: trimmed and muted sound clips, splitting, snapping to sound edges, the voice-over WAV header. */
+  /** Track headers: hidden layers aren't drawn, muted/soloed audio tracks, muted camera sound; markers. */
+  static void trackStateTests() {
+    EditModel.Project p = new EditModel.Project();
+    p.fadeIn = p.fadeOut = false;
+    EditModel.Clip v = new EditModel.Clip();
+    v.outUs = 10_000_000; v.sourceDurationUs = 10_000_000;
+    p.clips.add(v);
+    EditModel.Clip l1 = new EditModel.Clip(); l1.outUs = 5_000_000; l1.sourceDurationUs = 5_000_000; l1.track = 1;
+    EditModel.Clip l2 = l1.copy(); l2.id = EditModel.NEXT_ID.incrementAndGet(); l2.track = 2;
+    p.overlays.add(l1); p.overlays.add(l2);
+    check(EditModel.layersAt(p, 1_000_000).size() == 3, "all layers shown");
+    p.hiddenLayers |= 1 << 2;
+    java.util.List<EditModel.Layer> ls = EditModel.layersAt(p, 1_000_000);
+    check(ls.size() == 2 && ls.get(1).ref == l1, "hidden layer 2 is not drawn");
+    EditModel.Music[] ms = new EditModel.Music[3];
+    for (int k = 0; k < 3; k++) { ms[k] = new EditModel.Music(); ms[k].track = k; ms[k].sourceDurationUs = 10_000_000; ms[k].volume = 1; ms[k].fadeInUs = ms[k].fadeOutUs = 0; p.audio.add(ms[k]); }
+    check(EditModel.audioGain(p, ms[0], 1_000_000) == 1 && EditModel.audioGain(p, ms[1], 1_000_000) == 1, "all tracks heard");
+    p.audioMute = 1 << 1;
+    check(EditModel.audioGain(p, ms[1], 1_000_000) == 0 && EditModel.audioGain(p, ms[0], 1_000_000) == 1, "muted VOICE track");
+    p.audioMute = 0; p.audioSolo = 1 << 2;
+    check(EditModel.audioGain(p, ms[2], 1_000_000) == 1 && EditModel.audioGain(p, ms[0], 1_000_000) == 0 && EditModel.audioGain(p, ms[1], 1_000_000) == 0, "solo FX: only FX heard");
+    p.audioSolo = 0;
+    v.hasAudio = true;
+    check(EditModel.clipGain(p, 0, 1_000_000) > 0, "camera sound on");
+    p.mainMuted = true;
+    check(EditModel.clipGain(p, 0, 1_000_000) == 0, "camera sound muted from the header");
+    // markers
+    check(EditModel.toggleMarker(p, 3_000_000) && EditModel.toggleMarker(p, 1_000_000) && p.markers.get(0) == 1_000_000, "markers added, sorted");
+    check(!EditModel.toggleMarker(p, 3_050_000) && p.markers.size() == 1, "tapping near a marker removes it");
+    EditModel.toggleMarker(p, 6_000_000);
+    check(EditModel.nextMarker(p, 2_000_000, 1) == 6_000_000 && EditModel.nextMarker(p, 2_000_000, -1) == 1_000_000 && EditModel.nextMarker(p, 7_000_000, 1) == -1, "next and previous marker");
+    boolean snapsToMarker = false; for (long q : EditModel.snapPoints(p, null)) if (q == 6_000_000) snapsToMarker = true;
+    check(snapsToMarker, "markers are snap points");
+    EditModel.Project q = EditModel.snapshot(p);
+    check(q.markers.size() == 2 && q.mainMuted && q.hiddenLayers == (1 << 2), "states in the preview copy");
+    // the envelope used for waveforms
+    check(MediaCache.envelopeOf(new float[] {0.1f, -0.7f, 0.3f, 0.2f}, 2) == 0.7f && MediaCache.gridTime(740_000) == 500_000 && MediaCache.gridTime(760_000) == 1_000_000, "waveform peak and thumbnail grid");
+  }
+
   static void audioTrackTests() {
     EditModel.Project p = new EditModel.Project();
     p.fadeIn = p.fadeOut = false;

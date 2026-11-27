@@ -171,7 +171,7 @@ final class EditModel {
   }
 
   static final class Project {
-    static final int VERSION = 3; // 1: main track only; 2: adds layer tracks (overlays); 3: audio tracks (was one music slot)
+    static final int VERSION = 4; // 1: main track only; 2: layer tracks; 3: audio tracks; 4: track states and markers
     static final int MAX_TRACKS = 3;
     final List<Clip> clips = new ArrayList<>();
     /** Video layers above the main track (B-roll, picture-in-picture): placed freely, drawn above by track. */
@@ -179,6 +179,17 @@ final class EditModel {
     final List<Title> titles = new ArrayList<>();
     /** Sound clips on the audio tracks (music, voice-over, effects). */
     final List<Music> audio = new ArrayList<>();
+    /** Track headers: bit t of hiddenLayers / lockedLayers is layer t (1..3); bit k of audioMute / audioSolo is MUSIC, VOICE, FX. */
+    int hiddenLayers, lockedLayers, audioMute, audioSolo;
+    boolean titlesHidden, mainMuted;
+    /** Timeline markers (microseconds, sorted). */
+    final List<Long> markers = new ArrayList<>();
+
+    boolean layerHidden(int track) { return (hiddenLayers & (1 << track)) != 0; }
+    boolean layerLocked(int track) { return (lockedLayers & (1 << track)) != 0; }
+
+    /** Whether an audio track is heard: not muted, and if any track is soloed, this one is. */
+    boolean audioTrackOn(int k) { return (audioMute & (1 << k)) == 0 && (audioSolo == 0 || (audioSolo & (1 << k)) != 0); }
     boolean fadeIn = true, fadeOut = true;
     long fadeUs = 700_000;
 
@@ -191,6 +202,10 @@ final class EditModel {
       JSONArray a = new JSONArray();
       for (Music m : audio) a.put(m.json());
       j.put("audio", a);
+      JSONArray mk = new JSONArray();
+      for (long m : markers) mk.put(m);
+      j.put("markers", mk).put("hiddenLayers", hiddenLayers).put("lockedLayers", lockedLayers).put("audioMute", audioMute).put("audioSolo", audioSolo)
+          .put("titlesHidden", titlesHidden).put("mainMuted", mainMuted);
       return j;
     }
 
@@ -205,6 +220,10 @@ final class EditModel {
       if (old != null) p.audio.add(old);
       JSONArray a = j.optJSONArray("audio");
       if (a != null) for (int i = 0; i < a.length(); i++) { Music m = Music.from(a.optJSONObject(i)); if (m != null) p.audio.add(m); }
+      JSONArray mk = j.optJSONArray("markers");
+      if (mk != null) for (int i = 0; i < mk.length(); i++) p.markers.add(mk.optLong(i));
+      p.hiddenLayers = j.optInt("hiddenLayers"); p.lockedLayers = j.optInt("lockedLayers"); p.audioMute = j.optInt("audioMute"); p.audioSolo = j.optInt("audioSolo");
+      p.titlesHidden = j.optBoolean("titlesHidden"); p.mainMuted = j.optBoolean("mainMuted");
       p.fadeIn = j.optBoolean("fadeIn", true); p.fadeOut = j.optBoolean("fadeOut", true); p.fadeUs = j.optLong("fadeUs", 700_000);
       return p;
     }
@@ -219,6 +238,9 @@ final class EditModel {
     for (Clip c : p.overlays) q.overlays.add(c.copy());
     for (Title t : p.titles) { Title u = new Title(); u.text = t.text; u.startUs = t.startUs; u.durationUs = t.durationUs; u.place = t.place; u.color = t.color; u.box = t.box; u.size = t.size; q.titles.add(u); }
     for (Music m : p.audio) q.audio.add(m.copy());
+    q.markers.addAll(p.markers);
+    q.hiddenLayers = p.hiddenLayers; q.lockedLayers = p.lockedLayers; q.audioMute = p.audioMute; q.audioSolo = p.audioSolo;
+    q.titlesHidden = p.titlesHidden; q.mainMuted = p.mainMuted;
     q.fadeIn = p.fadeIn; q.fadeOut = p.fadeOut; q.fadeUs = p.fadeUs;
     return q;
   }
@@ -270,10 +292,29 @@ final class EditModel {
     for (Clip o : p.overlays) if (o != moving) { pts.add(o.startUs); pts.add(o.startUs + o.durationUs()); }
     for (Title t : p.titles) if (t != moving) { pts.add(t.startUs); pts.add(t.startUs + t.durationUs); }
     for (Music m : p.audio) if (m != moving) { pts.add(m.startUs); pts.add(m.startUs + m.playUs()); }
+    pts.addAll(p.markers);
     for (long e : extra) pts.add(e);
     long[] out = new long[pts.size()];
     for (int i = 0; i < out.length; i++) out[i] = pts.get(i);
     return out;
+  }
+
+  /** Adds a marker at t, or removes the marker within 100 ms of t. Returns true when added. */
+  static boolean toggleMarker(Project p, long t) {
+    for (int i = 0; i < p.markers.size(); i++) if (Math.abs(p.markers.get(i) - t) <= 100_000) { p.markers.remove(i); return false; }
+    p.markers.add(t);
+    java.util.Collections.sort(p.markers);
+    return true;
+  }
+
+  /** The next (dir > 0) or previous marker from t, or -1. */
+  static long nextMarker(Project p, long t, int dir) {
+    long best = -1;
+    for (long m : p.markers) {
+      if (dir > 0 && m > t + 50_000 && (best < 0 || m < best)) best = m;
+      if (dir < 0 && m < t - 50_000 && (best < 0 || m > best)) best = m;
+    }
+    return best;
   }
 
   /** Splits sound clip m at timeline time t; returns the second half (added after it) or null. */
@@ -335,7 +376,7 @@ final class EditModel {
     // layer tracks above the main track, lowest track first (drawn in this order)
     for (int track = 1; track <= Project.MAX_TRACKS; track++)
       for (Clip o : p.overlays) {
-        if (o.track != track) continue;
+        if (o.track != track || p.layerHidden(track)) continue;
         long local = t - o.startUs;
         if (local < 0 || local >= o.durationUs()) continue;
         out.add(new Layer(-1, o, o.sourceAt(local), o.opacity, fade));
@@ -357,7 +398,7 @@ final class EditModel {
   /** Volume of a clip's sound at timeline time t (clip volume, mute, crossfades, dips, project fades). */
   static double clipGain(Project p, int i, long t) {
     Clip c = p.clips.get(i);
-    if (c.muted || !c.hasAudio) return 0;
+    if (c.muted || !c.hasAudio || p.mainMuted) return 0;
     for (Layer l : layersAt(p, t)) if (l.clip == i) {
       double g = c.volume * l.brightness;
       long local = t - starts(p)[i];
@@ -375,7 +416,7 @@ final class EditModel {
 
   /** Volume of a sound clip at timeline time t (its volume and fades; it stops and fades out with the programme). */
   static double audioGain(Project p, Music m, long t) {
-    if (m == null || m.muted) return 0;
+    if (m == null || m.muted || !p.audioTrackOn(m.track)) return 0;
     long local = t - m.startUs, total = duration(p), len = m.playUs();
     if (local < 0 || local >= len || t >= total) return 0;
     double g = m.volume;

@@ -45,7 +45,11 @@ already integer microseconds (good); project format is unversioned JSON (add a v
    - 3.9: **audio tracks** MUSIC / VOICE / FX with any number of sound clips (trim in and length, volume, pan,
      fades, mute, split, duplicate, drag with snapping); **voice-over recording** onto the VOICE track while the
      programme plays silently; project format **version 3** (the old single music slot becomes a MUSIC clip, tested).
-   - Next: timeline thumbnails and audio waveforms, ripple/roll/slip/slide on the main track, markers, multi-select.
+   - 4.1: **thumbnails** in main and layer clips, **waveforms** in sound clips and the camera sound of main clips
+     (background, cached); **track headers** that work: hide/lock each layer, mute camera sound (V1), hide titles,
+     mute/solo MUSIC/VOICE/FX (export follows them); **markers** (◆ MARK, tap one on the ruler to jump, snap points);
+     project format **version 4**.
+   - Next: ripple/roll/slip/slide on the main track, multi-select, copy/paste.
 4. GPU compositing: per-layer transform with opacity and blend modes, FP16 intermediates, PiP.
 5. Colour: lift/gamma/gain/offset wheels, curves, HSL qualifier, masks, before/after; LUT manager (rename, delete,
    favourites, thumbnails).

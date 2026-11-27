@@ -461,7 +461,7 @@ final class EditEngine {
         Map.Entry<Long, FrameSource> e = it.next();
         if (!used.contains(e.getKey())) { e.getValue().release(); it.remove(); }
       }
-      for (EditModel.Title title : p.titles) compositor.drawTitle(title, EditModel.titleAlpha(title, t), outW, outH);
+      if (!p.titlesHidden) for (EditModel.Title title : p.titles) compositor.drawTitle(title, EditModel.titleAlpha(title, t), outW, outH);
     }
 
     void release() { for (FrameSource s : sources.values()) s.release(); sources.clear(); }
@@ -502,6 +502,9 @@ final class EditEngine {
       ex.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
       resampler = new EditModel.Resampler(rate, channels);
     }
+
+    /** True once the file's sound has been read completely. */
+    boolean finished() { return done && fifoFrames == 0; }
 
     /** Fills `frames` 48 kHz stereo frames (adds silence once the sound ends). */
     void read(float[] out, int frames) {
@@ -586,6 +589,7 @@ final class EditEngine {
         add(c.id, c.uri, c.sourceAt(Math.max(0, t - starts[i])), Math.max(0, starts[i] - t), frames, g0, g1, out, c.speed, 0);
       }
       for (EditModel.Clip o : p.overlays) { // layer clips' own sound, with their volume and the project fades
+        if (p.layerHidden(o.track)) continue; // a hidden layer is silent too
         if (t1 <= o.startUs || t >= o.startUs + o.durationUs() || o.muted || !o.hasAudio) continue;
         live.add(o.id);
         double g0 = o.volume * EditModel.projectFade(p, Math.max(t, o.startUs)), g1 = o.volume * EditModel.projectFade(p, Math.min(t1, o.startUs + o.durationUs() - 1));
