@@ -184,8 +184,6 @@ public final class MainActivity extends Activity {
         guardBanner.setBackground(Ui.rounded(Ui.CARD, Ui.dp(this, 14)));
         int bp = Ui.dp(this, 14);
         guardBanner.setPadding(bp, bp, bp, bp);
-        guardBanner.setText("Turn on App Guard so these apps also ask for your fingerprint when opened from the home screen or recent apps. Tap to set up.");
-        guardBanner.setOnClickListener(v -> explainGuard());
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         blp.setMargins(Ui.dp(this, 16), 0, Ui.dp(this, 16), Ui.dp(this, 8));
         vaultView.addView(guardBanner, blp);
@@ -214,9 +212,43 @@ public final class MainActivity extends Activity {
     private void showVault() {
         lockView.setVisibility(View.GONE);
         vaultView.setVisibility(View.VISIBLE);
-        guardBanner.setVisibility(Apps.guardAvailable(this) && !Apps.guardEnabled(this) ? View.VISIBLE : View.GONE);
+        updateBanner();
         grid.setAdapter(gridAdapter);
         reloadVault();
+    }
+
+    /** Points the user at whatever still lets vault apps be seen or opened outside the vault. */
+    private void updateBanner() {
+        if (!Apps.isDefaultHome(this)) {
+            guardBanner.setText("These apps still show on your home screen. Tap to hide them by making AppVault your home screen.");
+            guardBanner.setOnClickListener(v -> explainHiding());
+            guardBanner.setVisibility(View.VISIBLE);
+        } else if (Apps.guardAvailable(this) && !Apps.guardEnabled(this)) {
+            guardBanner.setText("Turn on App Guard so these apps also ask for your fingerprint when opened from recent apps. Tap to set up.");
+            guardBanner.setOnClickListener(v -> explainGuard());
+            guardBanner.setVisibility(View.VISIBLE);
+        } else {
+            guardBanner.setVisibility(View.GONE);
+        }
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (vaultView.getVisibility() == View.VISIBLE) updateBanner();
+    }
+
+    private void explainHiding() {
+        new AlertDialog.Builder(this)
+                .setTitle("Hide vault apps")
+                .setMessage("Android doesn't let one app hide another app's icon from your phone's home screen. "
+                        + "So AppVault can be your home screen instead: it shows all your apps except the ones in the vault, "
+                        + "and those only appear here after your fingerprint.\n\n"
+                        + "On the next screen choose AppVault (if asked, choose \"Always\"). "
+                        + "Your current home screen's layout and widgets are kept, and you can switch back any time in Settings > Apps > Choose default apps > Home app.\n\n"
+                        + "Vault apps can still be found in Settings > Apps and in the Play Store.")
+                .setPositiveButton("Make AppVault my home screen", (d, w) -> Apps.requestDefaultHome(this))
+                .setNegativeButton("Not now", null)
+                .show();
     }
 
     private void reloadVault() {
@@ -368,6 +400,7 @@ public final class MainActivity extends Activity {
         String[] items = {
                 "Lock again: " + VaultStore.graceLabel(store.graceMs()),
                 "Phone PIN as backup: " + (store.allowDeviceCredential() ? "On" : "Off"),
+                "Hide vault apps from home screen: " + (Apps.isDefaultHome(this) ? "On" : "Off"),
                 guard,
         };
         new AlertDialog.Builder(this)
@@ -375,6 +408,10 @@ public final class MainActivity extends Activity {
                 .setItems(items, (d, which) -> {
                     if (which == 0) chooseGrace();
                     else if (which == 1) togglePinBackup();
+                    else if (which == 2) {
+                        if (Apps.isDefaultHome(this)) startActivity(new Intent(Settings.ACTION_HOME_SETTINGS));
+                        else explainHiding();
+                    }
                     else explainGuard();
                 })
                 .setNegativeButton("Close", null)

@@ -1,5 +1,7 @@
 package ug.audiocity.appvault;
 
+import android.app.Activity;
+import android.app.role.RoleManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -47,6 +49,23 @@ final class Apps {
         List<App> out = new ArrayList<>();
         for (String pkg : store.apps()) if (all.containsKey(pkg)) out.add(all.get(pkg));
         return out;
+    }
+
+    /** Whether AppVault is the phone's home screen, which is what hides vault apps from it. */
+    static boolean isDefaultHome(Context context) {
+        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+        ResolveInfo ri = context.getPackageManager().resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY);
+        return ri != null && ri.activityInfo != null && context.getPackageName().equals(ri.activityInfo.packageName);
+    }
+
+    /** Asks Android to make AppVault the home screen; falls back to the system's home-app chooser. */
+    static void requestDefaultHome(Activity activity) {
+        RoleManager rm = activity.getSystemService(RoleManager.class);
+        if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_HOME) && !rm.isRoleHeld(RoleManager.ROLE_HOME)) {
+            try { activity.startActivityForResult(rm.createRequestRoleIntent(RoleManager.ROLE_HOME), 1); return; }
+            catch (RuntimeException ignored) { /* fall through to Settings */ }
+        }
+        activity.startActivity(new Intent(android.provider.Settings.ACTION_HOME_SETTINGS));
     }
 
     static boolean open(Context context, String pkg) {
