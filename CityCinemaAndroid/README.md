@@ -1,4 +1,4 @@
-# City Cinema 1.3
+# City Cinema 1.4
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -20,7 +20,15 @@ no third-party libraries.
 
 **Color**
 - Kelvin white balance from 2000 to 10000 K, plus green/magenta tint and white-balance presets. When the phone reports its sensor calibration matrices, the Kelvin values are sensor-calibrated (DNG method); otherwise a generic model is used. You can also use auto white balance with AWB lock.
-- Looks via custom tone curves: **AC Log** (flat and gradable, 18% grey at about 42%), Film, Rec.709, Vivid and Flat.
+- **City Log** is the log profile, a published formula on scene-linear light `s` (18% grey = 0.18):
+  `y = 0.255825 · log10(s + 0.01) + 0.604514`, inverse `s = 10^((y − 0.604514) / 0.255825) − 0.01`.
+  Black sits at 95/1023, 18% grey at 0.42, about 79 ten-bit codes per stop, and y reaches 1.0 about 7.6 stops over grey.
+  Like cinema log modes, it gains highlight range through an **exposure index**:
+  - The sensor is exposed 2 stops under the EI you set: exposure compensation in auto, sensor ISO = EI ÷ 4 in manual.
+  - The curve lifts the image back, so the phone's clip point lands 2 stops higher (code ~0.76).
+  - The ISO dial shows `EI`. The headroom is reduced automatically where the camera's ISO or exposure-compensation range can't go 2 stops lower.
+- **Grading LUTs:** Menu → *Export City Log LUTs* saves `CityLog_to_Rec709.cube` (33³, soft highlight roll-off) and `CityLog_to_Linear.cube` (1D) to `Documents/City Cinema/LUTs` for Resolve, Premiere, Final Cut or a monitor. CI applies the LUT with FFmpeg and checks it.
+- Other looks: Film, Rec.709, Vivid, Flat, and Flat Log (the earlier flat curve, without EI headroom).
 - Detail: Natural (sharpening off), Standard, or Clean (strong noise reduction).
 - **10-bit HDR HLG** (HEVC Main10, BT.2020). Needs Android 13+, a 10-bit camera and a Main10 encoder.
 
@@ -67,6 +75,13 @@ no third-party libraries.
 - **Speed (measured on one x86 desktop core):** HQ takes about 35–45 ms per 1080p frame and about 145 ms per 4K frame. A phone multiplies that by its encoder threads. Recent flagships should hold 4K HQ at 24/25 fps and 4K LT at 30. Mid-range phones are better at 1440p or 1080p. Long takes heat the phone and can throttle it, so leave headroom and watch `ENC` while recording. These are estimates: run the speed test on your phone.
 - *ProRes is a trademark of Apple Inc. This is an independent implementation of the published bitstream; it is not an Apple-licensed or Apple-certified encoder. Check Apple's licensing before distributing the app commercially.*
 
+**8K RAW**
+- On 50 MP-class sensors with Android's **maximum-resolution mode** (Android 12+), RAW offers **8K UHD 7680×4320**, **8K DCI 8192×4320** (where the sensor is wide enough) or the full sensor. 8K crops of an ordinary full-size RAW stream are offered too.
+- Quad-Bayer sensors (2×2 binned) deliver their maximum-resolution RAW as quad Bayer. City Cinema turns that into standard Bayer by **pixel-shuffle remosaic** while copying the frame, so DNG tools can demosaic it. Detail sits between the binned image and true 8K, and fine patterns can show some color artifacts. Native-Bayer sensors give full detail.
+- **Frame rate:** limited by the sensor's maximum-resolution readout, often 5–15 fps, which is shown for each option. 5, 6, 8, 10, 12, 15 and 20 fps are offered when 24 isn't possible. Manual exposure gives the steadiest cadence.
+- **Preview:** this sensor mode leaves no room for a preview stream, so the viewfinder shows a monitor image made from the RAW frames themselves (white-balanced, ~8 fps), and zebras, peaking and scopes run on it.
+- **Memory:** 8K frames are ~66 MB each. Buffers and writer threads are sized to the phone's memory, so an 8K-capable flagship is required.
+
 **RAW video (CinemaDNG)**
 - Menu → Recording → **CinemaDNG RAW** records the sensor's Bayer data as a folder of DNG frames per clip. DaVinci Resolve and other CinemaDNG tools open the folder as one clip.
 - Every frame is a valid DNG 1.4 containing:
@@ -75,7 +90,8 @@ no third-party libraries.
   - the as-shot white balance
   - a **lens-shading GainMap**, so phone vignetting and color shading are corrected in the raw developer
   - CinemaDNG **TimeCodes**, **FrameRate** (exact 24000/1001 for 23.976) and **ReelName** tags
-- **12-bit packed** (lossless for 10/12-bit sensors, 25% smaller) or **16-bit**. Data is uncompressed.
+- **Lossless compression (default):** lossless JPEG CinemaDNG (ITU T.81 process 14, the DNG standard's lossless mode), in 256×256 tiles laid out the way the Adobe DNG SDK does it, with a Huffman table per tile. It typically shrinks data to about **half**. NEON computes the prediction differences, and any frame that wouldn't fit is stored uncompressed and counted. LibRaw decodes every sample exactly in the tests (10, 12 and 14-bit), and so does an independent decoder written from the spec (`tools/lj92_decode.py`). Sensors with white levels above 14 bits are stored uncompressed, because LibRaw mis-decodes 16-bit lossless JPEG.
+- Or uncompressed **12-bit packed** (for 10/12-bit sensors) or **16-bit**.
 - You can pick from the camera's RAW sizes, for example full sensor or a binned size. Frame rates are limited to what the sensor can stream in RAW.
 - Frames are copied into a pool of preallocated buffers and written by parallel threads. If storage can't keep up, the next frame fills the missing frame number(s), so the sequence stays continuous and in sync with the sound. `RAW BUF` on screen shows how full the buffer is, and drops are counted.
 - Each clip folder holds `A001_C001_…_000000.dng` …, a 32-bit float WAV, and a JSON sidecar with the measured audio offset to frame 0.
@@ -100,7 +116,8 @@ Files are saved to `Movies/City Cinema` (MP4), `Music/City Cinema` (WAV) and `Do
 City Cinema can only use what the phone's Camera2 HAL and hardware encoder expose:
 - Manual exposure, manual white balance, custom tone curves, high frame rates and 10-bit each need the matching camera capability. The Menu → About screen shows what your phone supports, and unsupported controls fall back to auto.
 - ProRes uses the CPU (no phone has a ProRes hardware encoder), so it is limited by processor speed and heat. RAW is uncompressed CinemaDNG and needs the Camera2 RAW capability.
-- RAW data rates are very high. For example, 12 MP at 24 fps in 12-bit is about 430 MB/s, which is more than most phones can write steadily. A binned or smaller RAW size, or a lower frame rate, gives drop-free recording. Watch `RAW BUF`.
+- RAW data rates are very high. For example, 12 MP at 24 fps is about 430 MB/s uncompressed 12-bit, or about 215 MB/s lossless, and 8K at 10 fps lossless is about 250 MB/s. Fast UFS 3.1/4.0 storage is needed. A smaller RAW size or a lower frame rate gives drop-free recording. Watch `RAW BUF`.
+- City Log's extra highlight range comes from exposing under. Shadows carry the sensor noise of the lower ISO, so ETTR-style exposure with zebras at about 90 works best.
 - "AC Log" is a tone curve applied to the ISP's output. It flattens and protects highlights, but it can't recover range the ISP has already clipped.
 - The camera stays locked to landscape. The preview analysis for scopes, peaking and zebras runs at about 12 fps on a 480-pixel-wide copy of the picture, so peaking is coarser than the recorded image.
 
@@ -112,7 +129,7 @@ export ANDROID_SDK_ROOT=/path/to/Android/Sdk   # platform 35 + build-tools 35.0.
 ./build.sh                                      # -> CityCinema.apk
 ```
 
-With `ANDROID_NDK_ROOT` set (NDK 26), `build.sh` also compiles the native ProRes encoder. Without it the app still builds, but without ProRes. `tools/prores-check.sh <ffmpeg> <python>` encodes test frames on the host and checks them with FFmpeg.
+With `ANDROID_NDK_ROOT` set (NDK 26), `build.sh` also compiles the native ProRes encoder. Without it the app still builds, but without ProRes. `tools/native-check.sh <ffmpeg> <python>` checks all native code on the host. It decodes the ProRes output with FFmpeg and the lossless DNGs with LibRaw and the spec decoder. With qemu-aarch64 installed, it also confirms the ARM NEON builds are bit-identical.
 
 **On GitHub:** the workflow `.github/workflows/city-cinema.yml` runs the tests and builds `CityCinema.apk` on every push that touches this folder. Download it from the run's **Artifacts**.
 

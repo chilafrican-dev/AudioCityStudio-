@@ -38,6 +38,12 @@ final class CinemaDng {
     /** Lens shading gains [channel R, Geven, Godd, B][row * cols + col], or null. */
     float[][] shading;
     int shadingRows, shadingCols;
+    /** Where the shading map lies relative to this (possibly cropped) image: origin and extent as fractions of the
+     * image size. A map covering a full sensor of which the image is a centred crop has origin < 0, extent > 1. */
+    double mapOriginH = 0, mapOriginV = 0, mapExtentH = 1, mapExtentV = 1;
+    /** 1 = uncompressed strip; 7 = lossless JPEG tiles (bits is then the JPEG precision, tileSizes the tile byte counts). */
+    int compression = 1, tileW = 256, tileH = 256;
+    int[] tileSizes;
 
     Meta copy() {
       Meta m = new Meta();
@@ -47,6 +53,8 @@ final class CinemaDng {
       m.exposureNs = exposureNs; m.fps = fps; m.make = make; m.model = model; m.uniqueModel = uniqueModel; m.software = software; m.dateTime = dateTime;
       m.reel = reel; m.tcHours = tcHours; m.tcMinutes = tcMinutes; m.tcSeconds = tcSeconds; m.tcFrames = tcFrames; m.dropFrame = dropFrame;
       m.shading = shading; m.shadingRows = shadingRows; m.shadingCols = shadingCols;
+      m.mapOriginH = mapOriginH; m.mapOriginV = mapOriginV; m.mapExtentH = mapExtentH; m.mapExtentV = mapExtentV;
+      m.compression = compression; m.tileW = tileW; m.tileH = tileH; m.tileSizes = tileSizes;
       return m;
     }
   }
@@ -65,6 +73,7 @@ final class CinemaDng {
 
   /** Bytes of image data for a frame. */
   static long stripBytes(Meta m) {
+    if (m.compression == 7) { long n = 0; for (int t : m.tileSizes) n += t; return n; }
     return m.bits == 12 ? (long) m.width * m.height * 3 / 2 : (long) m.width * m.height * 2;
   }
 
@@ -148,8 +157,8 @@ final class CinemaDng {
       b.putInt(r).putInt(c).putInt(m.height).putInt(m.width);   // top, left, bottom, right
       b.putInt(0).putInt(1).putInt(2).putInt(2);                // plane, planes, row pitch, col pitch
       b.putInt(rows).putInt(cols);
-      b.putDouble(1.0 / Math.max(1, rows - 1)).putDouble(1.0 / Math.max(1, cols - 1));
-      b.putDouble(0).putDouble(0);
+      b.putDouble(m.mapExtentV / Math.max(1, rows - 1)).putDouble(m.mapExtentH / Math.max(1, cols - 1));
+      b.putDouble(m.mapOriginV).putDouble(m.mapOriginH);
       b.putInt(1);
       float[] g = m.shading[shadingChannel(m.cfa, r, c)];
       for (int i = 0; i < rows * cols; i++) b.putFloat(g[i]);
@@ -167,15 +176,23 @@ final class CinemaDng {
     e.add(longs(256, m.width));
     e.add(longs(257, m.height));
     e.add(shorts(258, m.bits));
-    e.add(shorts(259, 1));
+    e.add(shorts(259, m.compression == 7 ? 7 : 1));
     e.add(shorts(262, 32803));
     e.add(ascii(271, m.make));
     e.add(ascii(272, m.model));
-    e.add(longs(273, 0)); // StripOffsets, patched below
+    boolean tiled = m.compression == 7;
+    if (!tiled) e.add(longs(273, 0)); // StripOffsets, patched below
     e.add(shorts(274, m.orientation));
     e.add(shorts(277, 1));
-    e.add(longs(278, m.height));
-    e.add(longs(279, stripBytes(m)));
+    if (!tiled) { e.add(longs(278, m.height)); e.add(longs(279, stripBytes(m))); }
+    else {
+      long[] zero = new long[m.tileSizes.length], counts = new long[m.tileSizes.length];
+      for (int i = 0; i < counts.length; i++) counts[i] = m.tileSizes[i];
+      e.add(longs(322, m.tileW));
+      e.add(longs(323, m.tileH));
+      e.add(longs(324, zero));  // TileOffsets, patched below
+      e.add(longs(325, counts));
+    }
     e.add(shorts(284, 1));
     e.add(ascii(305, m.software));
     if (m.dateTime != null && !m.dateTime.isEmpty()) e.add(ascii(306, m.dateTime));
@@ -226,6 +243,12 @@ final class CinemaDng {
     out.putShort((short) e.size());
     int cursor = dataStart;
     List<Entry> deferred = new ArrayList<>();
+    if (tiled) { // tiles follow the header back to back
+      ByteBuffer offs = le(m.tileSizes.length * 4);
+      long at = stripOffset;
+      for (int t : m.tileSizes) { offs.putInt((int) at); at += t; }
+      for (int i = 0; i < e.size(); i++) if (e.get(i).tag == 324) e.set(i, new Entry(324, LONG, m.tileSizes.length, offs.array()));
+    }
     for (Entry x : e) {
       out.putShort((short) x.tag).putShort((short) x.type).putInt(x.count);
       if (x.tag == 273) { out.putInt(stripOffset); continue; }

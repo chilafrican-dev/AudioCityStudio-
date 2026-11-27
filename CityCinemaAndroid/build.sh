@@ -24,10 +24,10 @@ llvm="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/$host/bin"
 for pair in arm64-v8a:aarch64-linux-android30 armeabi-v7a:armv7a-linux-androideabi30 x86_64:x86_64-linux-android30; do
 abi="${pair%%:*}"; target="${pair#*:}"
 mkdir -p "build/lib/$abi"
-"$llvm/clang" --target="$target" -std=c11 -O3 -fno-math-errno -fPIC -shared -Wall -Wl,-z,max-page-size=16384 -o "build/lib/$abi/libcitycinema.so" jni/prores.c jni/prores_jni.c -lm -llog
+"$llvm/clang" --target="$target" -std=c11 -O3 -fno-math-errno -fPIC -shared -Wall -Wl,-z,max-page-size=16384 -o "build/lib/$abi/libcitycinema.so" jni/prores.c jni/prores_jni.c jni/rawtools.c jni/rawtools_jni.c -lm -llog
 done
 (cd build && zip -qr unsigned.apk lib)
-echo "Included the native ProRes encoder for arm64-v8a, armeabi-v7a and x86_64."
+echo "Included the native ProRes encoder and RAW tools for arm64-v8a, armeabi-v7a and x86_64."
 else
 echo "ANDROID_NDK_ROOT not set: building without the ProRes encoder."
 fi

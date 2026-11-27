@@ -19,6 +19,9 @@ final class CinemaMath {
   /** Project frame rates offered by the camera. NTSC rates use exact 1000/1001 frame durations. */
   static final double[] FRAME_RATES = {23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120, 240};
 
+  /** Extra RAW rates for sensors whose 8K / maximum-resolution readout can't reach 24 fps. */
+  static final double[] RAW_SLOW_RATES = {5, 6, 8, 10, 12, 15, 20};
+
   static boolean isDropFrameRate(double fps) { return Math.abs(fps - 29.97) < 0.01 || Math.abs(fps - 59.94) < 0.01; }
 
   /** Nominal integer rate used for timecode and AE target ranges (23.976 → 24, 29.97 → 30). */
@@ -191,34 +194,96 @@ final class CinemaMath {
 
   // ---------------------------------------------------------------- looks / tone curves
 
-  static final String[] LOOKS = {"AC Log", "Film", "Rec.709", "Vivid", "Flat"};
+  /** Looks. Index 0 is City Log (the log profile); "Flat Log" is the earlier headroom-free flat curve. */
+  static final String[] LOOKS = {"City Log", "Film", "Rec.709", "Vivid", "Flat", "Flat Log"};
+
+  // ---------------------------------------------------------------- City Log
+
+  /*
+   * City Log: y = A * log10(s + B) + C on scene-linear light s (18% grey = 0.18), with
+   * A = 0.255825, B = 0.01, C = 0.604514. Black (s = 0) sits at 95/1023 and 18% grey at 0.42; each stop above
+   * grey takes ~0.077 (~79 ten-bit codes); y reaches 1.0 at s = 35 (7.6 stops over grey).
+   * Phones apply the curve to the ISP's linear signal x (1 = clip). City Log gains highlight range the way
+   * cinema log modes do: the sensor is exposed LOG_HEADROOM stops under the selected exposure index (EI) and the
+   * curve maps x back to scene light s = x * 2^headroom, so the ISP clip point lands at s = 4 (2 stops over
+   * "normal" clipping), code ~0.76.
+   */
+  static final double CITY_LOG_A = 0.255825, CITY_LOG_B = 0.01, CITY_LOG_C = 0.604514;
+  static final int LOG_HEADROOM = 2;
+
+  static double cityLog(double sceneLinear) {
+    return CITY_LOG_A * Math.log10(Math.max(0, sceneLinear) + CITY_LOG_B) + CITY_LOG_C;
+  }
+
+  static double cityLogInverse(double code) {
+    return Math.pow(10, (code - CITY_LOG_C) / CITY_LOG_A) - CITY_LOG_B;
+  }
+
+  /** Display rendering used by the City Log to Rec.709 LUT: exposure-normalised soft-shoulder tone map, then BT.709. */
+  static double cityLogToRec709(double code) {
+    double s = Math.max(0, cityLogInverse(code)) * 1.18; // keeps 18% grey close to its Rec.709 level
+    final double white = 16;                             // ~6.5 stops over grey reaches display white
+    double d = s * (1 + s / (white * white)) / (1 + s);
+    return rec709(clamp01(d));
+  }
+
+  /** A 3D .cube LUT (33 points) converting City Log to Rec.709, for Resolve, Premiere, Final Cut and monitors. */
+  static String cityLogRec709Cube() {
+    final int n = 33;
+    StringBuilder b = new StringBuilder(n * n * n * 24);
+    b.append("TITLE \"City Log to Rec.709 (City Cinema)\"\n# City Log: y = 0.255825*log10(s + 0.01) + 0.604514\n");
+    b.append("LUT_3D_SIZE ").append(n).append("\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n");
+    double[] v = new double[n];
+    for (int i = 0; i < n; i++) v[i] = cityLogToRec709(i / (double) (n - 1));
+    for (int bl = 0; bl < n; bl++) for (int g = 0; g < n; g++) for (int r = 0; r < n; r++)
+      b.append(String.format(Locale.US, "%.6f %.6f %.6f%n", v[r], v[g], v[bl]));
+    return b.toString();
+  }
+
+  /** A 1D .cube LUT converting City Log code values to scene-linear light (18% grey = 0.18). */
+  static String cityLogLinearCube() {
+    final int n = 4096;
+    StringBuilder b = new StringBuilder(n * 30);
+    b.append("TITLE \"City Log to scene linear (City Cinema)\"\n# output: scene-linear, 18% grey = 0.18\n");
+    b.append("LUT_1D_SIZE ").append(n).append("\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n");
+    for (int i = 0; i < n; i++) {
+      double s = Math.max(0, cityLogInverse(i / (double) (n - 1)));
+      b.append(String.format(Locale.US, "%.6f %.6f %.6f%n", s, s, s));
+    }
+    return b.toString();
+  }
 
   /**
    * Tone curve for a look, as interleaved (in, out) pairs in 0..1 suitable for Camera2's TonemapCurve.
-   * Input is the ISP's linear signal (1 = clip). "AC Log" is a flat, log-shaped curve for grading: it lifts
-   * shadows, rolls highlights off gently and places 18% grey at ~42%. It cannot add sensor dynamic range the ISP
-   * has already clipped, so expose it like any flat profile (protect highlights with zebras at 95).
+   * Input is the ISP's linear signal (1 = clip). "City Log" is the log profile (see cityLog); "Flat Log" is a
+   * gentler flat curve without exposure headroom.
    */
-  static float[] toneCurve(String look, int points) {
+  static float[] toneCurve(String look, int points) { return toneCurve(look, points, LOG_HEADROOM); }
+
+  /** Tone curve with an explicit City Log headroom (stops the sensor is exposed under the exposure index). */
+  static float[] toneCurve(String look, int points, int headroom) {
     points = Math.max(2, Math.min(points, 128));
     float[] curve = new float[points * 2];
     for (int i = 0; i < points; i++) {
       // Sample more densely in the shadows, where log curves change fastest.
       double x = Math.pow(i / (double) (points - 1), 2.2);
-      double y = toneValue(look, x);
+      double y = toneValue(look, x, headroom);
       curve[i * 2] = (float) x;
       curve[i * 2 + 1] = (float) clamp01(y);
     }
-    curve[0] = 0; curve[1] = (float) clamp01(toneValue(look, 0));
-    curve[points * 2 - 2] = 1; curve[points * 2 - 1] = (float) clamp01(toneValue(look, 1));
+    curve[0] = 0; curve[1] = (float) clamp01(toneValue(look, 0, headroom));
+    curve[points * 2 - 2] = 1; curve[points * 2 - 1] = (float) clamp01(toneValue(look, 1, headroom));
     return curve;
   }
 
   /** Output code value (0..1) for a linear scene value (0..1, 1 = sensor clip). */
-  static double toneValue(String look, double linear) {
+  static double toneValue(String look, double linear) { return toneValue(look, linear, LOG_HEADROOM); }
+
+  static double toneValue(String look, double linear, int headroom) {
     double x = clamp01(linear);
     switch (look) {
-      case "AC Log": return acLog(x);
+      case "City Log": return cityLog(x * (1 << headroom));
+      case "Flat Log": return acLog(x);
       case "Film": return filmic(x);
       case "Vivid": return clamp01(Math.pow(rec709(x), 0.92) * 1.04 - 0.02);
       case "Flat": return 0.06 + 0.88 * Math.pow(rec709(x), 0.82);
@@ -226,7 +291,7 @@ final class CinemaMath {
     }
   }
 
-  /** AC Log: black at 6.25% (64/1023 legal black), 18% grey at ~42%, clip at 95%. */
+  /** Flat Log (formerly "AC Log"): no exposure headroom; black at 6.25%, 18% grey at ~42%, clip at 95%. */
   static double acLog(double x) {
     final double a = 8.0, black = 0.0625, top = 0.95;
     return black + (top - black) * Math.log1p(a * x) / Math.log1p(a);

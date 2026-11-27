@@ -104,8 +104,9 @@ public class CinemaTests {
         check(c[i + 1] >= 0 && c[i + 1] <= 1, look + " output in range");
       }
     }
-    near(CinemaMath.acLog(0.18), 0.42, 0.03, "AC Log puts 18% grey near 42%");
-    near(CinemaMath.acLog(0), 0.0625, 1e-9, "AC Log legal black");
+    near(CinemaMath.acLog(0.18), 0.42, 0.03, "Flat Log puts 18% grey near 42%");
+    near(CinemaMath.acLog(0), 0.0625, 1e-9, "Flat Log legal black");
+    cityLog();
     check(CinemaMath.acLog(0.02) > CinemaMath.rec709(0.02), "log lifts shadows above Rec.709");
     check(CinemaMath.acLog(0.9) < CinemaMath.rec709(0.9), "log holds highlights below Rec.709");
     near(CinemaMath.rec709(1), 1, 1e-3, "Rec.709 white");
@@ -256,6 +257,7 @@ public class CinemaTests {
   /** Writes sample DNGs so an external reader (LibRaw) can verify them: see tools/verify_dng.py. */
   static void writeSampleDngs(String dir) throws IOException {
     for (int bits : new int[] {12, 16}) try (FileOutputStream o = new FileOutputStream(dir + "/sample" + bits + ".dng")) { o.write(sampleFile(bits)); }
+    try (FileOutputStream o = new FileOutputStream(dir + "/CityLog_to_Rec709.cube")) { o.write(CinemaMath.cityLogRec709Cube().getBytes("US-ASCII")); }
   }
 
   /** Audio that starts before frame 0 is trimmed; a gap is filled with silence, so sound stays in sync. */
@@ -277,5 +279,31 @@ public class CinemaTests {
       check(w.videoFrames() == 3, "one frame can fill several slots");
       w.finish();
     } finally { f.delete(); }
+  }
+
+  static void cityLog() {
+    near(CinemaMath.cityLog(0), 95 / 1023.0, 1e-4, "City Log black at 95/1023");
+    near(CinemaMath.cityLog(0.18), 0.42, 1e-4, "City Log 18% grey at 0.42");
+    double stop = CinemaMath.cityLog(0.36) - CinemaMath.cityLog(0.18);
+    near(stop * 1023, 75, 6, "City Log: ~79 ten-bit codes per stop around grey");
+    near(CinemaMath.cityLog(35), 1.0, 0.01, "City Log reaches 1.0 about 7.6 stops over grey");
+    for (double s : new double[] {0, 0.01, 0.18, 1, 4, 20}) near(CinemaMath.cityLogInverse(CinemaMath.cityLog(s)), s, 1e-9, "City Log inverse " + s);
+    // With 2 stops of headroom, ISP grey (0.045 linear, 2 stops under) lands on the City Log grey code ...
+    near(CinemaMath.toneValue("City Log", 0.18 / 4, 2), 0.42, 1e-4, "EI headroom: underexposed grey maps to 0.42");
+    // ... and the ISP clip point holds 2 stops more highlight than normal.
+    near(CinemaMath.toneValue("City Log", 1, 2), CinemaMath.cityLog(4), 1e-9, "ISP clip maps to scene 4.0");
+    check(CinemaMath.toneValue("City Log", 1, 2) < 0.8, "City Log leaves codes above the clip point");
+    // LUTs
+    near(CinemaMath.cityLogToRec709(0.42), CinemaMath.rec709(0.18), 0.03, "LUT keeps 18% grey near Rec.709 grey");
+    near(CinemaMath.cityLogToRec709(95 / 1023.0), 0, 0.005, "LUT maps log black to black");
+    double prev = -1;
+    for (int i = 0; i <= 100; i++) { double v = CinemaMath.cityLogToRec709(i / 100.0); check(v >= prev - 1e-12 && v <= 1, "LUT monotonic, in range"); prev = v; }
+    String cube = CinemaMath.cityLogRec709Cube();
+    check(cube.contains("LUT_3D_SIZE 33") && cube.split("\n").length == 33 * 33 * 33 + 5, "3D cube header and size");
+    String[] lines = cube.split("\n");
+    String[] e = lines[5 + 20].split(" "); // entry r = 20, g = 0, b = 0
+    check(Double.parseDouble(e[0]) > 0.3 && e[1].equals(e[2]) && Double.parseDouble(e[1]) == 0, "cube: red varies fastest");
+    String lin = CinemaMath.cityLogLinearCube();
+    check(lin.contains("LUT_1D_SIZE 4096") && lin.split("\n").length == 4096 + 5, "1D cube header and size");
   }
 }

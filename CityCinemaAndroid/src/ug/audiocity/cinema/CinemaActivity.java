@@ -150,7 +150,14 @@ public class CinemaActivity extends Activity {
   private SharedPreferences prefs;
   private Size videoSize = new Size(1920, 1080);
   /** RAW mode records CinemaDNG frame sequences instead of MP4. */
-  private boolean rawMode = false, rawPack12 = true;
+  private boolean rawMode = false, rawPack12 = true, rawCompress = true;
+  /** The chosen RAW option (full frame, 8K crop, maximum-resolution mode), by key. */
+  private String rawKey = "";
+  private RawOption rawOpt;
+  private boolean maxResSession;
+  private android.widget.ImageView monitorView;
+  private final Bitmap[] monitorBitmaps = new Bitmap[2];
+  private int monitorIndex;
   /** ProRes mode records ProRes 422 (software encoder) into a QuickTime .mov. Exclusive with rawMode. */
   private boolean proresMode = false;
   private int proresProfile = 3;
@@ -293,6 +300,8 @@ public class CinemaActivity extends Activity {
     // RAW (CinemaDNG) support
     boolean raw; Size[] rawSizes = new Size[0]; int cfa, whiteLevel = 1023, ill1 = 21, ill2 = 17;
     float[] black = {64, 64, 64, 64}, fm1, fm2, cal1, cal2;
+    // maximum-resolution ("ultra high resolution") sensor mode, Android 12+
+    boolean maxRes; Size[] maxResRawSizes = new Size[0]; StreamConfigurationMap maxResMap; int binning = 1;
     CinemaMath.WbModel wb = CinemaMath.GENERIC_WB;
   }
 
@@ -384,17 +393,79 @@ public class CinemaActivity extends Activity {
     if ((t = l.chars.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)) != null) l.fm2 = matrix(t);
     if ((t = l.chars.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)) != null) l.cal1 = matrix(t);
     if ((t = l.chars.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)) != null) l.cal2 = matrix(t);
+    // 50-200 MP sensors bin pixels by default; their maximum-resolution mode streams the full sensor (8K+).
+    if (Build.VERSION.SDK_INT >= 31 && contains(caps, CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR)) {
+      StreamConfigurationMap mm = l.chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION);
+      Size bf = l.chars.get(CameraCharacteristics.SENSOR_INFO_BINNING_FACTOR);
+      Size[] ms = mm == null ? null : mm.getOutputSizes(ImageFormat.RAW_SENSOR);
+      int bin = bf == null ? 1 : bf.getWidth();
+      // Supported: native Bayer (no binning) or quad Bayer (2x2), which a pixel shuffle turns into Bayer.
+      if (ms != null && ms.length > 0 && (bin == 1 || bin == 2) && (bf == null || bf.getHeight() == bin)) {
+        Arrays.sort(ms, (a, b) -> Long.compare((long) b.getWidth() * b.getHeight(), (long) a.getWidth() * a.getHeight()));
+        l.maxRes = true; l.maxResMap = mm; l.maxResRawSizes = ms; l.binning = bin;
+      }
+    }
   }
+
+  /** One way of recording RAW: a sensor output size, a crop of it, and the sensor mode. */
+  static final class RawOption {
+    String key, label; Size sensor; int cropX, cropY, width, height; boolean maxRes, quad; long minFrameNs;
+    boolean is8k() { return width >= 7680; }
+    RawRecorder.Geometry geometry() {
+      RawRecorder.Geometry g = new RawRecorder.Geometry();
+      g.sensorW = sensor.getWidth(); g.sensorH = sensor.getHeight(); g.cropX = cropX; g.cropY = cropY; g.width = width; g.height = height; g.quad = quad;
+      return g;
+    }
+  }
+
+  /** All RAW options of the lens: each full-frame size, 8K UHD/DCI crops, and maximum-resolution mode. */
+  private List<RawOption> rawOptions() {
+    List<RawOption> out = new ArrayList<>();
+    if (lens == null || !lens.raw) return out;
+    for (Size s : lens.rawSizes) out.add(rawOption(s.getWidth() + "×" + s.getHeight(), s, s.getWidth(), s.getHeight(), false, false, lens.map));
+    addCrops(out, lens.rawSizes[0], false, false, lens.map);
+    if (lens.maxRes) {
+      Size m = lens.maxResRawSizes[0];
+      boolean quad = lens.binning == 2;
+      addCrops(out, m, true, quad, lens.maxResMap);
+      out.add(rawOption("Full sensor " + m.getWidth() + "×" + m.getHeight() + " (max-res" + (quad ? ", remosaic" : "") + ")", m, m.getWidth(), m.getHeight(), true, quad, lens.maxResMap));
+    }
+    return out;
+  }
+
+  private void addCrops(List<RawOption> out, Size sensor, boolean maxRes, boolean quad, StreamConfigurationMap map) {
+    int[][] crops = {{7680, 4320}, {8192, 4320}};
+    String[] names = {"8K UHD", "8K DCI"};
+    for (int i = 0; i < crops.length; i++) {
+      if (sensor.getWidth() < crops[i][0] || sensor.getHeight() < crops[i][1]) continue;
+      String label = names[i] + " " + crops[i][0] + "×" + crops[i][1] + (maxRes ? " (max-res" + (quad ? ", remosaic" : "") + ")" : " (crop)");
+      out.add(rawOption(label, sensor, crops[i][0], crops[i][1], maxRes, quad, map));
+    }
+  }
+
+  private static RawOption rawOption(String label, Size sensor, int w, int h, boolean maxRes, boolean quad, StreamConfigurationMap map) {
+    RawOption o = new RawOption();
+    o.label = label; o.key = label; o.sensor = sensor; o.width = w; o.height = h; o.maxRes = maxRes; o.quad = quad;
+    int align = quad ? 4 : 2; // crops keep the CFA phase (and the 4x4 quad tiles)
+    o.cropX = ((sensor.getWidth() - w) / 2) / align * align;
+    o.cropY = ((sensor.getHeight() - h) / 2) / align * align;
+    long d = 0;
+    try { d = map.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, sensor); } catch (RuntimeException ignored) {}
+    o.minFrameNs = d > 0 ? d : CinemaMath.NS / 30;
+    return o;
+  }
+
+  /** The highest frame rate a RAW option streams at. */
+  static double maxFps(RawOption o) { return CinemaMath.NS / (double) o.minFrameNs; }
 
   /** The recorded frame: the RAW size in RAW mode, otherwise the video size. */
   private Size frameSize() { return rawMode && rawSize != null ? rawSize : proresMode ? proresSize : videoSize; }
 
-  /** RAW sizes the sensor can deliver at the current frame rate. */
-  private List<Size> rawSizesForRate() {
-    List<Size> out = new ArrayList<>();
-    if (lens == null || !lens.raw) return out;
+  /** RAW options the sensor can deliver at the current frame rate. */
+  private List<RawOption> rawOptionsForRate() {
+    List<RawOption> out = new ArrayList<>();
     long frameNs = CinemaMath.frameDurationNs(fps);
-    for (Size s : lens.rawSizes) if (lens.map.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, s) <= frameNs + 1000) out.add(s);
+    for (RawOption o : rawOptions()) if (o.minFrameNs <= frameNs + 1000) out.add(o);
     return out;
   }
 
@@ -410,11 +481,20 @@ public class CinemaActivity extends Activity {
     return best != null ? best : new Size(1440, (int) Math.round(1440 / aspect));
   }
 
-  /** On-disk data rate of RAW recording in bytes per second. */
+  /** Whether RAW frames are lossless-JPEG compressed (the sensor's white level allows it and the native code is in). */
+  private boolean rawCompressed() { return rawCompress && lens != null && RawNative.compressible(lens.whiteLevel); }
+
+  /** On-disk data rate of RAW recording in bytes per second (lossless: estimated at 2:1 of the packed size). */
   private long rawBytesPerSecond() {
     Size s = frameSize();
+    if (rawCompressed()) return (long) (s.getWidth() * (long) s.getHeight() * RawNative.precisionFor(lens.whiteLevel) / 8.0 / 2 * CinemaMath.exactFps(fps));
     boolean packed = rawPack12 && lens != null && lens.whiteLevel <= 4095;
     return (long) (s.getWidth() * (long) s.getHeight() * (packed ? 1.5 : 2) * CinemaMath.exactFps(fps));
+  }
+
+  private String rawFormatName() {
+    if (rawCompressed()) return "lossless " + RawNative.precisionFor(lens.whiteLevel) + "-bit";
+    return (rawPack12 && lens != null && lens.whiteLevel <= 4095 ? 12 : 16) + "-bit uncompressed";
   }
 
   private static float[] matrix(ColorSpaceTransform t) {
@@ -467,8 +547,9 @@ public class CinemaActivity extends Activity {
       return out;
     }
     if (rawMode && lens.raw) {
-      Size smallest = lens.rawSizes[lens.rawSizes.length - 1];
-      long min = lens.map.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, smallest);
+      // rates the chosen option streams; 8K maximum-resolution modes are often 5-15 fps, so offer those too
+      long min = rawOpt != null ? rawOpt.minFrameNs : lens.map.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, lens.rawSizes[lens.rawSizes.length - 1]);
+      if (min > CinemaMath.frameDurationNs(23.976) + 1000) for (double f : CinemaMath.RAW_SLOW_RATES) if (CinemaMath.frameDurationNs(f) + 1000 >= min) out.add(f);
       for (double f : CinemaMath.FRAME_RATES) if (f <= 60 && CinemaMath.frameDurationNs(f) + 1000 >= min && (CinemaMath.nominalFps(f) <= maxAe || lens.manualSensor)) out.add(f);
       return out;
     }
@@ -502,9 +583,17 @@ public class CinemaActivity extends Activity {
         for (double r : rates) if (r <= 30) pick = r; // the fastest rate up to 30, unless 24 is available
         fps = rates.contains(24.0) ? 24 : pick;
       }
-      List<Size> rs = rawSizesForRate();
-      if (rs.isEmpty()) rs = Arrays.asList(lens.rawSizes);
-      if (rawSize == null || !rs.contains(rawSize)) rawSize = rs.get(0);
+      rawOpt = null;
+      for (RawOption o : rawOptions()) if (o.key.equals(rawKey)) rawOpt = o;
+      if (rawOpt == null) rawOpt = rawOptions().get(0);
+      rawKey = rawOpt.key;
+      rawSize = new Size(rawOpt.width, rawOpt.height);
+      List<Double> optionRates = availableRates();
+      if (!optionRates.isEmpty() && !optionRates.contains(fps)) {
+        double pick = optionRates.get(optionRates.size() - 1);
+        for (double r : optionRates) if (r <= 30) pick = r;
+        fps = optionRates.contains(24.0) ? 24 : pick;
+      }
     }
     List<Double> rates = availableRates();
     if (!rates.isEmpty() && !rates.contains(fps)) fps = rates.contains(24.0) ? 24 : rates.get(0);
@@ -520,7 +609,7 @@ public class CinemaActivity extends Activity {
       if (!sizes.contains(pick)) pick = sizes.get(0);
       videoSize = pick;
     }
-    iso = Math.max(lens.isoRange.getLower(), Math.min(lens.isoRange.getUpper(), iso));
+    iso = Math.max(lens.isoRange.getLower(), Math.min(lens.isoRange.getUpper() << CinemaMath.LOG_HEADROOM, iso)); // EI may exceed sensor ISO in City Log
     zoom = Math.max(lens.minZoom, Math.min(lens.maxZoom, zoom));
     if (!lens.manualSensor) aeAuto = true;
     if (!lens.manualPost && !lens.manualSensor) awbAuto = true;
@@ -548,8 +637,9 @@ public class CinemaActivity extends Activity {
         if (!rawMode && raw != null) { raw.release(); raw = null; }
         if (!proresMode && prores != null) { prores.release(); prores = null; }
         if (rawMode) {
-          if (raw != null && (raw.isRecording() || !rawSize.equals(rawDims))) { raw.release(); raw = null; }
-          if (raw == null) { raw = new RawRecorder(rawSize.getWidth(), rawSize.getHeight()); rawDims = rawSize; }
+          if (raw != null && (raw.isRecording() || !rawOpt.key.equals(rawActiveKey))) { raw.release(); raw = null; }
+          if (raw == null) { raw = new RawRecorder(rawOpt.geometry()); rawActiveKey = rawOpt.key; }
+          raw.setMonitor(rawOpt.maxRes ? this::onRawMonitor : null, lens.cfa, lens.black, lens.whiteLevel);
         } else if (proresMode) {
           if (prores != null && (prores.isRecording() || !proresSize.equals(proresDims))) { prores.release(); prores = null; }
           if (prores == null) { prores = new ProResRecorder(proresSize.getWidth(), proresSize.getHeight()); proresDims = proresSize; }
@@ -564,7 +654,24 @@ public class CinemaActivity extends Activity {
     });
   }
 
-  private Size rawDims;
+  private String rawActiveKey;
+
+  /** RAW monitor image (maximum-resolution mode has no preview stream): shown in place of the preview. */
+  private void onRawMonitor(int[] argb, int w, int h) {
+    Bitmap b = monitorBitmaps[monitorIndex];
+    if (b == null || b.getWidth() != w || b.getHeight() != h) { b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); monitorBitmaps[monitorIndex] = b; }
+    b.setPixels(argb, 0, w, 0, 0, w, h);
+    final Bitmap shown = b;
+    monitorIndex ^= 1;
+    ui.post(() -> {
+      monitorView.setImageBitmap(shown);
+      if (scopes.needsFrames() && analysisHandler != null && !analysing.get()) {
+        analysing.set(true);
+        final Bitmap copy = shown.copy(Bitmap.Config.ARGB_8888, false);
+        analysisHandler.post(() -> { try { scopes.analyze(copy); } finally { analysing.set(false); } });
+      }
+    });
+  }
 
   private final CameraDevice.StateCallback deviceCallback = new CameraDevice.StateCallback() {
     @Override public void onOpened(CameraDevice d) { device = d; createSession(); }
@@ -581,10 +688,13 @@ public class CinemaActivity extends Activity {
       if (previewSurface != null) previewSurface.release();
       previewSurface = new Surface(st);
       OutputConfiguration preview = new OutputConfiguration(previewSurface), video = new OutputConfiguration(rawMode ? raw.surface() : proresMode ? prores.surface() : encoderSurface);
+      maxResSession = rawMode && rawOpt != null && rawOpt.maxRes && Build.VERSION.SDK_INT >= 31;
+      if (maxResSession) video.addSensorPixelModeUsed(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
+      ui.post(() -> { monitorView.setVisibility(maxResSession ? View.VISIBLE : View.GONE); texture.setAlpha(maxResSession ? 0f : 1f); });
       if (tenBit && Build.VERSION.SDK_INT >= 33) { preview.setDynamicRangeProfile(DynamicRangeProfiles.HLG10); video.setDynamicRangeProfile(DynamicRangeProfiles.HLG10); }
       highSpeedSession = fps > 60 && !rawMode && !proresMode;
       SessionConfiguration config = new SessionConfiguration(highSpeedSession ? SessionConfiguration.SESSION_HIGH_SPEED : SessionConfiguration.SESSION_REGULAR,
-          Arrays.asList(preview, video), cameraExecutor, new CameraCaptureSession.StateCallback() {
+          maxResSession ? Collections.singletonList(video) : Arrays.asList(preview, video), cameraExecutor, new CameraCaptureSession.StateCallback() {
             @Override public void onConfigured(CameraCaptureSession s) { session = s; opening = false; triedFallback = false; applyRepeating(); ui.post(() -> refreshUi()); }
             @Override public void onConfigureFailed(CameraCaptureSession s) { opening = false; sessionFailed(); }
           });
@@ -599,7 +709,12 @@ public class CinemaActivity extends Activity {
     String what = tenBit ? "10-bit HLG" : fps > 60 ? CinemaMath.fpsLabel(fps) + " fps" : "this format";
     message("Camera couldn't run " + what + ". Switched to a safer format.");
     if (proresMode) { List<Size> ps = proresSizes(); int i = ps.indexOf(proresSize); if (i >= 0 && i + 1 < ps.size()) proresSize = ps.get(i + 1); else { proresMode = false; message("This camera couldn't stream YUV for ProRes here. Switched to MP4."); } }
-    else if (rawMode) { List<Size> rs = rawSizesForRate(); int i = rs.indexOf(rawSize); if (i >= 0 && i + 1 < rs.size()) rawSize = rs.get(i + 1); else { rawMode = false; message("This camera couldn't stream RAW here. Switched to MP4."); } }
+    else if (rawMode) {
+      // fall back to the largest ordinary full-frame RAW size
+      List<RawOption> all = rawOptions();
+      if (rawOpt != null && (rawOpt.maxRes || rawOpt.is8k()) && !all.isEmpty()) { rawKey = all.get(0).key; message("This camera couldn't stream " + rawOpt.label + ". Switched to " + all.get(0).label + " RAW."); }
+      else { rawMode = false; message("This camera couldn't stream RAW here. Switched to MP4."); }
+    }
     else if (tenBit) tenBit = false; else if (fps > 60) fps = 30; else { hevc = false; List<Size> s = videoSizes(); if (s.size() > 1) videoSize = s.get(1); }
     ui.post(this::reopen);
   }
@@ -659,6 +774,14 @@ public class CinemaActivity extends Activity {
     if (s == null || device == null) return;
     try {
       CaptureRequest.Builder b = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+      if (maxResSession) {
+        // maximum-resolution mode: the RAW stream is the only output (and feeds the monitor image)
+        b.addTarget(raw.surface());
+        if (Build.VERSION.SDK_INT >= 31) b.set(CaptureRequest.SENSOR_PIXEL_MODE, CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
+        applyControls(b);
+        s.setRepeatingRequest(b.build(), captureCallback, cameraHandler);
+        return;
+      }
       b.addTarget(previewSurface);
       if (recording) b.addTarget(rawMode ? raw.surface() : proresMode ? prores.surface() : encoderSurface);
       if (rawMode) b.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON);
@@ -687,14 +810,15 @@ public class CinemaActivity extends Activity {
       b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
       Range<Integer> range = fpsRange(nominal);
       if (range != null) b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range);
-      b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, Math.max(lens.evRange.getLower(), Math.min(lens.evRange.getUpper(), evIndex)));
+      int ev = evIndex - (int) Math.round(logHeadroom() / lens.evStep.doubleValue()); // City Log: expose under the EI
+      b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, Math.max(lens.evRange.getLower(), Math.min(lens.evRange.getUpper(), ev)));
       b.set(CaptureRequest.CONTROL_AE_LOCK, aeLock);
     } else {
       b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
       long frame = CinemaMath.frameDurationNs(fps);
       b.set(CaptureRequest.SENSOR_FRAME_DURATION, frame);
       b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, clampExposure(exposureNs(), frame));
-      b.set(CaptureRequest.SENSOR_SENSITIVITY, iso);
+      b.set(CaptureRequest.SENSOR_SENSITIVITY, Math.max(lens.isoRange.getLower(), iso >> logHeadroom())); // iso is the EI
     }
     int[] bands = {CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_50HZ, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_60HZ, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_OFF};
     if (contains(lens.antibanding, bands[antibanding])) b.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, bands[antibanding]);
@@ -736,7 +860,7 @@ public class CinemaActivity extends Activity {
     // ---- look (tone curve). HLG has its own transfer function, so the ISP's curve is left alone.
     String look = CinemaMath.LOOKS[lookIndex];
     if (!tenBit && !"Rec.709".equals(look) && lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)) {
-      float[] curve = CinemaMath.toneCurve(look, Math.min(lens.curvePoints, 64));
+      float[] curve = CinemaMath.toneCurve(look, Math.min(lens.curvePoints, 64), logHeadroom());
       b.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
       b.set(CaptureRequest.TONEMAP_CURVE, new TonemapCurve(curve, curve, curve));
     } else if (contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)) b.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY);
@@ -753,6 +877,29 @@ public class CinemaActivity extends Activity {
     if (forRecording) return fixed;
     for (Range<Integer> r : lens.map.getHighSpeedVideoFpsRangesFor(videoSize)) if (r.getUpper() == f && r.getLower() == 30) return r;
     return fixed;
+  }
+
+  /** True when City Log is in effect (a tone curve can be applied: not RAW, not HLG, and the camera allows curves). */
+  private boolean cityLogActive() {
+    return lens != null && "City Log".equals(CinemaMath.LOOKS[lookIndex]) && !rawMode && !tenBit && !highSpeedSession
+        && lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
+  }
+
+  /**
+   * Stops the sensor is exposed under the exposure index for City Log (0 when not in log). Limited to what the
+   * camera allows: exposure compensation range in auto, minimum ISO in manual. The curve uses the same value, so
+   * 18% grey always lands on the City Log grey code.
+   */
+  private int logHeadroom() {
+    if (!cityLogActive()) return 0;
+    int want = CinemaMath.LOG_HEADROOM;
+    if (aeAuto || !lens.manualSensor) {
+      double available = -lens.evRange.getLower() * lens.evStep.doubleValue();
+      return (int) Math.max(0, Math.min(want, Math.floor(available + 1e-6)));
+    }
+    int stops = 0;
+    while (stops < want && (iso >> (stops + 1)) >= lens.isoRange.getLower()) stops++;
+    return stops;
   }
 
   private Range<Integer> fpsRange(int nominal) {
@@ -784,6 +931,11 @@ public class CinemaActivity extends Activity {
           for (int c = 0; c < 4; c++) for (int y = 0; y < rows; y++) for (int x = 0; x < cols; x++) g[c][y * cols + x] = map.getGainFactor(c, x, y);
           shadingRows = rows; shadingCols = cols; liveShading = g;
         }
+      }
+      RawRecorder rr = raw;
+      if (rr != null && maxResSession) {
+        float[] g = awbAuto ? liveGains : lens.wb.gains(kelvin, tint);
+        if (g != null) { float green = (g[1] + g[2]) / 2; rr.setMonitorGains(new float[] {g[0] / green, 1, g[3] / green}); }
       }
       if (awbAuto) {
         RggbChannelVector g = res.get(CaptureResult.COLOR_CORRECTION_GAINS);
@@ -907,6 +1059,7 @@ public class CinemaActivity extends Activity {
       j.put("codec", tenBit ? "HEVC Main10 HLG BT.2020" : hevc ? "HEVC Main BT.709" : "H.264 High BT.709");
       j.put("bitrateTarget", targetBitrate()).put("bitrateMode", cbr ? "CBR" : "VBR").put("gop", gop == 0 ? "1s" : gop == 1 ? "0.5s" : "all-intra");
       j.put("look", CinemaMath.LOOKS[lookIndex]).put("detail", new String[] {"natural", "standard", "clean"}[detail]);
+      if (cityLogActive()) j.put("logHeadroomStops", logHeadroom()).put("exposureIndex", (aeAuto ? liveIso : iso >> logHeadroom()) << logHeadroom()).put("lut", "CityLog_to_Rec709.cube");
       j.put("exposure", aeAuto ? "auto" : "manual").put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()));
       j.put("shutterAngle", Math.round(CinemaMath.angleForExposure(aeAuto ? liveExposure : exposureNs(), fps) * 10) / 10.0);
       j.put("whiteBalance", awbAuto ? "auto" : kelvin + "K tint " + tint).put("focus", manualFocus ? "manual " + focusLabel(focus) : "continuous AF");
@@ -1052,6 +1205,25 @@ public class CinemaActivity extends Activity {
     ui.post(() -> { scopes.invalidate(); refreshUi(); });
   }
 
+  /** Writes the City Log grading LUTs to Documents/City Cinema/LUTs. */
+  private void exportLuts() {
+    new Thread(() -> {
+      try {
+        String[][] luts = {{"CityLog_to_Rec709.cube", CinemaMath.cityLogRec709Cube()}, {"CityLog_to_Linear.cube", CinemaMath.cityLogLinearCube()}};
+        for (String[] l : luts) {
+          ContentValues v = new ContentValues();
+          v.put(MediaStore.MediaColumns.DISPLAY_NAME, l[0]);
+          v.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
+          v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/City Cinema/LUTs");
+          Uri u = getContentResolver().insert(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
+          if (u == null) throw new IOException("couldn't create " + l[0]);
+          try (OutputStream o = getContentResolver().openOutputStream(u)) { if (o != null) o.write(l[1].getBytes(StandardCharsets.US_ASCII)); }
+        }
+        message("LUTs saved to Documents/City Cinema/LUTs: CityLog_to_Rec709.cube, CityLog_to_Linear.cube");
+      } catch (IOException | RuntimeException e) { message("Couldn't save LUTs: " + e.getMessage()); }
+    }, "lut-export").start();
+  }
+
   /** Encodes test frames on all encoder threads and reports which ProRes formats this phone sustains in real time. */
   private void proresSpeedTest() {
     if (recording) { message("Stop recording first."); return; }
@@ -1087,7 +1259,7 @@ public class CinemaActivity extends Activity {
           .put("startTimecode", startTimecodeFor(takeStartWall)).put("device", Build.MANUFACTURER + " " + Build.MODEL).put("lens", lens.label)
           .put("resolution", proresSize.getWidth() + "x" + proresSize.getHeight()).put("fps", CinemaMath.fpsLabel(fps))
           .put("colour", "BT.709 primaries and transfer, BT.601 matrix (camera YCbCr), limited range")
-          .put("look", CinemaMath.LOOKS[lookIndex]).put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()))
+          .put("look", CinemaMath.LOOKS[lookIndex]).put("logHeadroomStops", logHeadroom()).put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()))
           .put("whiteBalance", awbAuto ? "auto" : kelvin + "K tint " + tint)
           .put("frameSlots", slots).put("framesEncoded", encodedFrames).put("droppedFramesFilled", drops).put("errors", errors)
           .put("durationSeconds", durationNs / 1e9).put("encoderThreads", prores.encoderThreads())
@@ -1159,12 +1331,19 @@ public class CinemaActivity extends Activity {
       final CinemaDng.Meta template = rawTemplate();
       takeStartWall = System.currentTimeMillis();
       long startFrames = todTimecode ? todFrames(takeStartWall) : recordRunBase;
-      raw.start(rawClipDir, clipName, fps, rawPack12, startFrames, () -> {
+      final RawOption opt = rawOpt;
+      raw.start(rawClipDir, clipName, fps, rawPack12, rawCompressed(), startFrames, () -> {
         CinemaDng.Meta m = template.copy();
         float[] bl = liveBlack; if (bl != null) m.black = bl.clone();
         m.neutral = neutral();
         m.iso = aeAuto ? liveIso : iso; m.exposureNs = aeAuto ? liveExposure : exposureNs();
-        m.shading = liveShading; m.shadingRows = shadingRows; m.shadingCols = shadingCols;
+        // The shading map describes the default-mode sensor; a crop sees only the middle of it. In maximum-resolution
+        // mode the camera doesn't report a matching map, so none is written.
+        if (!opt.maxRes) {
+          m.shading = liveShading; m.shadingRows = shadingRows; m.shadingCols = shadingCols;
+          m.mapOriginH = -opt.cropX / (double) opt.width; m.mapOriginV = -opt.cropY / (double) opt.height;
+          m.mapExtentH = opt.sensor.getWidth() / (double) opt.width; m.mapExtentV = opt.sensor.getHeight() / (double) opt.height;
+        }
         return m;
       });
       recording = true;
@@ -1209,7 +1388,11 @@ public class CinemaActivity extends Activity {
   private void writeRawSidecar(long frames, long durationNs, boolean hadWav) {
     try {
       JSONObject j = new JSONObject();
-      j.put("clip", clipName).put("format", "CinemaDNG, uncompressed " + (rawPack12 && lens.whiteLevel <= 4095 ? "12-bit packed" : "16-bit"))
+      j.put("clip", clipName).put("format", "CinemaDNG, " + rawFormatName())
+          .put("rawSource", rawOpt.label).put("sensorReadout", rawOpt.sensor.getWidth() + "x" + rawOpt.sensor.getHeight())
+          .put("crop", rawOpt.cropX + "," + rawOpt.cropY + " " + rawOpt.width + "x" + rawOpt.height)
+          .put("maximumResolutionMode", rawOpt.maxRes).put("quadBayerRemosaic", rawOpt.quad)
+          .put("uncompressedFallbackFrames", raw.uncompressedFallbacks)
           .put("camera", String.valueOf(cameraLetter)).put("reel", reel).put("clipNumber", clip)
           .put("startedAt", new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(new Date(takeStartWall)))
           .put("device", Build.MANUFACTURER + " " + Build.MODEL).put("lens", lens.label).put("cameraId", lens.id)
@@ -1233,21 +1416,28 @@ public class CinemaActivity extends Activity {
   private void chooseRawOptions() {
     if (recording) return;
     if (!lens.raw) { message(lens.label + " doesn't offer RAW output."); return; }
-    List<Size> sizes = rawSizesForRate();
-    if (sizes.isEmpty()) sizes = Arrays.asList(lens.rawSizes);
-    final List<Size> list = sizes;
-    boolean canPack = lens.whiteLevel <= 4095;
-    String[] options = new String[list.size() * (canPack ? 2 : 1)];
+    final List<RawOption> list = rawOptions();
+    final List<int[]> modes = new ArrayList<>(); // {compress, pack12}
+    if (RawNative.compressible(lens.whiteLevel)) modes.add(new int[] {1, 0});
+    if (lens.whiteLevel <= 4095) modes.add(new int[] {0, 1});
+    modes.add(new int[] {0, 0});
+    String[] options = new String[list.size() * modes.size()];
     int sel = 0, k = 0;
-    for (Size sz : list) for (int bits : canPack ? new int[] {12, 16} : new int[] {16}) {
-      long mb = (long) (sz.getWidth() * (long) sz.getHeight() * (bits == 12 ? 1.5 : 2) * CinemaMath.exactFps(fps) / 1_000_000);
-      options[k] = sz.getWidth() + "×" + sz.getHeight() + " · " + bits + "-bit · " + mb + " MB/s at " + CinemaMath.fpsLabel(fps);
-      if (sz.equals(rawSize) && (bits == 12) == rawPack12) sel = k;
+    int bits = RawNative.precisionFor(lens.whiteLevel);
+    for (RawOption o : list) for (int[] md : modes) {
+      double bytesPerFrame = md[0] == 1 ? o.width * (double) o.height * bits / 8 / 2 : o.width * (double) o.height * (md[1] == 1 ? 1.5 : 2);
+      double rate = Math.min(fps, maxFps(o));
+      options[k] = o.label + " · " + (md[0] == 1 ? "lossless " + bits + "-bit" : md[1] == 1 ? "12-bit" : "16-bit") + " · up to "
+          + CinemaMath.fpsLabel(Math.floor(maxFps(o) * 10) / 10) + " fps · " + (md[0] == 1 ? "~" : "") + Math.round(bytesPerFrame * rate / 1e6) + " MB/s";
+      if (o.key.equals(rawKey) && (md[0] == 1) == rawCompressed() && (md[1] == 1) == (rawPack12 && md[0] == 0)) sel = k;
       k++;
     }
-    choose("RAW size and bit depth", options, sel, i -> {
-      int per = canPack ? 2 : 1;
-      rawSize = list.get(i / per); rawPack12 = canPack && i % per == 0; reopen();
+    choose("RAW format", options, sel, i -> {
+      RawOption o = list.get(i / modes.size());
+      int[] md = modes.get(i % modes.size());
+      rawKey = o.key; rawCompress = md[0] == 1; if (md[0] == 0) rawPack12 = md[1] == 1;
+      if (o.is8k()) message(o.label + " streams up to " + CinemaMath.fpsLabel(Math.floor(maxFps(o) * 10) / 10) + " fps on this sensor. Manual exposure gives the steadiest frame rate.");
+      reopen();
     });
   }
 
@@ -1268,7 +1458,7 @@ public class CinemaActivity extends Activity {
     @Override public void run() {
       updateStatus();
       meter.invalidate();
-      if (scopes.needsFrames() && texture.isAvailable() && analysisHandler != null && !analysing.get() && session != null) {
+      if (scopes.needsFrames() && !maxResSession && texture.isAvailable() && analysisHandler != null && !analysing.get() && session != null) {
         int w = 480, h = Math.max(1, Math.round(480f * texture.getHeight() / Math.max(1, texture.getWidth())));
         if (grab == null || grab.getWidth() != w || grab.getHeight() != h) grab = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         texture.getBitmap(grab);
@@ -1313,7 +1503,8 @@ public class CinemaActivity extends Activity {
     // exposure readouts: live values in auto, set values in manual
     long exp = aeAuto ? liveExposure : exposureNs();
     shutterCell.set(shutterAsAngle ? CinemaMath.angleLabel(Math.round(CinemaMath.angleForExposure(exp, fps) * 10) / 10.0) : CinemaMath.speedLabel(exp), aeAuto);
-    isoCell.set(String.valueOf(aeAuto ? liveIso : iso), aeAuto);
+    int hr = logHeadroom();
+    isoCell.set((hr > 0 ? "EI " : "") + ((aeAuto ? liveIso : iso >> hr) << hr), aeAuto);
     float[] g = liveGains;
     int k = awbAuto && g != null ? CinemaMath.estimateKelvin(lens.wb, g[0], g[3]) : kelvin;
     wbCell.set((awbAuto ? Math.round(k / 50f) * 50 : k) + "K" + (!awbAuto && tint != 0 ? (tint > 0 ? " +" : " ") + tint : ""), awbAuto);
@@ -1364,6 +1555,10 @@ public class CinemaActivity extends Activity {
     texture = new TextureView(this);
     texture.setSurfaceTextureListener(surfaceListener);
     root.addView(texture, new FrameLayout.LayoutParams(1, 1));
+    monitorView = new android.widget.ImageView(this);
+    monitorView.setScaleType(android.widget.ImageView.ScaleType.FIT_XY);
+    monitorView.setVisibility(View.GONE);
+    root.addView(monitorView, new FrameLayout.LayoutParams(1, 1));
     scopes = new CinemaScopes(this) {
       @Override protected void onDraw(Canvas c) {
         super.onDraw(c);
@@ -1462,6 +1657,8 @@ public class CinemaActivity extends Activity {
     FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(baseW, h);
     lp.leftMargin = (aw - baseW) / 2; lp.topMargin = (ah - h) / 2;
     texture.setLayoutParams(lp);
+    monitorView.setLayoutParams(new FrameLayout.LayoutParams(lp));
+    monitorView.setPivotX(baseW / 2f); monitorView.setPivotY(h / 2f); monitorView.setScaleX((float) d);
     texture.setPivotX(baseW / 2f); texture.setPivotY(h / 2f); texture.setScaleX((float) d);
     // Camera buffers arrive in the sensor's orientation; rotate them for the landscape display.
     Matrix m = new Matrix();
@@ -1491,7 +1688,7 @@ public class CinemaActivity extends Activity {
     String codec = tenBit ? "HEVC 10-bit HLG" : hevc ? "HEVC" : "H.264";
     String speed = fps > 60 && conformFps > 0 ? " → " + CinemaMath.fpsLabel(conformFps) : "";
     if (proresMode) formatView.setText(ProRes.NAMES[proresProfile] + "  " + proresSize.getWidth() + "×" + proresSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  " + CinemaMath.formatBitrate(ProRes.bitrate(proresSize.getWidth(), proresSize.getHeight(), fps, proresProfile)));
-    else if (rawMode && rawSize != null) formatView.setText("RAW " + rawSize.getWidth() + "×" + rawSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  CinemaDNG " + (rawPack12 && lens.whiteLevel <= 4095 ? 12 : 16) + "-bit  " + rawBytesPerSecond() / 1_000_000 + " MB/s");
+    else if (rawMode && rawSize != null) formatView.setText((rawOpt != null && rawOpt.is8k() ? "8K " : "") + "RAW " + rawSize.getWidth() + "×" + rawSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  CinemaDNG " + rawFormatName() + "  " + (rawCompressed() ? "~" : "") + rawBytesPerSecond() / 1_000_000 + " MB/s");
     else formatView.setText(resolutionName(videoSize) + "  " + CinemaMath.fpsLabel(fps) + speed + "p  " + codec + "  " + CinemaMath.formatBitrate(targetBitrate()));
     fpsCell.set(CinemaMath.fpsLabel(fps) + speed, false);
     lookCell.set(rawMode ? "RAW" : proresMode ? CinemaMath.LOOKS[lookIndex] : tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
@@ -1588,7 +1785,8 @@ public class CinemaActivity extends Activity {
   private void setAeAuto(boolean auto) {
     if (!auto && !lens.manualSensor) { message("This camera doesn't allow manual exposure."); return; }
     if (!auto && aeAuto) {
-      iso = Math.max(lens.isoRange.getLower(), Math.min(lens.isoRange.getUpper(), liveIso));
+      int hr = logHeadroom(); // still the auto-exposure headroom: the live ISO is the sensor ISO, the EI is 2^hr higher
+      iso = Math.max(lens.isoRange.getLower(), Math.min(lens.isoRange.getUpper(), liveIso)) << hr;
       shutterAngle = CinemaMath.SHUTTER_ANGLES[CinemaMath.nearest(CinemaMath.SHUTTER_ANGLES, CinemaMath.angleForExposure(liveExposure, fps))];
       shutterNs = liveExposure;
     }
@@ -1625,7 +1823,8 @@ public class CinemaActivity extends Activity {
   }
 
   private void isoPanel() {
-    List<Integer> stops = CinemaMath.isoStops(lens.isoRange.getLower(), lens.isoRange.getUpper());
+    int eiShift = cityLogActive() ? CinemaMath.LOG_HEADROOM : 0; // in City Log the dial sets the exposure index
+    List<Integer> stops = CinemaMath.isoStops(lens.isoRange.getLower(), lens.isoRange.getUpper() << eiShift);
     if (aeAuto) {
       double step = lens.evStep.doubleValue();
       panelHeader("EXPOSURE (auto) · ISO " + liveIso, String.format(Locale.US, "EV %+.1f", evIndex * step));
@@ -1637,10 +1836,10 @@ public class CinemaActivity extends Activity {
       addSlider(hi - lo, evIndex - lo, p -> { evIndex = lo + p; applyRepeating(); updatePanelHeader(String.format(Locale.US, "EV %+.1f", evIndex * step)); }, hi > lo);
       return;
     }
-    panelHeader("ISO", String.valueOf(iso));
+    panelHeader(eiShift > 0 ? "EXPOSURE INDEX (City Log · sensor ISO " + Math.max(lens.isoRange.getLower(), iso >> logHeadroom()) + ")" : "ISO", String.valueOf(iso));
     LinearLayout c = chips();
     addChip(c, "AUTO", false, () -> setAeAuto(true));
-    for (int v : new int[] {100, 200, 400, 800, 1600, 3200}) if (v >= lens.isoRange.getLower() && v <= lens.isoRange.getUpper()) addChip(c, String.valueOf(v), iso == v, () -> { iso = v; applyRepeating(); refreshUi(); });
+    for (int v : new int[] {100, 200, 400, 800, 1600, 3200}) if (v >= lens.isoRange.getLower() && v <= lens.isoRange.getUpper() << eiShift) addChip(c, String.valueOf(v), iso == v, () -> { iso = v; applyRepeating(); refreshUi(); });
     addSlider(stops.size() - 1, CinemaMath.nearest(stops, iso), p -> { iso = stops.get(p); applyRepeating(); updatePanelHeader(String.valueOf(iso)); isoCell.set(String.valueOf(iso), false); }, true);
   }
 
@@ -1726,7 +1925,8 @@ public class CinemaActivity extends Activity {
 
   private void lookPanel() {
     boolean curves = lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
-    panelHeader("LOOK", rawMode ? CinemaMath.LOOKS[lookIndex] + " · monitoring only: RAW frames are recorded ungraded" : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curves ? "" : "  · this camera doesn't allow custom tone curves"));
+    panelHeader("LOOK", rawMode ? CinemaMath.LOOKS[lookIndex] + " · monitoring only: RAW frames are recorded ungraded"
+        : cityLogActive() ? "City Log · sensor exposed " + logHeadroom() + " stops under the EI for highlight range · grade with the City Log LUT (Menu)" : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curves ? "" : "  · this camera doesn't allow custom tone curves"));
     LinearLayout c = chips();
     for (int i = 0; i < CinemaMath.LOOKS.length; i++) { final int k = i; addChip(c, CinemaMath.LOOKS[i], lookIndex == i, () -> { lookIndex = k; applyRepeating(); refreshUi(); }); }
     LinearLayout d = chips();
@@ -1786,8 +1986,8 @@ public class CinemaActivity extends Activity {
       return;
     }
     if (rawMode) {
-      for (Size s : rawSizesForRate()) addChip(r, "RAW " + s.getWidth() + "×" + s.getHeight(), s.equals(rawSize), () -> { if (recording) return; rawSize = s; reopen(); });
-      addChip(r, rawPack12 ? "12-bit" : "16-bit", false, this::chooseRawOptions);
+      for (RawOption o : rawOptions()) addChip(r, o.label + " ≤" + CinemaMath.fpsLabel(Math.floor(maxFps(o))) + "fps", o.key.equals(rawKey), () -> { if (recording) return; rawKey = o.key; reopen(); });
+      addChip(r, rawFormatName(), false, this::chooseRawOptions);
       return;
     }
     for (Size s : videoSizes()) addChip(r, resolutionName(s) + (resolutionName(s).contains("×") ? "" : " " + s.getWidth() + "×" + s.getHeight()), s.equals(videoSize), () -> { if (recording) return; videoSize = s; reopen(); });
@@ -1802,7 +2002,7 @@ public class CinemaActivity extends Activity {
     String[] items = {
       "Recording: " + (rawMode ? "CinemaDNG RAW" : proresMode ? ProRes.NAMES[proresProfile] : "MP4 (H.264 / HEVC)"),
       proresMode ? "ProRes: " + ProRes.NAMES[proresProfile] + " · " + proresSize.getWidth() + "×" + proresSize.getHeight() + " · " + CinemaMath.formatBitrate(ProRes.bitrate(proresSize.getWidth(), proresSize.getHeight(), fps, proresProfile)) :
-      "RAW: " + (rawSize != null ? rawSize.getWidth() + "×" + rawSize.getHeight() : "–") + " · " + (rawPack12 && lens.whiteLevel <= 4095 ? "12-bit packed" : "16-bit") + " · " + rawBytesPerSecond() / 1_000_000 + " MB/s",
+      "RAW: " + (rawOpt != null ? rawOpt.label : rawSize != null ? rawSize.getWidth() + "×" + rawSize.getHeight() : "–") + " · " + rawFormatName() + " · " + rawBytesPerSecond() / 1_000_000 + " MB/s",
       "Codec: " + (tenBit ? "HEVC 10-bit" : hevc ? "HEVC (H.265)" : "H.264"),
       "Dynamic range: " + (tenBit ? "HDR HLG 10-bit BT.2020" : "SDR 8-bit BT.709") + (hlgPossible ? "" : " (10-bit not supported here)"),
       "Quality: " + CinemaMath.QUALITY[quality] + " · " + CinemaMath.formatBitrate(targetBitrate()),
@@ -1817,6 +2017,7 @@ public class CinemaActivity extends Activity {
       "Anamorphic desqueeze: " + CinemaMath.DESQUEEZE_NAMES[prefs.getInt("desqueeze", 0)],
       "Center marker: " + (scopes.center ? "On" : "Off"),
       "Lens: " + lens.label,
+      "Export City Log LUTs (.cube)",
       "ProRes speed test (can this phone record 4K ProRes?)",
       "About this camera",
     };
@@ -1863,7 +2064,8 @@ public class CinemaActivity extends Activity {
       case 11: choose("Anamorphic desqueeze (preview only)", CinemaMath.DESQUEEZE_NAMES, prefs.getInt("desqueeze", 0), i -> { prefs.edit().putInt("desqueeze", i).apply(); layoutPreview(); }); break;
       case 12: scopes.center = !scopes.center; savePrefs(); scopes.invalidate(); break;
       case 13: chooseLens(); break;
-      case 14: proresSpeedTest(); break;
+      case 14: exportLuts(); break;
+      case 15: proresSpeedTest(); break;
       default: about(); break;
     }
   }
@@ -1901,7 +2103,8 @@ public class CinemaActivity extends Activity {
         + "\nZoom " + lens.minZoom + "–" + lens.maxZoom + "x · min focus " + (lens.minFocus > 0 ? focusLabel(lens.minFocus) : "fixed")
         + "\nHEVC encoder: " + h.name + " · max " + CinemaMath.formatBitrate(h.maxBitrate) + " · Main10 " + yes(h.main10)
         + "\nH.264 encoder: " + a.name + " · max " + CinemaMath.formatBitrate(a.maxBitrate)
-        + "\nProRes 422: " + (ProRes.AVAILABLE ? "yes (software encoder, " + Runtime.getRuntime().availableProcessors() + " cores)" : "not in this build") + "\nRAW (CinemaDNG): " + (lens.raw ? "yes, " + lens.rawSizes[0].getWidth() + "×" + lens.rawSizes[0].getHeight() + ", white level " + lens.whiteLevel + ", " + new String[] {"RGGB", "GRBG", "GBRG", "BGGR"}[lens.cfa] : "no")
+        + "\nProRes 422: " + (ProRes.AVAILABLE ? "yes (software encoder, " + Runtime.getRuntime().availableProcessors() + " cores)" : "not in this build") + "\n8K RAW: " + (lens.maxRes ? "maximum-resolution mode " + lens.maxResRawSizes[0].getWidth() + "×" + lens.maxResRawSizes[0].getHeight() + (lens.binning == 2 ? " (quad Bayer, remosaiced)" : "") : lens.raw && lens.rawSizes[0].getWidth() >= 7680 ? "8K crop of the full-size RAW" : "not on this lens")
+        + "\nRAW (CinemaDNG): " + (lens.raw ? "yes, " + lens.rawSizes[0].getWidth() + "×" + lens.rawSizes[0].getHeight() + ", white level " + lens.whiteLevel + ", " + new String[] {"RGGB", "GRBG", "GBRG", "BGGR"}[lens.cfa] : "no")
         + "\n\nClips: Movies/City Cinema · WAV: Music/City Cinema · metadata: Documents/City Cinema"
         + "\nRAW clips: " + rawRoot().getPath() + " (one folder of DNG frames + WAV + JSON per clip; copy them off over USB. They are removed if the app is uninstalled.)"
         + "\nVolume keys start and stop recording. Tap the picture to set the focus/exposure point; double-tap to clear it. Tap the timecode to reset it.";
@@ -1934,7 +2137,7 @@ public class CinemaActivity extends Activity {
     stabilization = p.getInt("stab", 1); antibanding = p.getInt("antibanding", 0); reel = p.getInt("reel", 1); clip = p.getInt("clip", 1);
     cameraLetter = (char) p.getInt("camLetter", 'A'); wavOn = p.getBoolean("wav", true); audioOn = p.getBoolean("audio", true);
     audioSource = p.getString("audioSource", "Camcorder"); audioDeviceId = p.getInt("audioDevice", 0);
-    rawMode = p.getBoolean("rawMode", false); rawPack12 = p.getBoolean("raw12", true);
+    rawMode = p.getBoolean("rawMode", false); rawPack12 = p.getBoolean("raw12", true); rawCompress = p.getBoolean("rawLossless", true); rawKey = p.getString("rawKey", "");
     proresMode = p.getBoolean("prores", false) && !rawMode; proresProfile = p.getInt("proresProfile", 3);
     proresSize = new Size(p.getInt("proresW", 1920), p.getInt("proresH", 1080));
     if (p.contains("rawW")) rawSize = new Size(p.getInt("rawW", 0), p.getInt("rawH", 0));
@@ -1960,7 +2163,7 @@ public class CinemaActivity extends Activity {
         .putBoolean("audio", audioOn).putString("audioSource", audioSource).putInt("audioDevice", audioDeviceId).putBoolean("angle", shutterAsAngle)
         .putBoolean("tod", todTimecode).putLong("rr", recordRunBase).putBoolean("aeAuto", aeAuto).putInt("iso", iso).putFloat("shutterAngle", (float) shutterAngle)
         .putLong("shutterNs", shutterNs).putBoolean("awbAuto", awbAuto).putInt("kelvin", kelvin).putInt("tint", tint).putBoolean("mf", manualFocus)
-        .putFloat("focus", focus).putFloat("zoom", zoom).putBoolean("rawMode", rawMode).putBoolean("raw12", rawPack12)
+        .putFloat("focus", focus).putFloat("zoom", zoom).putBoolean("rawMode", rawMode).putBoolean("raw12", rawPack12).putBoolean("rawLossless", rawCompress).putString("rawKey", rawKey)
         .putBoolean("prores", proresMode).putInt("proresProfile", proresProfile).putInt("proresW", proresSize.getWidth()).putInt("proresH", proresSize.getHeight())
         .putInt("rawW", rawSize == null ? 0 : rawSize.getWidth()).putInt("rawH", rawSize == null ? 0 : rawSize.getHeight())
         .putBoolean("zebra", scopes.zebra).putBoolean("peak", scopes.peaking).putInt("scope", scopes.scopeMode).putInt("guide", scopes.guide)
