@@ -18,7 +18,17 @@ typedef struct {
   int profile;
   int bits_per_mb;  /* 0 = the profile's target */
   int color_primaries, transfer, matrix; /* ISO/IEC 23091-2 codes, e.g. 1 = BT.709, 6 = BT.601 */
+  /* Optional per-slice quantiser memory (one byte per slice, start with zeros). Each encoding thread keeps its
+   * own: the previous frame's choice is used as the starting point, which saves most of the search. */
+  uint8_t *q_hint;
+  int q_hint_slices;
 } prores_params;
+
+/* Number of slices in a frame (the size of a q_hint array). */
+int prores_slices(int width, int height);
+
+/* 1 if this build uses the NEON code paths. */
+int prores_uses_neon(void);
 
 typedef struct { float average_q; int slices, overflow_slices; } prores_stats;
 

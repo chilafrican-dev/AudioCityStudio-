@@ -38,10 +38,11 @@ jobs:
           java -cp "build/test/tests:build/test/classes:$ANDROID_SDK_ROOT/platforms/android-35/android.jar" ug.audiocity.cinema.CinemaTests /tmp/dng
           /tmp/venv/bin/python -I tools/verify_dng.py /tmp/dng
 
-      - name: Verify the ProRes encoder and .mov writer with FFmpeg
+      - name: Verify the ProRes encoder (.mov, FFmpeg decode, NEON bit-exactness on emulated ARM64)
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
-          ./tools/prores-check.sh "$(command -v ffmpeg)" /tmp/venv/bin/python 1920 1080 12
+          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg qemu-user gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/26.3.11579264" ./tools/prores-check.sh "$(command -v ffmpeg)" /tmp/venv/bin/python 1920 1080 12
+          ./tools/prores-check.sh "$(command -v ffmpeg)" /tmp/venv/bin/python 3840 2160 3 | tail -n 8
 
       - name: Restore the signing key (from the CINEMA_KEYSTORE_BASE64 secret)
         env:
@@ -55,9 +56,7 @@ jobs:
           fi
 
       - name: Build and sign the APK (with the native ProRes encoder)
-        env:
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
-        run: ./build.sh
+        run: ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/26.3.11579264" ./build.sh
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

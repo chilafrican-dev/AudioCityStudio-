@@ -33,7 +33,7 @@ final class ProResRecorder implements ImageReader.OnImageAvailableListener, Cine
   private final HandlerThread thread;
   private final ArrayBlockingQueue<ByteBuffer[]> free;
   private final int poolSize, encoders;
-  private final ThreadLocal<ByteBuffer> output = new ThreadLocal<>();
+  private final ThreadLocal<ByteBuffer> output = new ThreadLocal<>(), hints = new ThreadLocal<>();
   private ExecutorService pool;
   private volatile boolean recording;
   private MovWriter mov;
@@ -52,14 +52,58 @@ final class ProResRecorder implements ImageReader.OnImageAvailableListener, Cine
     thread = new HandlerThread("cinema-yuv"); thread.start();
     reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 4);
     reader.setOnImageAvailableListener(this, new Handler(thread.getLooper()));
-    int cores = Runtime.getRuntime().availableProcessors();
-    encoders = Math.max(2, Math.min(8, cores - 1));
     long frameBytes = (long) width * height * 3 / 2;
+    encoders = threadsFor(width, height);
     long budget = (long) (Runtime.getRuntime().maxMemory() * 0.25);
     poolSize = (int) Math.max(encoders + 1, Math.min(encoders * 2 + 2, budget / Math.max(1, frameBytes)));
     free = new ArrayBlockingQueue<>(poolSize);
     for (int i = 0; i < poolSize; i++)
       free.add(new ByteBuffer[] {ByteBuffer.allocateDirect(width * height), ByteBuffer.allocateDirect(cw * ch), ByteBuffer.allocateDirect(cw * ch)});
+  }
+
+  /**
+   * Encoder threads: one per core except one (left for the camera, audio and UI), at most 8, and no more than the
+   * memory allows: each thread holds an output buffer and keeps about two input frames in flight (~37 MB at 4K).
+   */
+  static int threadsFor(int width, int height) {
+    int cores = Runtime.getRuntime().availableProcessors();
+    long perThread = ProRes.outputCapacity(width, height) + 2L * width * height * 3 / 2;
+    long budget = (long) (Runtime.getRuntime().maxMemory() * 0.45);
+    return (int) Math.max(2, Math.min(Math.min(8, cores - 1), budget / Math.max(1, perThread)));
+  }
+
+  /**
+   * Measures real-time capability: encodes frames of a camera-like test picture on all encoder threads for about
+   * `millis` and returns the sustained frame rate. Run it before shooting to see whether e.g. 4K HQ keeps up.
+   */
+  static double benchmark(int width, int height, int profile, long millis) throws InterruptedException {
+    int threads = threadsFor(width, height), cw = (width + 1) / 2, ch = (height + 1) / 2;
+    ByteBuffer y = ByteBuffer.allocateDirect(width * height), u = ByteBuffer.allocateDirect(cw * ch), v = ByteBuffer.allocateDirect(cw * ch);
+    java.util.Random r = new java.util.Random(7);
+    for (int j = 0; j < height; j++) for (int i = 0; i < width; i++) {
+      int val = 30 + i * 140 / width + j * 50 / height + ((i / 97 + j / 61) % 7 == 0 ? 40 : 0) + r.nextInt(3) - 1;
+      y.put(j * width + i, (byte) val);
+    }
+    for (int i = 0; i < cw * ch; i++) { u.put(i, (byte) (100 + (i % cw) * 50 / cw)); v.put(i, (byte) (140 - (i / cw) * 30 / ch)); }
+    final AtomicLong frames = new AtomicLong();
+    final long end = System.nanoTime() + millis * 1_000_000L;
+    Thread[] workers = new Thread[threads];
+    for (int t = 0; t < threads; t++) {
+      workers[t] = new Thread(() -> {
+        ByteBuffer out = ByteBuffer.allocateDirect(ProRes.outputCapacity(width, height));
+        ByteBuffer hint = ByteBuffer.allocateDirect(ProRes.nativeSlices(width, height));
+        float[] stats = new float[2];
+        while (System.nanoTime() < end) {
+          if (ProRes.nativeEncode(y, width, u, v, cw, width, height, profile, 1, 1, 6, out, stats, hint) > 0) frames.incrementAndGet();
+          out.clear();
+        }
+      }, "prores-bench");
+      workers[t].setPriority(Thread.MAX_PRIORITY - 1);
+    }
+    long start = System.nanoTime();
+    for (Thread w : workers) w.start();
+    for (Thread w : workers) w.join();
+    return frames.get() / ((System.nanoTime() - start) / 1e9);
   }
 
   Surface surface() { return reader.getSurface(); }
@@ -155,9 +199,15 @@ final class ProResRecorder implements ImageReader.OnImageAvailableListener, Cine
     try {
       ByteBuffer out = output.get();
       if (out == null) { out = ByteBuffer.allocateDirect(ProRes.outputCapacity(width, height)); output.set(out); }
+      ByteBuffer hint = hints.get();
+      if (hint == null) { hint = ByteBuffer.allocateDirect(ProRes.nativeSlices(width, height)); hints.set(hint); }
       float[] stats = new float[2];
       long t0 = System.nanoTime();
-      long n = ProRes.nativeEncode(in[0], width, in[1], in[2], cw, width, height, profile, primaries, transfer, matrix, out, stats);
+      long n = ProRes.nativeEncode(in[0], width, in[1], in[2], cw, width, height, profile, primaries, transfer, matrix, out, stats, hint);
+      if (n == -2) { // a pathological frame overflowed the normal buffer: retry once with the worst-case size
+        out = ByteBuffer.allocateDirect(ProRes.worstCaseCapacity(width, height)); output.set(out);
+        n = ProRes.nativeEncode(in[0], width, in[1], in[2], cw, width, height, profile, primaries, transfer, matrix, out, stats, hint);
+      }
       encodeNanos.addAndGet(System.nanoTime() - t0);
       if (n > 0) {
         frame = new byte[(int) n];

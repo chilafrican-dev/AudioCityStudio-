@@ -31,10 +31,11 @@ public class ProResHostTest {
         MovWriter mov = new MovWriter(chn, c);
         long bytes = 0, nanos = 0;
         float[] stats = new float[2];
+        ByteBuffer hint = ByteBuffer.allocateDirect(ProRes.nativeSlices(w, h));
         for (int i = 0; i < frames; i++) {
           fill(y, u, v, w, h, i);
           long t0 = System.nanoTime();
-          long n = ProRes.nativeEncode(y, w, u, v, cw, w, h, profile, 1, 1, 6, out, stats);
+          long n = ProRes.nativeEncode(y, w, u, v, cw, w, h, profile, 1, 1, 6, out, stats, hint);
           nanos += System.nanoTime() - t0;
           if (n <= 0) throw new IllegalStateException("encode failed " + n);
           out.position(0).limit((int) n);

@@ -1052,6 +1052,32 @@ public class CinemaActivity extends Activity {
     ui.post(() -> { scopes.invalidate(); refreshUi(); });
   }
 
+  /** Encodes test frames on all encoder threads and reports which ProRes formats this phone sustains in real time. */
+  private void proresSpeedTest() {
+    if (recording) { message("Stop recording first."); return; }
+    if (!ProRes.AVAILABLE) { message("This build has no ProRes encoder."); return; }
+    final AlertDialog dialog = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("ProRes speed test")
+        .setMessage("Encoding test frames on " + ProResRecorder.threadsFor(3840, 2160) + " threads (" + (ProRes.nativeUsesNeon() ? "NEON" : "scalar") + ")…\nThis takes about 15 seconds; the phone will get warm.")
+        .setCancelable(false).show();
+    new Thread(() -> {
+      StringBuilder out = new StringBuilder();
+      int[][] sizes = {{3840, 2160}, {2560, 1440}, {1920, 1080}};
+      try {
+        for (int[] sz : sizes) for (int profile : new int[] {3, 1}) {
+          double f = ProResRecorder.benchmark(sz[0], sz[1], profile, 2500);
+          String verdict = f >= 31 ? "real time up to 30 fps" : f >= 25.5 ? "real time up to 25 fps" : f >= 24.5 ? "real time at 24 fps" : "too slow for real time (frames will be filled)";
+          out.append(String.format(Locale.US, "%s %s: %.0f fps · %s%n", sz[0] >= 3840 ? "4K" : sz[1] + "p", ProRes.NAMES[profile], f, verdict));
+        }
+        out.append("\nThreads: ").append(ProResRecorder.threadsFor(3840, 2160)).append(" at 4K, ").append(ProResRecorder.threadsFor(1920, 1080)).append(" at 1080p · ")
+            .append(ProRes.nativeUsesNeon() ? "NEON" : "scalar").append(" encoder.\nSustained recording runs warmer than this short test: leave ~20% headroom. Watch ENC while recording.");
+      } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+      ui.post(() -> {
+        dialog.dismiss();
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("ProRes speed test").setMessage(out.toString()).setPositiveButton("OK", null).show();
+      });
+    }, "prores-speed-test").start();
+  }
+
   private void writeProResSidecar(long slots, long encodedFrames, long drops, long errors, long durationNs) {
     try {
       JSONObject j = new JSONObject();
@@ -1791,6 +1817,7 @@ public class CinemaActivity extends Activity {
       "Anamorphic desqueeze: " + CinemaMath.DESQUEEZE_NAMES[prefs.getInt("desqueeze", 0)],
       "Center marker: " + (scopes.center ? "On" : "Off"),
       "Lens: " + lens.label,
+      "ProRes speed test (can this phone record 4K ProRes?)",
       "About this camera",
     };
     new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("City Cinema · Menu").setItems(items, (d, which) -> onSetting(which, hlgPossible)).show();
@@ -1836,6 +1863,7 @@ public class CinemaActivity extends Activity {
       case 11: choose("Anamorphic desqueeze (preview only)", CinemaMath.DESQUEEZE_NAMES, prefs.getInt("desqueeze", 0), i -> { prefs.edit().putInt("desqueeze", i).apply(); layoutPreview(); }); break;
       case 12: scopes.center = !scopes.center; savePrefs(); scopes.invalidate(); break;
       case 13: chooseLens(); break;
+      case 14: proresSpeedTest(); break;
       default: about(); break;
     }
   }

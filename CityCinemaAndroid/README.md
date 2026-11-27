@@ -1,4 +1,4 @@
-# City Cinema 1.2
+# City Cinema 1.3
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -55,7 +55,16 @@ no third-party libraries.
   - an optional 32-bit float WAV, plus a JSON sidecar
 - If the encoders can't keep up, the next frame fills the missing frame numbers: it is stored once and referenced again, so the file stays constant frame rate and in sync. `ENC xx fps · BUF` on screen shows encoder speed and backlog.
 - The source is the camera's 8-bit YUV (BT.709 primaries, BT.601 matrix, as flagged in the file), mapped to 10-bit legal range. Looks such as AC Log are baked in, as on a camera.
-- **Speed:** on a desktop core the encoder does about 18–24 fps at 1080p and about 4–6 fps at 4K. A modern phone running 4–7 encoder threads should manage 1080p and 1440p in real time. **4K ProRes will usually drop frames on phones.** Watch `ENC`.
+- **4K and NEON.** The encoder is all integer arithmetic, with NEON (ARM SIMD) versions of the hot paths:
+  - a butterfly 8×8 DCT run 8 rows at a time
+  - vectorised quantisation in coding order
+  - 8→10-bit mapping and chroma interpolation
+  - zero-run skipping with non-zero masks
+
+  It also skips most of the per-slice quantiser search by starting from the quantiser that slice used in the previous frame (about 1.1 tries per slice). One encoder thread runs per core except one (up to 8), sized to fit the phone's memory at 4K. Sizes run from 720p to 4K UHD/DCI, wherever the camera offers YUV output at that size.
+- **NEON output is bit-identical** to the scalar reference. In CI, the NEON build made with the NDK compiler that ships in the APK, plus GCC NEON and scalar ARM builds, run under emulated ARM64. They must produce the same bytes as the reference encoder, whose output FFmpeg decodes and checks.
+- **Menu → ProRes speed test** encodes 4K, 1440p and 1080p test frames (HQ and LT) on all encoder threads. It tells you which frame rates your phone holds in real time, so you know before you shoot whether 4K ProRes will drop frames.
+- **Speed (measured on one x86 desktop core):** HQ takes about 35–45 ms per 1080p frame and about 145 ms per 4K frame. A phone multiplies that by its encoder threads. Recent flagships should hold 4K HQ at 24/25 fps and 4K LT at 30. Mid-range phones are better at 1440p or 1080p. Long takes heat the phone and can throttle it, so leave headroom and watch `ENC` while recording. These are estimates: run the speed test on your phone.
 - *ProRes is a trademark of Apple Inc. This is an independent implementation of the published bitstream; it is not an Apple-licensed or Apple-certified encoder. Check Apple's licensing before distributing the app commercially.*
 
 **RAW video (CinemaDNG)**

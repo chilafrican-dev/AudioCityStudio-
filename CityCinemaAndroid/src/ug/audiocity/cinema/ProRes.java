@@ -19,7 +19,13 @@ final class ProRes {
 
   /** Encodes one 8-bit 4:2:0 frame (direct buffers). Returns the frame size in bytes, or negative on error. */
   static native long nativeEncode(ByteBuffer y, int yStride, ByteBuffer u, ByteBuffer v, int cStride, int width, int height,
-      int profile, int primaries, int transfer, int matrix, ByteBuffer out, float[] stats);
+      int profile, int primaries, int transfer, int matrix, ByteBuffer out, float[] stats, ByteBuffer qHint);
+
+  /** Slices per frame: the size of the per-thread quantiser memory passed as qHint. */
+  static native int nativeSlices(int width, int height);
+
+  /** True when the library was built with the NEON fast paths (ARM). */
+  static native boolean nativeUsesNeon();
 
   static native void nativeCopyPlane(ByteBuffer src, int rowStride, int pixelStride, int width, int height, ByteBuffer dst, int dstStride);
 
@@ -36,9 +42,15 @@ final class ProRes {
     return (long) (mbs * bitsPerMb(profile) * CinemaMath.exactFps(fps));
   }
 
-  /** A practical output buffer: the target size with generous headroom for difficult frames. */
+  /**
+   * Output buffer per encoder thread: about 2.5x the HQ target per macroblock plus headroom (~11 MB at 4K), enough
+   * for all but pathological frames; those get one retry with the worst-case size.
+   */
   static int outputCapacity(int width, int height) {
     long mbs = (long) ((width + 15) / 16) * ((height + 15) / 16);
-    return (int) Math.min(Integer.MAX_VALUE - 8, mbs * 800 + 512 * 1024);
+    return (int) Math.min(Integer.MAX_VALUE - 8, mbs * 300 + 1024 * 1024);
   }
+
+  /** The size that always suffices. */
+  static int worstCaseCapacity(int width, int height) { return (int) Math.min(Integer.MAX_VALUE - 8, nativeMaxFrameBytes(width, height)); }
 }

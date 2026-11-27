@@ -14,8 +14,8 @@ def reference():
     y = raw[:, :W * H].reshape(N, H, W).astype(np.float64)
     u = raw[:, W * H:W * H + cw * ch].reshape(N, ch, cw).astype(np.float64)
     v = raw[:, W * H + cw * ch:].reshape(N, ch, cw).astype(np.float64)
-    y10 = np.rint(64 + y * 876 / 255)
-    c10 = lambda c: np.clip(np.rint(512 + (c - 128) * 896 / 255), 64, 960)
+    y10 = np.floor((y * 225135 + 64 * 65536 + 32768) / 65536)           # the encoder's 16.16 fixed-point mapping
+    c10 = lambda c: np.clip(np.floor(((c - 128) * 230277 + 512 * 65536 + 32768) / 65536), 64, 960)
     def up(c):  # 4:2:0 -> 4:2:2, exactly as the encoder: 3/4 nearest row + 1/4 next nearest
         c = c10(c)
         rows = np.arange(H)
