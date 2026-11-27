@@ -879,4 +879,61 @@ final class CinemaMath {
     for (int i = 1; i < values.size(); i++) if (Math.abs(values.get(i) - target) < Math.abs(values.get(best) - target)) best = i;
     return best;
   }
+
+  // ---------------------------------------------------------------- vectorscope
+
+  /**
+   * Vectorscope position of an 8-bit RGB colour: BT.709 Cb right, Cr up, scaled so +-0.5 reaches the edge of a
+   * size x size image (75% bars land at their usual targets). Returns {x, y} pixel coordinates.
+   */
+  static int[] vectorPoint(int r, int g, int b, int size) {
+    double R = r / 255.0, G = g / 255.0, B = b / 255.0;
+    double y = 0.2126 * R + 0.7152 * G + 0.0722 * B;
+    double cb = (B - y) / 1.8556, cr = (R - y) / 1.5748;
+    int x = (int) Math.round((cb + 0.5) * (size - 1)), yy = (int) Math.round((0.5 - cr) * (size - 1));
+    return new int[] {Math.max(0, Math.min(size - 1, x)), Math.max(0, Math.min(size - 1, yy))};
+  }
+
+  /** Density image (counts) of a frame on the vectorscope. */
+  static int[] vectorscope(int[] argb, int size, int step) {
+    int[] counts = new int[size * size];
+    for (int i = 0; i < argb.length; i += step) {
+      int p = argb[i];
+      int[] v = vectorPoint((p >> 16) & 255, (p >> 8) & 255, p & 255, size);
+      counts[v[1] * size + v[0]]++;
+    }
+    return counts;
+  }
+
+  // ---------------------------------------------------------------- audio limiter
+
+  /**
+   * Linked stereo peak limiter: instant attack (no sample ever passes the ceiling), smooth release, so loud peaks
+   * are held just under full scale instead of clipping. Used on the recording path when LIMITER is on.
+   */
+  static final class Limiter {
+    final float ceiling;
+    private final float release;
+    private float gain = 1;
+    float reductionDb; // current gain reduction, for the meter
+
+    /** ceilingDb e.g. -1; releaseMs e.g. 150 at the given sample rate. */
+    Limiter(double ceilingDb, double releaseMs, int rate) {
+      ceiling = (float) dbToGain(ceilingDb);
+      release = (float) (1 - Math.exp(-1 / (releaseMs / 1000.0 * rate)));
+    }
+
+    /** Processes n interleaved samples (channels 1 or 2) in place. */
+    void process(float[] f, int n, int channels) {
+      for (int i = 0; i + channels <= n; i += channels) {
+        float peak = Math.abs(f[i]);
+        if (channels == 2) peak = Math.max(peak, Math.abs(f[i + 1]));
+        float target = peak > ceiling ? ceiling / peak : 1; // the most gain this sample allows
+        if (target < gain) gain = target;                   // attack: at once
+        else gain += (target - gain) * release;             // release: smoothly, never above what's allowed
+        for (int c = 0; c < channels; c++) f[i + c] *= gain;
+      }
+      reductionDb = (float) (20 * Math.log10(Math.max(1e-6, gain)));
+    }
+  }
 }

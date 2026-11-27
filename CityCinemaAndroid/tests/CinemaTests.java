@@ -20,6 +20,7 @@ public class CinemaTests {
   }
 
   public static void main(String[] args) throws IOException {
+    vectorAndLimiterTests();
     cinemaAeTests();
     nameAndHighlightTests();
     ccmTests();
@@ -468,6 +469,36 @@ public class CinemaTests {
       double[] o = CinemaMath.logToRec709(look, clip, clip - 0.03, clip); // a pink speckle at the clip point
       near(o[1], o[0], 1e-9, look + ": no pink in clipped highlights");
     }
+  }
+
+  static void vectorAndLimiterTests() {
+    int[] grey = CinemaMath.vectorPoint(128, 128, 128, 129);
+    check(grey[0] == 64 && grey[1] == 64, "grey sits in the centre of the vectorscope");
+    int[] red = CinemaMath.vectorPoint(191, 0, 0, 129), blue = CinemaMath.vectorPoint(0, 0, 191, 129), yellow = CinemaMath.vectorPoint(191, 191, 0, 129);
+    check(red[0] < 64 && red[1] < 64, "red is up and left");
+    check(blue[0] > 100 && blue[1] > 50, "blue is right");
+    check(yellow[0] < 20 && Math.abs(yellow[1] - 64) < 10, "yellow is far left, near the horizontal (standard ~167 degrees)");
+    int[] skin = CinemaMath.vectorPoint(200, 150, 120, 129);
+    check(skin[0] < 64 && skin[1] < 64, "skin is between red and yellow, up-left");
+    int[] counts = CinemaMath.vectorscope(new int[] {0xff808080, 0xff808080, 0xffbf0000}, 129, 1);
+    check(counts[64 * 129 + 64] == 2 && counts[red[1] * 129 + red[0]] == 1, "vectorscope counts");
+    // limiter: a loud burst never passes -1 dBFS, quiet sound is untouched, gain recovers afterwards
+    CinemaMath.Limiter lim = new CinemaMath.Limiter(-1, 150, 48_000);
+    float ceil = (float) CinemaMath.dbToGain(-1);
+    float[] quiet = new float[960];
+    for (int i = 0; i < quiet.length; i++) quiet[i] = 0.3f * (float) Math.sin(i * 0.05);
+    float[] q = quiet.clone(); lim.process(q, q.length, 2);
+    for (int i = 0; i < q.length; i++) near(q[i], quiet[i], 1e-6, "quiet sound untouched");
+    float[] loud = new float[4800];
+    for (int i = 0; i < loud.length; i++) loud[i] = 2.5f * (float) Math.sin(i * 0.05);
+    lim.process(loud, loud.length, 2);
+    float max = 0; for (float v : loud) max = Math.max(max, Math.abs(v));
+    check(max <= ceil + 1e-6, "limiter holds peaks under -1 dBFS: " + max);
+    check(lim.reductionDb < -6, "limiter reports gain reduction");
+    float[] after = new float[192_000]; // 2 s of stereo
+    for (int i = 0; i < after.length; i++) after[i] = 0.3f * (float) Math.sin(i * 0.05);
+    lim.process(after, after.length, 2);
+    check(lim.reductionDb > -0.1, "gain recovers after the burst: " + lim.reductionDb);
   }
 
   static void cinemaAeTests() {

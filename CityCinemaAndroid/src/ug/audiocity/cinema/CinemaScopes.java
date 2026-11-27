@@ -18,7 +18,7 @@ import android.view.View;
 class CinemaScopes extends View {
   // ------------------------------------------------------------------ settings (set from the UI thread)
   boolean zebra, peaking, falseColor, grid = true, center, level = true;
-  int scopeMode = 1; // 0 off, 1 histogram, 2 waveform, 3 RGB parade
+  int scopeMode = 1; // 0 off, 1 histogram, 2 waveform, 3 RGB parade, 4 vectorscope
   int zebraIre = 95, peakColor = 0xffff3b30, guide = 0;
   /** In the log modes: the 8-bit code where the phone clips (e.g. ~191 for S-Log3 with 2 stops of headroom), so
    * zebras, false colour and the clip warning mark real clipping. 0 = normal video (clip at 255). */
@@ -69,7 +69,7 @@ class CinemaScopes extends View {
     }
     boolean wantMask = zebra || peaking || falseColor;
     if (wantMask) buildMask(w, h);
-    int[] scopePixels = scopeMode >= 2 ? buildScope(w, h, scopeMode == 3) : null;
+    int[] scopePixels = scopeMode == 4 ? buildVector(n) : scopeMode >= 2 ? buildScope(w, h, scopeMode == 3) : null;
     synchronized (lock) {
       System.arraycopy(hr, 0, histR, 0, 64); System.arraycopy(hg, 0, histG, 0, 64); System.arraycopy(hb, 0, histB, 0, 64); System.arraycopy(hl, 0, histL, 0, 64);
       clippedPercent = 100f * clipped / n; crushedPercent = 100f * crushed / n;
@@ -79,8 +79,9 @@ class CinemaScopes extends View {
         Bitmap t = mask; mask = maskBack; maskBack = t;
       } else mask = null;
       if (scopePixels != null) {
-        if (scopeBack == null) scopeBack = Bitmap.createBitmap(SCOPE_W, SCOPE_H, Bitmap.Config.ARGB_8888);
-        scopeBack.setPixels(scopePixels, 0, SCOPE_W, 0, 0, SCOPE_W, SCOPE_H);
+        int sw = scopeMode == 4 ? VEC : SCOPE_W, sh = scopeMode == 4 ? VEC : SCOPE_H;
+        if (scopeBack == null || scopeBack.getWidth() != sw) scopeBack = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888);
+        scopeBack.setPixels(scopePixels, 0, sw, 0, 0, sw, sh);
         Bitmap t = scope; scope = scopeBack; scopeBack = t;
       } else scope = null;
     }
@@ -113,6 +114,32 @@ class CinemaScopes extends View {
         maskPixels[i] = out;
       }
     }
+  }
+
+  static final int VEC = 128;
+
+  /** Vectorscope of the real frame: colour density by hue (angle) and saturation (distance from the centre). */
+  private int[] buildVector(int n) {
+    int step = Math.max(1, n / 40000);
+    int[] counts = CinemaMath.vectorscope(pixels, VEC, step);
+    int[] img = new int[VEC * VEC];
+    float scale = 255f / Math.max(1, (float) Math.log1p(n / (float) step / (VEC * 2f)));
+    for (int i = 0; i < img.length; i++) {
+      int c = counts[i];
+      if (c == 0) continue;
+      int x = i % VEC, y = i / VEC;
+      int p = pixelColourAt(x, y);
+      img[i] = (Math.min(255, 70 + (int) (Math.log1p(c) * scale)) << 24) | p;
+    }
+    return img;
+  }
+
+  /** The hue a vectorscope position stands for (for colouring the trace), at full brightness. */
+  private static int pixelColourAt(int x, int y) {
+    double cb = x / (double) (VEC - 1) - 0.5, cr = 0.5 - y / (double) (VEC - 1);
+    double yy = 0.6, r = yy + 1.5748 * cr, b = yy + 1.8556 * cb, g = (yy - 0.2126 * r - 0.0722 * b) / 0.7152;
+    int R = (int) Math.max(60, Math.min(255, r * 255)), G = (int) Math.max(60, Math.min(255, g * 255)), B = (int) Math.max(60, Math.min(255, b * 255));
+    return (R << 16) | (G << 8) | B;
   }
 
   private int[] buildScope(int w, int h, boolean parade) {
@@ -209,7 +236,7 @@ class CinemaScopes extends View {
 
   private void drawScope(Canvas c) {
     if (scopeMode == 0) return;
-    float w = 150 * density, h = 64 * density, pad = 8 * density;
+    float w = (scopeMode == 4 ? 96 : 150) * density, h = (scopeMode == 4 ? 96 : 64) * density, pad = 8 * density;
     RectF box = new RectF(frame.left + pad, frame.bottom - insetBottom - pad - h, frame.left + pad + w, frame.bottom - insetBottom - pad);
     if (box.top < frame.top + insetTop) box.offsetTo(box.left, frame.top + insetTop + pad);
     paint.setStyle(Paint.Style.FILL); paint.setColor(0xb0101214);
@@ -225,9 +252,39 @@ class CinemaScopes extends View {
         text.setColor(crushedPercent > 1 ? 0xff8fa0ff : 0xb0ffffff);
         if (crushedPercent > 0.2f) c.drawText(String.format(java.util.Locale.US, "crush %.1f%%", crushedPercent), inner.left + 2 * density, inner.top + 10 * density, text);
       } else if (scope != null) c.drawBitmap(scope, null, inner, filtered);
+      if (scopeMode == 4) drawVectorGraticule(c, inner);
+      if (scopeMode != 1) { // clipping warnings on every scope
+        text.setColor(0xffff5a50);
+        if (clippedPercent > 0.2f) c.drawText(String.format(java.util.Locale.US, "clip %.1f%%", clippedPercent), inner.right - 52 * density, inner.top + 10 * density, text);
+        text.setColor(0xff8fa0ff);
+        if (crushedPercent > 0.2f) c.drawText(String.format(java.util.Locale.US, "crush %.1f%%", crushedPercent), inner.left + 2 * density, inner.bottom - 14 * density, text);
+      }
     }
     text.setColor(0x99ffffff);
-    c.drawText(scopeMode == 1 ? "HIST" : scopeMode == 2 ? "WAVE" : "PARADE", box.left + 6 * density, box.bottom - 5 * density, text);
+    c.drawText(scopeMode == 1 ? "HIST" : scopeMode == 2 ? "WAVE" : scopeMode == 3 ? "PARADE" : "VECTOR", box.left + 6 * density, box.bottom - 5 * density, text);
+  }
+
+  /** Rings, 75% colour-bar targets (R, Mg, B, Cy, G, Yl) and the skin-tone line. */
+  private void drawVectorGraticule(Canvas c, RectF r) {
+    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(density * 0.6f); paint.setColor(0x40ffffff);
+    c.drawCircle(r.centerX(), r.centerY(), r.width() / 2, paint);
+    c.drawCircle(r.centerX(), r.centerY(), r.width() / 4, paint);
+    int[][] bars = {{191, 0, 0}, {191, 0, 191}, {0, 0, 191}, {0, 191, 191}, {0, 191, 0}, {191, 191, 0}};
+    String[] names = {"R", "Mg", "B", "Cy", "G", "Yl"};
+    text.setColor(0x99ffffff); float ts = text.getTextSize(); text.setTextSize(8 * density);
+    for (int i = 0; i < bars.length; i++) {
+      int[] v = CinemaMath.vectorPoint(bars[i][0], bars[i][1], bars[i][2], VEC);
+      float x = r.left + r.width() * v[0] / (VEC - 1f), y = r.top + r.height() * v[1] / (VEC - 1f);
+      c.drawRect(x - 3 * density, y - 3 * density, x + 3 * density, y + 3 * density, paint);
+      c.drawText(names[i], x + 4 * density, y - 3 * density, text);
+    }
+    text.setTextSize(ts);
+    // skin tones of every complexion fall along one line between red and yellow
+    int[] s = CinemaMath.vectorPoint(200, 150, 120, VEC);
+    float sx = r.left + r.width() * s[0] / (VEC - 1f) - r.centerX(), sy = r.top + r.height() * s[1] / (VEC - 1f) - r.centerY();
+    float len = (float) Math.hypot(sx, sy), k = r.width() / 2 / Math.max(1e-3f, len);
+    paint.setColor(0x80ffc890);
+    c.drawLine(r.centerX(), r.centerY(), r.centerX() + sx * k, r.centerY() + sy * k, paint);
   }
 
   private void drawHistogram(Canvas c, RectF r, int[] hist, int color) {

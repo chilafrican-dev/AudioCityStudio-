@@ -18,9 +18,9 @@ bit-exactness under qemu, then builds and signs the APK. Kotlin/Gradle migration
 | Looks: City Log, Flat Log, Flat, S-Log3-, Log3G10-, BMD Film Gen 5-style, Film, Vivid, Rec.709; wide-gamut colour matrix from sensor calibration | working; log tagged in file name |
 | H.264 / HEVC 8-bit, HEVC 10-bit HLG, ProRes 422 family (own NEON encoder, MOV), CinemaDNG RAW (lossless JPEG) up to 8K | working where the device supports it |
 | Scopes: zebra, peaking, false colour, histogram, waveform, RGB parade, guides incl. anamorphic, grid, level | working (on the real preview texture) |
-| Vectorscope, desqueeze preview, shadow-clip warning | **missing** |
+| Vectorscope (with 75% targets and skin-tone line), anamorphic desqueeze preview, highlight and shadow clip warnings on every scope | working (vectorscope 3.7.1; desqueeze and warnings existed) |
 | Monitoring LUT (Rec.709 VIEW) | **added in 3.7** (see Phase 2) |
-| Audio: AudioRecord float, input choice, gain, meters, clip indicator, 32-bit WAV sidecar | working; limiter / wind NR / monitoring **missing** |
+| Audio: AudioRecord float, input choice, gain, meters, clip indicator, 32-bit WAV sidecar, optional -1 dBFS peak limiter (3.7.1) | working; wind noise reduction / headphone monitoring **missing** |
 | Recording reliability: no dropped encoded frames, measured camera clock, A/V realign, storage check, thermal label | working |
 | Clips: list, player, viewing LUT, 709 COPY, share, send to editor | working; grid, thumbnails, search, multi-select, rename **missing** |
 | Editor: single video track + titles + one music track; trim, split, move, duplicate, delete, undo; speed (constant); fit/fill/zoom/pan/rotate/flip; log conversion; grade (exposure, contrast, saturation, temp, tint, shadows, highlights, film looks); .cube LUTs (3 packs + import); auto colour; 3 transitions; fades; export MP4 | working |
@@ -34,8 +34,8 @@ already integer microseconds (good); project format is unversioned JSON (add a v
 ## Phase order and status
 
 1. Audit — done (this file).
-2. Camera: Rec.709 VIEW — **done in 3.7** (Android 13+, monitor only). Next: vectorscope, shadow-clip warning,
-   anamorphic desqueeze, audio limiter.
+2. Camera — **done**: Rec.709 VIEW (3.7, Android 13+, monitor only), vectorscope and clip warnings on all scopes,
+   audio limiter (3.7.1). Left for later: wind-noise filter, headphone monitoring.
 3. Timeline engine: tracks (video layers, audio, music, voice-over, titles), gaps, snapping, ripple/roll/slip/slide,
    redo, markers, versioned project format with migration.
 4. GPU compositing: per-layer transform with opacity and blend modes, FP16 intermediates, PiP.

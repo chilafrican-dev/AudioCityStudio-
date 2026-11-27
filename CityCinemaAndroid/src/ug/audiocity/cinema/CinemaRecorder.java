@@ -326,6 +326,9 @@ final class CinemaRecorder {
     int channels = 2;
     boolean floatInput = true;
     volatile float gainDb = 0;
+    /** Peak limiter at -1 dBFS on the recording (off by default: raw sound unless asked). */
+    volatile boolean limiter;
+    private CinemaMath.Limiter lim;
     volatile float peakL, peakR, holdL, holdR;
     volatile boolean clipped;
     private long holdUntilL, holdUntilR;
@@ -438,6 +441,12 @@ final class CinemaRecorder {
         if (record.getTimestamp(ts, base) == AudioRecord.SUCCESS) ptsNs = ts.nanoTime + (chunkStartFrame - ts.framePosition) * CinemaMath.NS / RATE;
         else ptsNs = (realtimeClock ? SystemClock.elapsedRealtimeNanos() : System.nanoTime()) - frames * CinemaMath.NS / RATE;
         float gain = (float) CinemaMath.dbToGain(gainDb);
+        if (limiter) {
+          if (lim == null) lim = new CinemaMath.Limiter(-1, 150, RATE);
+          for (int i = 0; i < n; i++) f[i] *= gain;
+          gain = 1;
+          lim.process(f, n, channels);
+        } else lim = null;
         float pl = 0, pr = 0; boolean clip = false;
         for (int i = 0; i < n; i++) {
           float v = f[i] * gain;

@@ -1669,7 +1669,7 @@ public class CinemaActivity extends Activity {
     if (audioDeviceId != 0) for (AudioDeviceInfo d : ((AudioManager) getSystemService(AUDIO_SERVICE)).getDevices(AudioManager.GET_DEVICES_INPUTS)) if (d.getId() == audioDeviceId) dev = d;
     try { audio.start(CinemaRecorder.sourceFor(audioSource), dev, clockMeasured ? cameraBootClock : lens != null && lens.realtimeClock); }
     catch (SecurityException e) { message("Microphone permission is needed for sound."); }
-    audio.gainDb = prefs.getFloat("gain", 0);
+    audio.gainDb = prefs.getFloat("gain", 0); audio.limiter = prefs.getBoolean("limiter", false);
   }
 
   // ================================================================== periodic UI tick
@@ -1839,7 +1839,7 @@ public class CinemaActivity extends Activity {
     addToggle(togglesGrid, "ZEBRA", () -> scopes.zebra, v -> scopes.zebra = v);
     addToggle(togglesGrid, "PEAK", () -> scopes.peaking, v -> scopes.peaking = v);
     addToggle(togglesGrid, "FALSE", () -> scopes.falseColor, v -> scopes.falseColor = v);
-    addCycle(togglesGrid, () -> new String[] {"SCOPE", "HIST", "WAVE", "PARADE"}[scopes.scopeMode], () -> scopes.scopeMode = (scopes.scopeMode + 1) % 4);
+    addCycle(togglesGrid, () -> new String[] {"SCOPE", "HIST", "WAVE", "PARADE", "VECTOR"}[scopes.scopeMode], () -> scopes.scopeMode = (scopes.scopeMode + 1) % 5);
     addCycle(togglesGrid, () -> scopes.guide == 0 ? "GUIDE" : CinemaMath.GUIDE_NAMES[scopes.guide], () -> scopes.guide = (scopes.guide + 1) % CinemaMath.GUIDE_NAMES.length);
     addToggle(togglesGrid, "GRID", () -> scopes.grid, v -> scopes.grid = v);
     addToggle(togglesGrid, "LEVEL", () -> scopes.level, v -> scopes.level = v);
@@ -2264,6 +2264,11 @@ public class CinemaActivity extends Activity {
     addChip(c, "Device…", false, this::chooseAudioDevice);
     addChip(c, wavOn ? "WAV 32f ON" : "WAV OFF", wavOn, () -> { wavOn = !wavOn; savePrefs(); refreshUi(); });
     addChip(c, "Reset clip", audio.clipped, () -> { audio.clipped = false; refreshUi(); });
+    addChip(c, audio.limiter ? "LIMITER -1 dB ✓" : "LIMITER", audio.limiter, () -> {
+      audio.limiter = !audio.limiter; prefs.edit().putBoolean("limiter", audio.limiter).apply();
+      message(audio.limiter ? "Limiter on: peaks are held under -1 dBFS instead of clipping." : "Limiter off: raw sound.");
+      refreshUi(); audioPanel();
+    });
     addSlider(36, Math.round(audio.gainDb) + 12, p -> { audio.gainDb = p - 12; prefs.edit().putFloat("gain", audio.gainDb).apply(); updatePanelHeader(String.format(Locale.US, "Gain %+.0f dB", audio.gainDb)); }, true);
   }
 
