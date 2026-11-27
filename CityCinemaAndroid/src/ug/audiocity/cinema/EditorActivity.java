@@ -65,7 +65,7 @@ import javax.microedition.khronos.opengles.GL10;
 public class EditorActivity extends Activity {
   static final String TAG = "CityCinemaEditor";
   static final int BG = CinemaActivity.BG, TEXT = CinemaActivity.TEXT, DIM = CinemaActivity.DIM, ACCENT = CinemaActivity.ACCENT;
-  static final int PICK_VIDEO = 11, PICK_MUSIC = 12, PICK_LUT = 13, PICK_LAYER = 14;
+  static final int PICK_VIDEO = 11, PICK_MUSIC = 12, PICK_LUT = 13, PICK_LAYER = 14, PICK_FX = 15;
 
   private EditModel.Project project = new EditModel.Project();
   private volatile EditModel.Project shown = new EditModel.Project(); // snapshot drawn by the preview
@@ -125,6 +125,9 @@ public class EditorActivity extends Activity {
     actions.addView(chip("+ LAYER", v -> pick(PICK_LAYER, "video/*")), lp(-2));
     actions.addView(chip("+ TITLE", v -> addTitle()), lp(-2));
     actions.addView(chip("+ MUSIC", v -> pick(PICK_MUSIC, "audio/*")), lp(-2));
+    actions.addView(chip("+ FX", v -> pick(PICK_FX, "audio/*")), lp(-2));
+    voiceButton = chip("● VOICE", v -> toggleVoice());
+    actions.addView(voiceButton, lp(-2));
     actions.addView(chip("SPLIT", v -> splitAtPlayhead()), lp(-2));
     actions.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
     actions.addView(chip("UNDO", v -> undo()), lp(-2));
@@ -140,7 +143,7 @@ public class EditorActivity extends Activity {
     root.addView(bar);
 
     timeline = new Timeline(this);
-    root.addView(timeline, new LinearLayout.LayoutParams(-1, dp(160)));
+    root.addView(timeline, new LinearLayout.LayoutParams(-1, dp(186)));
     setContentView(root);
     changed(false);
   }
@@ -255,7 +258,13 @@ public class EditorActivity extends Activity {
           else ui.post(() -> toast("Couldn't read that video."));
         } else {
           EditModel.Music m = probeMusic(u);
-          if (m != null) ui.post(() -> { project.music = m; selected = m; changed(true); });
+          if (m != null) ui.post(() -> {
+            snapshot();
+            m.track = code == PICK_FX ? 2 : 0;
+            m.startUs = code == PICK_FX ? playhead : (project.audio.isEmpty() ? 0 : playhead);
+            if (code == PICK_FX) { m.volume = 1; m.fadeInUs = 0; m.fadeOutUs = 50_000; }
+            project.audio.add(m); selected = m; changed(true);
+          });
         }
       }
     });
@@ -583,12 +592,18 @@ public class EditorActivity extends Activity {
   private void deleteSelected() {
     if (selected instanceof EditModel.Clip) { snapshot(); if (!project.clips.remove(selected)) project.overlays.remove(selected); toast("Clip deleted. UNDO brings it back."); }
     else if (selected instanceof EditModel.Title) { snapshot(); project.titles.remove(selected); toast("Title deleted. UNDO brings it back."); }
-    else if (selected instanceof EditModel.Music) { snapshot(); project.music = null; toast("Music removed. UNDO brings it back."); }
+    else if (selected instanceof EditModel.Music) { snapshot(); project.audio.remove(selected); toast("Sound removed. UNDO brings it back."); }
     else { toast("Tap a clip, title or the music on the timeline first, then DELETE."); return; }
     selected = null; changed(true);
   }
 
   private void splitAtPlayhead() {
+    if (selected instanceof EditModel.Music && project.audio.contains(selected)) {
+      snapshot();
+      EditModel.Music b = EditModel.splitAudio(project, (EditModel.Music) selected, playhead);
+      if (b != null) { selected = b; changed(true); } else { undoStack.pop(); toast("Move the playhead inside the selected sound to split it."); }
+      return;
+    }
     if (selected instanceof EditModel.Clip && project.overlays.contains(selected)) {
       snapshot();
       EditModel.Clip b = EditModel.splitOverlay(project, (EditModel.Clip) selected, playhead);
@@ -613,7 +628,7 @@ public class EditorActivity extends Activity {
     inspector.removeAllViews();
     if (selected instanceof EditModel.Clip && (project.clips.contains(selected) || project.overlays.contains(selected))) clipInspector((EditModel.Clip) selected);
     else if (selected instanceof EditModel.Title && project.titles.contains(selected)) titleInspector((EditModel.Title) selected);
-    else if (selected instanceof EditModel.Music && selected == project.music) musicInspector((EditModel.Music) selected);
+    else if (selected instanceof EditModel.Music && project.audio.contains(selected)) musicInspector((EditModel.Music) selected);
     else projectInspector();
   }
 
@@ -750,19 +765,92 @@ public class EditorActivity extends Activity {
   }
 
   private void musicInspector(EditModel.Music m) {
-    heading("Music: " + m.name, "starts at " + fmt(m.startUs) + " · " + fmt(m.sourceDurationUs) + " long");
-    slider("Volume", 0, 150, Math.round(m.volume * 100), v -> m.volume = v / 100.0, x -> x + "%");
+    heading(EditModel.Music.TRACKS[m.track] + ": " + m.name, "starts at " + fmt(m.startUs) + " · plays " + fmt(m.playUs()) + " of " + fmt(m.sourceDurationUs));
+    LinearLayout tr = row();
+    for (int k = 0; k < 3; k++) { final int t = k; tr.addView(chip(EditModel.Music.TRACKS[k], v -> { snapshot(); m.track = t; changed(true); }, m.track == k), lp(-2)); }
+    inspector.addView(tr);
+    slider("Volume", 0, 200, Math.round(m.volume * 100), v -> m.volume = v / 100.0, x -> x + "%");
+    slider("Pan", -100, 100, Math.round(m.pan * 100), v -> m.pan = v / 100.0, x -> x == 0 ? "centre" : (x < 0 ? "left " : "right ") + Math.abs(x));
+    slider("Start in the file (trim)", 0, Math.max(1, m.sourceDurationUs / 1000 - 200), m.inUs / 1000, v -> m.inUs = v * 1000, x -> fmt(x * 1000));
+    slider("Length", 200, Math.max(201, (m.sourceDurationUs - m.inUs) / 1000), m.playUs() / 1000, v -> m.lengthUs = v * 1000, x -> fmt(x * 1000));
     slider("Fade in", 0, 10_000, m.fadeInUs / 1000, v -> m.fadeInUs = v * 1000, x -> String.format(Locale.US, "%.1f s", x / 1000.0));
     slider("Fade out", 0, 10_000, m.fadeOutUs / 1000, v -> m.fadeOutUs = v * 1000, x -> String.format(Locale.US, "%.1f s", x / 1000.0));
     LinearLayout r = row();
-    r.addView(chip("START AT PLAYHEAD", v -> { m.startUs = playhead; changed(true); }), lp(-2));
-    r.addView(chip("REMOVE", v -> deleteSelected()), lp(-2));
-    inspector.addView(r);
-    label("Tip: lower the clips' volume (select a clip → Edit) to make the music the main sound.");
+    r.addView(chip(m.muted ? "UNMUTE" : "MUTE", v -> { m.muted = !m.muted; changed(true); }, m.muted), lp(-2));
+    r.addView(chip("START AT PLAYHEAD", v -> { snapshot(); m.startUs = playhead; changed(true); }), lp(-2));
+    r.addView(chip("SPLIT", v -> splitAtPlayhead()), lp(-2));
+    r.addView(chip("DUPLICATE", v -> { snapshot(); EditModel.Music k = m.copy(); k.startUs = m.startUs + m.playUs(); project.audio.add(k); selected = k; changed(true); }), lp(-2));
+    r.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
+    inspector.addView(scroll(r));
+    label("Drag it on the timeline to move it (it snaps to edges and the playhead). Sounds stop and fade with the end of the video.");
+  }
+
+  // ---- voice-over: record the microphone while the programme plays (its sound muted), then place it on the VOICE track
+  private Button voiceButton;
+  private volatile boolean voiceOn;
+  private Thread voiceThread;
+  private java.io.File voiceFile;
+  private long voiceStartUs;
+
+  private void toggleVoice() {
+    if (voiceOn) { stopPlayback(); return; } // stopping playback finishes the take
+    if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+      requestPermissions(new String[] {android.Manifest.permission.RECORD_AUDIO}, 41);
+      toast("Allow the microphone, then tap ● VOICE again.");
+      return;
+    }
+    if (project.clips.isEmpty()) { toast("Add a video first: the voice-over is recorded while it plays."); return; }
+    if (playing) stopPlayback();
+    java.io.File dir = new java.io.File(getFilesDir(), "voice"); dir.mkdirs();
+    voiceFile = new java.io.File(dir, "Voice_" + new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new java.util.Date()) + ".wav");
+    final android.media.AudioRecord rec;
+    try {
+      int min = android.media.AudioRecord.getMinBufferSize(48_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+      rec = new android.media.AudioRecord(android.media.MediaRecorder.AudioSource.MIC, 48_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(min, 48_000));
+      if (rec.getState() != android.media.AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("microphone busy");
+    } catch (Exception e) { toast("Couldn't open the microphone: " + e.getMessage()); return; }
+    voiceOn = true;
+    voiceStartUs = playhead >= EditModel.duration(project) - 100_000 ? 0 : playhead;
+    playhead = voiceStartUs;
+    voiceButton.setText("■ STOP VOICE");
+    final java.io.File f = voiceFile;
+    voiceThread = new Thread(() -> {
+      long bytes = 0;
+      try (java.io.RandomAccessFile out = new java.io.RandomAccessFile(f, "rw")) {
+        out.setLength(0); out.write(new byte[44]);
+        short[] buf = new short[2400];
+        byte[] b = new byte[buf.length * 2];
+        rec.startRecording();
+        while (voiceOn) {
+          int n = rec.read(buf, 0, buf.length);
+          if (n <= 0) continue;
+          for (int i = 0; i < n; i++) { b[i * 2] = (byte) buf[i]; b[i * 2 + 1] = (byte) (buf[i] >> 8); }
+          out.write(b, 0, n * 2); bytes += n * 2L;
+        }
+        rec.stop();
+        out.seek(0); out.write(EditModel.wavHeader16(bytes, 48_000, 1));
+      } catch (Exception e) { Log.w(TAG, "voice", e); }
+      finally { rec.release(); }
+      final long frames = bytes / 2;
+      ui.post(() -> finishVoice(f, frames));
+    }, "voice-over");
+    voiceThread.start();
+    startPlayback(true);
+  }
+
+  private void finishVoice(java.io.File f, long frames) {
+    voiceButton.setText("● VOICE");
+    if (frames < 4800) { f.delete(); toast("Voice-over too short, not added."); return; }
+    snapshot();
+    EditModel.Music m = new EditModel.Music();
+    m.uri = Uri.fromFile(f).toString(); m.name = f.getName(); m.track = 1; m.volume = 1; m.fadeInUs = 30_000; m.fadeOutUs = 100_000;
+    m.startUs = voiceStartUs; m.sourceDurationUs = frames * 1_000_000L / 48_000;
+    project.audio.add(m); selected = m; changed(true);
+    toast("Voice-over added on the VOICE track (" + fmt(m.sourceDurationUs) + "). Lower the music under it with its Volume, or drag it to fine-tune the timing.");
   }
 
   private void projectInspector() {
-    heading("Project", project.clips.size() + " clips · " + fmt(EditModel.duration(project)) + (project.music != null ? " · music" : "") + (project.titles.isEmpty() ? "" : " · " + project.titles.size() + " titles"));
+    heading("Project", project.clips.size() + " clips · " + fmt(EditModel.duration(project)) + (project.audio.isEmpty() ? "" : " · " + project.audio.size() + " sounds") + (project.titles.isEmpty() ? "" : " · " + project.titles.size() + " titles"));
     LinearLayout r = row();
     r.addView(chip(project.fadeIn ? "FADE IN ✓" : "FADE IN", v -> { project.fadeIn = !project.fadeIn; changed(true); }, project.fadeIn), lp(-2));
     r.addView(chip(project.fadeOut ? "FADE OUT ✓" : "FADE OUT", v -> { project.fadeOut = !project.fadeOut; changed(true); }, project.fadeOut), lp(-2));
@@ -797,9 +885,12 @@ public class EditorActivity extends Activity {
     return new int[] {w & ~1, h & ~1};
   }
 
-  private void togglePlay() { if (playing) stopPlayback(); else startPlayback(); }
+  private void togglePlay() { if (playing) stopPlayback(); else startPlayback(false); }
 
-  private void startPlayback() {
+  private void startPlayback() { startPlayback(false); }
+
+  /** silent: the picture plays and the clock runs, but no programme sound (voice-over recording, no echo). */
+  private void startPlayback(final boolean silent) {
     if (project.clips.isEmpty()) return;
     if (playhead >= EditModel.duration(project) - 100_000) playhead = 0;
     playing = true;
@@ -821,7 +912,7 @@ public class EditorActivity extends Activity {
         while (playing) {
           long t = start + written * 1_000_000L / 48_000;
           if (t >= end) break;
-          mixer.mix(p, t, 1024, buf);
+          if (silent) java.util.Arrays.fill(buf, 0f); else mixer.mix(p, t, 1024, buf);
           track.write(buf, 0, buf.length, AudioTrack.WRITE_BLOCKING);
           written += 1024;
           // the picture follows the sound actually heard
@@ -838,6 +929,7 @@ public class EditorActivity extends Activity {
   private void stopPlayback() {
     playing = false;
     if (audioThread != null) { try { audioThread.join(500); } catch (InterruptedException ignored) {} audioThread = null; }
+    if (voiceOn) { voiceOn = false; voiceThread = null; } // the recorder thread writes the file and adds it
     if (playButton != null) playButton.setText("▶");
     preview.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
     preview.requestRender();
@@ -969,6 +1061,12 @@ public class EditorActivity extends Activity {
     private float rowVh() { return dp(52); }
     private float rowT() { return rowV() + rowVh() + dp(4); }
     private float rowM() { return rowT() + dp(22) + dp(4); }
+    private float laneH() { return dp(16); }
+
+    private RectF audioRect(EditModel.Music m) {
+      float top = rowM() + m.track * laneH();
+      return new RectF(x(m.startUs) + 1, top + 1, x(Math.min(m.startUs + m.playUs(), Math.max(m.startUs + 1, EditModel.duration(project)))) - 1, top + laneH() - 1);
+    }
 
     private RectF layerRect(EditModel.Clip o) {
       float lane = rowLh() / EditModel.Project.MAX_TRACKS, top = rowL() + (EditModel.Project.MAX_TRACKS - o.track) * lane;
@@ -1008,12 +1106,18 @@ public class EditorActivity extends Activity {
         p.setColor(t == selected ? ACCENT : 0xff6a5a2e); c.drawRoundRect(r, dp(3), dp(3), p);
         p.setColor(t == selected ? BG : TEXT); c.save(); c.clipRect(r); c.drawText("T  " + t.text.replace('\n', ' '), r.left + dp(4), rowT + dp(15), p); c.restore();
       }
-      if (project.music != null) {
-        EditModel.Music m = project.music;
-        RectF r = new RectF(x(m.startUs), rowM, x(Math.min(m.startUs + m.sourceDurationUs, Math.max(m.startUs + 1, EditModel.duration(project)))), rowM + rowMh);
-        p.setColor(m == selected ? ACCENT : 0xff5a3a6a); c.drawRoundRect(r, dp(3), dp(3), p);
-        p.setColor(m == selected ? BG : TEXT); c.save(); c.clipRect(r); c.drawText("♪  " + m.name, r.left + dp(4), rowM + dp(15), p); c.restore();
+      // audio lanes: music, voice-over, effects
+      int[] laneColor = {0xff5a3a6a, 0xff2e5a6a, 0xff6a4a2e};
+      for (int k = 0; k < 3; k++) {
+        p.setColor(k % 2 == 0 ? 0xff15191d : 0xff121519); c.drawRect(0, rowM + k * laneH(), getWidth(), rowM + (k + 1) * laneH(), p);
+        p.setColor(0x55ffffff); c.drawText(EditModel.Music.TRACKS[k], dp(4), rowM + k * laneH() + dp(11), p);
       }
+      for (EditModel.Music m : project.audio) {
+        RectF r = audioRect(m);
+        p.setColor(m == selected ? ACCENT : m.muted ? 0xff3a3a3a : laneColor[m.track]); c.drawRoundRect(r, dp(3), dp(3), p);
+        p.setColor(m == selected ? BG : TEXT); c.save(); c.clipRect(r); c.drawText((m.track == 1 ? "🎙 " : "♪ ") + m.name, r.left + dp(4), r.centerY() + dp(4), p); c.restore();
+      }
+      if (voiceOn) { p.setColor(0xffe5322d); c.drawRect(x(voiceStartUs), rowM + laneH() + 1, x(playhead), rowM + 2 * laneH() - 1, p); } // recording
       if (guideUs >= 0) { p.setColor(ACCENT); float gx = x(guideUs); c.drawRect(gx - dp(1), 0, gx + dp(1), h, p); } // snap guide
       p.setColor(TEXT);
       c.drawRect(getWidth() / 2f - dp(1), 0, getWidth() / 2f + dp(1), h, p);
@@ -1024,7 +1128,7 @@ public class EditorActivity extends Activity {
       long t = timeAt(tx);
       if (selected instanceof EditModel.Clip && project.overlays.contains(selected) && layerRect((EditModel.Clip) selected).contains(tx, ty)) return selected;
       if (selected instanceof EditModel.Title && ty >= rowT() && ty < rowM()) { EditModel.Title k = (EditModel.Title) selected; if (t >= k.startUs && t < k.startUs + k.durationUs) return k; }
-      if (selected instanceof EditModel.Music && ty >= rowM() && selected == project.music) { EditModel.Music m = (EditModel.Music) selected; if (t >= m.startUs && t < m.startUs + m.sourceDurationUs) return m; }
+      if (selected instanceof EditModel.Music && project.audio.contains(selected) && audioRect((EditModel.Music) selected).contains(tx, ty)) return selected;
       return null;
     }
 
@@ -1034,7 +1138,7 @@ public class EditorActivity extends Activity {
       if (o instanceof EditModel.Clip) ((EditModel.Clip) o).startUs = v; else if (o instanceof EditModel.Title) ((EditModel.Title) o).startUs = v; else ((EditModel.Music) o).startUs = v;
     }
 
-    private long lengthOf(Object o) { return o instanceof EditModel.Clip ? ((EditModel.Clip) o).durationUs() : o instanceof EditModel.Title ? ((EditModel.Title) o).durationUs : 0; }
+    private long lengthOf(Object o) { return o instanceof EditModel.Clip ? ((EditModel.Clip) o).durationUs() : o instanceof EditModel.Title ? ((EditModel.Title) o).durationUs : ((EditModel.Music) o).playUs(); }
 
     @Override public boolean onTouchEvent(MotionEvent e) {
       zoom.onTouchEvent(e);
@@ -1082,7 +1186,7 @@ public class EditorActivity extends Activity {
       if (ty < rowV()) { for (EditModel.Clip o : project.overlays) if (layerRect(o).contains(tx, ty)) hit = o; }
       else if (ty < rowT()) { long[] s = EditModel.starts(project); for (int i = project.clips.size() - 1; i >= 0 && hit == null; i--) if (t >= s[i] && t < s[i] + project.clips.get(i).durationUs()) hit = project.clips.get(i); }
       else if (ty < rowM()) { for (EditModel.Title k : project.titles) if (t >= k.startUs && t < k.startUs + k.durationUs) hit = k; }
-      else if (project.music != null && t >= project.music.startUs && t < project.music.startUs + project.music.sourceDurationUs) hit = project.music;
+      else for (EditModel.Music m : project.audio) if (audioRect(m).contains(tx, ty)) hit = m;
       select(hit);
     }
   }

@@ -42,8 +42,10 @@ already integer microseconds (good); project format is unversioned JSON (add a v
      music with **magnetic snapping** (clip/layer/title edges and the playhead, with a guide line); split layers;
      **redo**; project format **version 2** (version-1 projects load unchanged, tested).
    - The main track stays magnetic (clips butt together, like a primary storyline); gaps live on layer tracks.
-   - Next: several audio tracks (music, voice-over, effects) replacing the single music slot, timeline
-     thumbnails and audio waveforms, ripple/roll/slip/slide on the main track, markers, multi-select.
+   - 3.9: **audio tracks** MUSIC / VOICE / FX with any number of sound clips (trim in and length, volume, pan,
+     fades, mute, split, duplicate, drag with snapping); **voice-over recording** onto the VOICE track while the
+     programme plays silently; project format **version 3** (the old single music slot becomes a MUSIC clip, tested).
+   - Next: timeline thumbnails and audio waveforms, ripple/roll/slip/slide on the main track, markers, multi-select.
 4. GPU compositing: per-layer transform with opacity and blend modes, FP16 intermediates, PiP.
 5. Colour: lift/gamma/gain/offset wheels, curves, HSL qualifier, masks, before/after; LUT manager (rename, delete,
    favourites, thumbnails).

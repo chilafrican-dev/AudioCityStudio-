@@ -583,18 +583,19 @@ final class EditEngine {
         if (t1 <= starts[i] || t >= starts[i] + c.durationUs() || c.muted || !c.hasAudio) continue;
         live.add(c.id);
         double g0 = EditModel.clipGain(p, i, Math.max(t, starts[i])), g1 = EditModel.clipGain(p, i, Math.min(t1, starts[i] + c.durationUs() - 1));
-        add(c.id, c.uri, c.sourceAt(Math.max(0, t - starts[i])), Math.max(0, starts[i] - t), frames, g0, g1, out, c.speed);
+        add(c.id, c.uri, c.sourceAt(Math.max(0, t - starts[i])), Math.max(0, starts[i] - t), frames, g0, g1, out, c.speed, 0);
       }
       for (EditModel.Clip o : p.overlays) { // layer clips' own sound, with their volume and the project fades
         if (t1 <= o.startUs || t >= o.startUs + o.durationUs() || o.muted || !o.hasAudio) continue;
         live.add(o.id);
         double g0 = o.volume * EditModel.projectFade(p, Math.max(t, o.startUs)), g1 = o.volume * EditModel.projectFade(p, Math.min(t1, o.startUs + o.durationUs() - 1));
-        add(o.id, o.uri, o.sourceAt(Math.max(0, t - o.startUs)), Math.max(0, o.startUs - t), frames, g0, g1, out, o.speed);
+        add(o.id, o.uri, o.sourceAt(Math.max(0, t - o.startUs)), Math.max(0, o.startUs - t), frames, g0, g1, out, o.speed, 0);
       }
-      EditModel.Music m = p.music;
-      if (m != null && t1 > m.startUs && t < m.startUs + m.sourceDurationUs) {
-        live.add(m);
-        add(m, m.uri, Math.max(0, t - m.startUs), Math.max(0, m.startUs - t), frames, EditModel.musicGain(p, t), EditModel.musicGain(p, t1), out, 1);
+      for (EditModel.Music m : p.audio) { // audio tracks: music, voice-over, effects
+        if (m.muted || t1 <= m.startUs || t >= m.startUs + m.playUs()) continue;
+        live.add(m.id);
+        add(m.id, m.uri, m.inUs + Math.max(0, t - m.startUs), Math.max(0, m.startUs - t), frames,
+            EditModel.audioGain(p, m, Math.max(t, m.startUs)), EditModel.audioGain(p, m, Math.min(t1, m.startUs + m.playUs() - 1)), out, 1, m.pan);
       }
       for (Iterator<Map.Entry<Object, AudioSource>> it = sources.entrySet().iterator(); it.hasNext(); ) {
         Map.Entry<Object, AudioSource> e = it.next();
@@ -605,7 +606,8 @@ final class EditEngine {
 
     private float[] speedBlock = new float[0];
 
-    private void add(Object key, String uri, long sourceUs, long delayUs, int frames, double g0, double g1, float[] out, double speed) {
+    private void add(Object key, String uri, long sourceUs, long delayUs, int frames, double g0, double g1, float[] out, double speed, double pan) {
+      float pl = (float) Math.min(1, 1 - pan), pr = (float) Math.min(1, 1 + pan); // balance: the far side turns down
       AudioSource s = sources.get(key);
       try {
         if (s == null) { s = new AudioSource(ctx, uri, sourceUs); sources.put(key, s); }
@@ -627,8 +629,8 @@ final class EditEngine {
       }
       for (int i = 0; i < n; i++) {
         float g = (float) (g0 + (g1 - g0) * i / Math.max(1, n - 1));
-        out[(skip + i) * 2] += block[i * 2] * g;
-        out[(skip + i) * 2 + 1] += block[i * 2 + 1] * g;
+        out[(skip + i) * 2] += block[i * 2] * g * pl;
+        out[(skip + i) * 2 + 1] += block[i * 2 + 1] * g * pr;
       }
     }
 

@@ -53,11 +53,11 @@ public class EditTests {
     check(p.clips.get(0).volume == 1, "split halves are independent copies");
     // music
     EditModel.Music m = new EditModel.Music();
-    m.startUs = 0; m.sourceDurationUs = 60_000_000; m.volume = 0.8; m.fadeInUs = 1_000_000; m.fadeOutUs = 2_000_000; p.music = m;
-    near(EditModel.musicGain(p, 500_000), 0.4, 1e-9, "music fades in");
-    near(EditModel.musicGain(p, 5_000_000), 0.8, 1e-9, "music at its volume");
-    near(EditModel.musicGain(p, EditModel.duration(p) - 1_000_000), 0.4, 1e-9, "music fades out with the programme");
-    check(EditModel.musicGain(p, EditModel.duration(p) + 1) == 0, "music stops with the programme");
+    m.startUs = 0; m.sourceDurationUs = 60_000_000; m.volume = 0.8; m.fadeInUs = 1_000_000; m.fadeOutUs = 2_000_000; p.audio.add(m);
+    near(EditModel.audioGain(p, m, 500_000), 0.4, 1e-9, "music fades in");
+    near(EditModel.audioGain(p, m, 5_000_000), 0.8, 1e-9, "music at its volume");
+    near(EditModel.audioGain(p, m, EditModel.duration(p) - 1_000_000), 0.4, 1e-9, "music fades out with the programme");
+    check(EditModel.audioGain(p, m, EditModel.duration(p) + 1) == 0, "music stops with the programme");
     // titles
     EditModel.Title t = new EditModel.Title(); t.startUs = 1_000_000; t.durationUs = 3_000_000;
     near(EditModel.titleAlpha(t, 1_150_000), 0.5, 1e-9, "title fades in");
@@ -104,6 +104,7 @@ public class EditTests {
     autoGradeTests();
     toolTests();
     layerTests();
+    audioTrackTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -115,6 +116,37 @@ public class EditTests {
   /** Auto colour: a dark, warm-cast frame comes out neutral and at normal brightness; a good frame is left alone. */
   /** Speed changes the clip's length and maps timeline time to source time; split keeps both halves in sync. */
   /** Layer tracks: drawn above the main track in track order, extend the timeline, snap, split, keep their sound. */
+  /** Audio tracks: trimmed and muted sound clips, splitting, snapping to sound edges, the voice-over WAV header. */
+  static void audioTrackTests() {
+    EditModel.Project p = new EditModel.Project();
+    p.fadeIn = p.fadeOut = false;
+    EditModel.Clip v = new EditModel.Clip();
+    v.outUs = 30_000_000; v.sourceDurationUs = 30_000_000;
+    p.clips.add(v);
+    EditModel.Music m = new EditModel.Music();
+    m.sourceDurationUs = 20_000_000; m.inUs = 5_000_000; m.startUs = 2_000_000; m.volume = 1; m.fadeInUs = 0; m.fadeOutUs = 0;
+    p.audio.add(m);
+    check(m.playUs() == 15_000_000, "plays from the trim to the end of the file");
+    check(EditModel.audioGain(p, m, 1_000_000) == 0 && EditModel.audioGain(p, m, 10_000_000) == 1 && EditModel.audioGain(p, m, 17_500_000) == 0, "sound only while it plays");
+    m.lengthUs = 4_000_000;
+    check(m.playUs() == 4_000_000 && EditModel.audioGain(p, m, 7_000_000) == 0, "length trims the end");
+    m.muted = true;
+    check(EditModel.audioGain(p, m, 3_000_000) == 0, "muted");
+    m.muted = false; m.lengthUs = 0;
+    EditModel.Music b = EditModel.splitAudio(p, m, 6_000_000);
+    check(b != null && m.playUs() == 4_000_000 && b.startUs == 6_000_000 && b.inUs == 9_000_000 && b.playUs() == 11_000_000, "split sound");
+    check(p.audio.size() == 2 && p.audio.get(1) == b, "second half follows");
+    check(EditModel.splitAudio(p, m, 20_000_000) == null, "split outside refused");
+    long[] pts = EditModel.snapPoints(p, null);
+    boolean edge = false; for (long q : pts) if (q == 17_000_000) edge = true;
+    check(edge, "sound edges are snap points");
+    EditModel.Music c = b.copy();
+    check(c.inUs == b.inUs && c.track == b.track && c.id != b.id, "sound copies keep settings, new identity");
+    byte[] h = EditModel.wavHeader16(96_000, 48_000, 1);
+    java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(h).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    check(h.length == 44 && bb.getInt(4) == 36 + 96_000 && bb.getInt(24) == 48_000 && bb.getShort(34) == 16 && bb.getInt(40) == 96_000, "voice-over WAV header");
+  }
+
   static void layerTests() {
     EditModel.Project p = new EditModel.Project();
     p.fadeIn = p.fadeOut = false;

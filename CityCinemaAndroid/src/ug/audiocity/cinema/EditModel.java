@@ -132,15 +132,24 @@ final class EditModel {
     }
   }
 
+  /** A sound clip on one of the audio tracks (music, voice-over, effects). */
   static final class Music {
+    static final String[] TRACKS = {"MUSIC", "VOICE", "FX"};
+    final long id = NEXT_ID.incrementAndGet();
     String uri, name;
     long startUs, sourceDurationUs;
-    double volume = 0.6;
+    long inUs, lengthUs; // trim: where in the file it starts, how long it plays (0 = to the end of the file)
+    int track;           // 0 music, 1 voice-over, 2 effects
+    double volume = 0.6, pan; // pan -1 left .. +1 right
+    boolean muted;
     long fadeInUs = 1_000_000, fadeOutUs = 2_000_000;
+
+    long playUs() { return Math.max(0, lengthUs > 0 ? Math.min(lengthUs, sourceDurationUs - inUs) : sourceDurationUs - inUs); }
 
     JSONObject json() throws JSONException {
       return new JSONObject().put("uri", uri).put("name", name).put("startUs", startUs).put("sourceDurationUs", sourceDurationUs)
-          .put("volume", volume).put("fadeInUs", fadeInUs).put("fadeOutUs", fadeOutUs);
+          .put("volume", volume).put("fadeInUs", fadeInUs).put("fadeOutUs", fadeOutUs).put("inUs", inUs).put("lengthUs", lengthUs)
+          .put("track", track).put("pan", pan).put("muted", muted);
     }
 
     static Music from(JSONObject j) {
@@ -148,18 +157,28 @@ final class EditModel {
       Music m = new Music();
       m.uri = j.optString("uri"); m.name = j.optString("name"); m.startUs = j.optLong("startUs"); m.sourceDurationUs = j.optLong("sourceDurationUs");
       m.volume = j.optDouble("volume", 0.6); m.fadeInUs = j.optLong("fadeInUs", 1_000_000); m.fadeOutUs = j.optLong("fadeOutUs", 2_000_000);
+      m.inUs = j.optLong("inUs", 0); m.lengthUs = j.optLong("lengthUs", 0); m.track = Math.max(0, Math.min(2, j.optInt("track", 0)));
+      m.pan = j.optDouble("pan", 0); m.muted = j.optBoolean("muted");
+      return m;
+    }
+
+    Music copy() {
+      Music m = new Music();
+      m.uri = uri; m.name = name; m.startUs = startUs; m.sourceDurationUs = sourceDurationUs; m.inUs = inUs; m.lengthUs = lengthUs; m.track = track;
+      m.volume = volume; m.pan = pan; m.muted = muted; m.fadeInUs = fadeInUs; m.fadeOutUs = fadeOutUs;
       return m;
     }
   }
 
   static final class Project {
-    static final int VERSION = 2; // 1: main track only; 2: adds layer tracks (overlays)
+    static final int VERSION = 3; // 1: main track only; 2: adds layer tracks (overlays); 3: audio tracks (was one music slot)
     static final int MAX_TRACKS = 3;
     final List<Clip> clips = new ArrayList<>();
     /** Video layers above the main track (B-roll, picture-in-picture): placed freely, drawn above by track. */
     final List<Clip> overlays = new ArrayList<>();
     final List<Title> titles = new ArrayList<>();
-    Music music;
+    /** Sound clips on the audio tracks (music, voice-over, effects). */
+    final List<Music> audio = new ArrayList<>();
     boolean fadeIn = true, fadeOut = true;
     long fadeUs = 700_000;
 
@@ -169,7 +188,9 @@ final class EditModel {
       for (Clip k : overlays) o.put(k.json());
       for (Title k : titles) t.put(k.json());
       JSONObject j = new JSONObject().put("version", VERSION).put("clips", c).put("overlays", o).put("titles", t).put("fadeIn", fadeIn).put("fadeOut", fadeOut).put("fadeUs", fadeUs);
-      if (music != null) j.put("music", music.json());
+      JSONArray a = new JSONArray();
+      for (Music m : audio) a.put(m.json());
+      j.put("audio", a);
       return j;
     }
 
@@ -180,7 +201,10 @@ final class EditModel {
       JSONArray o = j.optJSONArray("overlays"); // absent in version-1 projects: nothing to migrate
       if (o != null) for (int i = 0; i < o.length(); i++) p.overlays.add(Clip.from(o.optJSONObject(i)));
       if (t != null) for (int i = 0; i < t.length(); i++) p.titles.add(Title.from(t.optJSONObject(i)));
-      p.music = Music.from(j.optJSONObject("music"));
+      Music old = Music.from(j.optJSONObject("music")); // versions 1-2: one music slot -> first item on the music track
+      if (old != null) p.audio.add(old);
+      JSONArray a = j.optJSONArray("audio");
+      if (a != null) for (int i = 0; i < a.length(); i++) { Music m = Music.from(a.optJSONObject(i)); if (m != null) p.audio.add(m); }
       p.fadeIn = j.optBoolean("fadeIn", true); p.fadeOut = j.optBoolean("fadeOut", true); p.fadeUs = j.optLong("fadeUs", 700_000);
       return p;
     }
@@ -194,7 +218,7 @@ final class EditModel {
     for (Clip c : p.clips) q.clips.add(c.copy());
     for (Clip c : p.overlays) q.overlays.add(c.copy());
     for (Title t : p.titles) { Title u = new Title(); u.text = t.text; u.startUs = t.startUs; u.durationUs = t.durationUs; u.place = t.place; u.color = t.color; u.box = t.box; u.size = t.size; q.titles.add(u); }
-    if (p.music != null) { Music m = new Music(); Music o = p.music; m.uri = o.uri; m.name = o.name; m.startUs = o.startUs; m.sourceDurationUs = o.sourceDurationUs; m.volume = o.volume; m.fadeInUs = o.fadeInUs; m.fadeOutUs = o.fadeOutUs; q.music = m; }
+    for (Music m : p.audio) q.audio.add(m.copy());
     q.fadeIn = p.fadeIn; q.fadeOut = p.fadeOut; q.fadeUs = p.fadeUs;
     return q;
   }
@@ -245,10 +269,23 @@ final class EditModel {
     for (int i = 0; i < s.length; i++) { pts.add(s[i]); pts.add(s[i] + p.clips.get(i).durationUs()); }
     for (Clip o : p.overlays) if (o != moving) { pts.add(o.startUs); pts.add(o.startUs + o.durationUs()); }
     for (Title t : p.titles) if (t != moving) { pts.add(t.startUs); pts.add(t.startUs + t.durationUs); }
+    for (Music m : p.audio) if (m != moving) { pts.add(m.startUs); pts.add(m.startUs + m.playUs()); }
     for (long e : extra) pts.add(e);
     long[] out = new long[pts.size()];
     for (int i = 0; i < out.length; i++) out[i] = pts.get(i);
     return out;
+  }
+
+  /** Splits sound clip m at timeline time t; returns the second half (added after it) or null. */
+  static Music splitAudio(Project p, Music m, long t) {
+    long local = t - m.startUs;
+    if (local < 100_000 || local > m.playUs() - 100_000) return null;
+    Music b = m.copy();
+    long total = m.playUs();
+    b.startUs = t; b.inUs = m.inUs + local; b.lengthUs = total - local; b.fadeInUs = 0;
+    m.lengthUs = local; m.fadeOutUs = 0;
+    p.audio.add(p.audio.indexOf(m) + 1, b);
+    return b;
   }
 
   /** Splits layer clip o at timeline time t; the second half becomes a new layer clip right after it. */
@@ -336,15 +373,14 @@ final class EditModel {
     return 0;
   }
 
-  /** Music volume at timeline time t (its own fades, plus the project fade out). */
-  static double musicGain(Project p, long t) {
-    Music m = p.music;
-    if (m == null) return 0;
-    long local = t - m.startUs, total = duration(p);
-    if (local < 0 || local >= m.sourceDurationUs || t >= total) return 0;
+  /** Volume of a sound clip at timeline time t (its volume and fades; it stops and fades out with the programme). */
+  static double audioGain(Project p, Music m, long t) {
+    if (m == null || m.muted) return 0;
+    long local = t - m.startUs, total = duration(p), len = m.playUs();
+    if (local < 0 || local >= len || t >= total) return 0;
     double g = m.volume;
     if (m.fadeInUs > 0 && local < m.fadeInUs) g *= local / (double) m.fadeInUs;
-    long end = Math.min(m.sourceDurationUs - local, total - t);
+    long end = Math.min(len - local, total - t);
     if (m.fadeOutUs > 0 && end < m.fadeOutUs) g *= end / (double) m.fadeOutUs;
     return g;
   }
@@ -527,4 +563,14 @@ final class EditModel {
   }
 
   static void applyAuto(Grade g, double[] a) { g.exposure = a[0]; g.contrast = a[1]; g.temperature = a[2]; g.tint = a[3]; }
+
+  /** 44-byte WAV header for 16-bit PCM. */
+  static byte[] wavHeader16(long dataBytes, int rate, int channels) {
+    java.nio.ByteBuffer h = java.nio.ByteBuffer.allocate(44).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    int data = (int) Math.min(dataBytes, 0x7fffffffL - 36);
+    h.put(new byte[] {'R', 'I', 'F', 'F'}).putInt(36 + data).put(new byte[] {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '}).putInt(16)
+        .putShort((short) 1).putShort((short) channels).putInt(rate).putInt(rate * channels * 2).putShort((short) (channels * 2)).putShort((short) 16)
+        .put(new byte[] {'d', 'a', 't', 'a'}).putInt(data);
+    return h.array();
+  }
 }
