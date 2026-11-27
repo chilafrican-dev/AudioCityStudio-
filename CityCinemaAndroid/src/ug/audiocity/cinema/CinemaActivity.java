@@ -1791,6 +1791,25 @@ public class CinemaActivity extends Activity {
     addCycle(togglesGrid, () -> scopes.guide == 0 ? "GUIDE" : CinemaMath.GUIDE_NAMES[scopes.guide], () -> scopes.guide = (scopes.guide + 1) % CinemaMath.GUIDE_NAMES.length);
     addToggle(togglesGrid, "GRID", () -> scopes.grid, v -> scopes.grid = v);
     addToggle(togglesGrid, "LEVEL", () -> scopes.level, v -> scopes.level = v);
+    // stabilisation: one tap cycles through the modes this camera supports
+    Button stab = chip("STAB", false, () -> {});
+    Toggle stabToggle = new Toggle(stab, () -> stabilization != 0, () -> STAB_SHORT[stabilization]);
+    stab.setOnClickListener(v -> {
+      List<Integer> modes = stabilizationModes();
+      int i = modes.indexOf(stabilization);
+      stabilization = modes.get((i + 1) % modes.size());
+      stabToggle.sync(); applyRepeating(); savePrefs();
+      message(STAB_LONG[stabilization]);
+    });
+    toggles.add(stabToggle); stabToggle.sync();
+    LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(-1, dp(30)); stp.bottomMargin = dp(5);
+    togglesGrid.addView(stab, stp);
+    Button clips = chip("CLIPS", false, () -> {
+      if (recording) { message("Stop recording to open the clips."); return; }
+      startActivity(new Intent(this, ClipPlayerActivity.class));
+    });
+    LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, dp(30)); cp.bottomMargin = dp(5);
+    togglesGrid.addView(clips, cp);
     Button settings = chip("MENU", false, this::showSettings);
     togglesGrid.addView(settings, new LinearLayout.LayoutParams(-1, dp(30)));
     ScrollView sc = new ScrollView(this); sc.setVerticalScrollBarEnabled(false); sc.addView(togglesGrid);
@@ -2424,6 +2443,24 @@ public class CinemaActivity extends Activity {
       GradientDrawable d = new GradientDrawable(); d.setCornerRadius(dp(6)); d.setColor(on ? ACCENT : 0xff22272c); d.setStroke(dp(1), on ? ACCENT : LINE);
       button.setBackground(d);
     }
+  }
+
+  static final String[] STAB_SHORT = {"STAB OFF", "OIS", "EIS", "OIS+EIS", "STAB PREV"};
+  static final String[] STAB_LONG = {"Stabilization off (tripod, gimbal)", "Optical stabilization (no crop)",
+      "Digital stabilization (smoother, crops the picture a little)", "Optical + digital stabilization (smoothest handheld)",
+      "Preview-matched stabilization (what you see is what is recorded)"};
+
+  /** Stabilization modes this camera offers: off, optical, digital, both, preview-matched (Android 13+). */
+  private List<Integer> stabilizationModes() {
+    List<Integer> out = new ArrayList<>();
+    out.add(0);
+    boolean ois = lens != null && contains(lens.ois, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON);
+    boolean eis = lens != null && contains(lens.stab, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON);
+    if (ois) out.add(1);
+    if (eis) out.add(2);
+    if (ois && eis) out.add(3);
+    if (lens != null && Build.VERSION.SDK_INT >= 33 && contains(lens.stab, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION)) out.add(4);
+    return out;
   }
 
   private void addToggle(LinearLayout parent, String name, BoolGet get, BoolSet set) {

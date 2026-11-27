@@ -1,4 +1,4 @@
-# City Cinema 2.0
+# City Cinema 2.1
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -74,6 +74,18 @@ no third-party libraries.
 Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra) meter *after* the log curve, read the lifted shadows as brightness and run away to about 6 stops under (ISO 50, 18°). Phones without manual exposure keep the phone's auto exposure.
 
 **Tone-curve check.** Some phones claim to support custom tone curves but ignore them. City Cinema reads back what the camera actually applied. If the curve is ignored, it says so, shows *Phone look*, and turns off the log exposure offset, so log looks don't just record 2 stops dark.
+
+**Clips and player.** **CLIPS** on the side panel opens the clip browser:
+- Thumbnails, length, size and look of everything in `Movies/City Cinema`.
+- A player with seek, share, and a **live viewing LUT** for log clips. The LUT is chosen automatically from the clip's sidecar and applied on the GPU, while the file stays untouched.
+- ProRes `.mov` clips are listed but don't play on the phone, because Android has no ProRes decoder. Play them in Resolve, Final Cut, Premiere or VLC.
+
+**STAB** on the side panel cycles the stabilization modes the camera offers:
+- Off, for a tripod or gimbal
+- Optical (OIS)
+- Digital (EIS: smoother, crops a little)
+- Optical + digital (smoothest handheld)
+- Preview-matched (Android 13+)
 
 **Monitoring**
 - Zebras at 70–100 IRE.
