@@ -1,5 +1,7 @@
 package ug.audiocity.cinema;
 
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
@@ -17,7 +19,7 @@ public class CinemaTests {
     check(Math.abs(actual - expected) <= tolerance, what + " (expected " + expected + " ± " + tolerance + ", got " + actual + ")");
   }
 
-  public static void main(String[] args) {
+  public static void main(String[] args) throws IOException {
     frameRates();
     shutter();
     iso();
@@ -28,6 +30,8 @@ public class CinemaTests {
     ramps();
     bitrate();
     wav();
+    dng();
+    if (args.length > 0) writeSampleDngs(args[0]);
     System.out.println("CinemaTests: " + passed + " checks passed");
   }
 
@@ -168,5 +172,88 @@ public class CinemaTests {
     check(h.getShort(22) == 2 && h.getInt(24) == 48_000 && h.getShort(34) == 32, "stereo 48 kHz 32-bit");
     check(h.getInt(46) == 48_000, "fact chunk sample frames");
     check(h.get(50) == 'd' && h.getInt(54) == 384_000, "data chunk size");
+  }
+
+  // ------------------------------------------------------------------ CinemaDNG
+
+  /** A synthetic Bayer frame: a horizontal ramp with a per-CFA-position offset, so every sample is checkable. */
+  static int sample(int x, int y, int white) { return (x * 7 + y * 3 + ((y & 1) * 2 + (x & 1)) * 50) % (white + 1); }
+
+  static CinemaDng.Meta sampleMeta(int bits) {
+    CinemaDng.Meta m = new CinemaDng.Meta();
+    m.width = 64; m.height = 48; m.bits = bits; m.cfa = CinemaDng.GRBG; m.whiteLevel = 4095;
+    m.black = new float[] {256, 256, 256, 256};
+    m.colorMatrix1 = new float[] {0.9f, -0.3f, -0.1f, -0.4f, 1.2f, 0.2f, -0.1f, 0.2f, 0.6f};
+    m.colorMatrix2 = new float[] {1.2f, -0.5f, -0.1f, -0.3f, 1.1f, 0.2f, 0f, 0.1f, 0.5f};
+    m.forward1 = new float[] {0.6f, 0.3f, 0.1f, 0.25f, 0.7f, 0.05f, 0.03f, 0.1f, 0.7f};
+    m.forward2 = m.forward1;
+    m.neutral = new float[] {0.52f, 1f, 0.61f};
+    m.fps = 23.976; m.make = "Test"; m.model = "Phone"; m.uniqueModel = "Test Phone"; m.reel = "A001";
+    m.tcHours = 1; m.tcMinutes = 2; m.tcSeconds = 3; m.tcFrames = 4;
+    m.shadingRows = 3; m.shadingCols = 4;
+    m.shading = new float[4][12];
+    for (int c = 0; c < 4; c++) for (int i = 0; i < 12; i++) m.shading[c][i] = 1 + 0.1f * c + 0.02f * i;
+    return m;
+  }
+
+  static ByteBuffer samplePixels(CinemaDng.Meta m) {
+    ByteBuffer px = ByteBuffer.allocate(m.width * m.height * 2).order(ByteOrder.LITTLE_ENDIAN);
+    for (int y = 0; y < m.height; y++) for (int x = 0; x < m.width; x++) px.putShort((short) sample(x, y, m.whiteLevel));
+    px.flip();
+    return px;
+  }
+
+  static byte[] sampleFile(int bits) {
+    CinemaDng.Meta m = sampleMeta(bits);
+    byte[] h = CinemaDng.header(m);
+    ByteBuffer px = samplePixels(m);
+    byte[] data = new byte[(int) CinemaDng.stripBytes(m)];
+    if (bits == 12) CinemaDng.pack12(px, m.width * m.height, data); else px.get(data);
+    byte[] file = new byte[h.length + data.length];
+    System.arraycopy(h, 0, file, 0, h.length); System.arraycopy(data, 0, file, h.length, data.length);
+    return file;
+  }
+
+  /** Reads a TIFF IFD entry's first value (SHORT or LONG) from a little-endian DNG. */
+  static long tag(ByteBuffer f, int tag) {
+    int ifd = f.getInt(4), n = f.getShort(ifd) & 0xffff;
+    int last = -1;
+    for (int i = 0; i < n; i++) {
+      int at = ifd + 2 + i * 12, t = f.getShort(at) & 0xffff, type = f.getShort(at + 2);
+      check(t > last, "IFD tags ascend"); last = t;
+      if (t == tag) return type == 3 ? f.getShort(at + 8) & 0xffff : f.getInt(at + 8) & 0xffffffffL;
+    }
+    return -1;
+  }
+
+  static void dng() {
+    check(CinemaDng.cfaColor(CinemaDng.RGGB, 0, 0) == 0 && CinemaDng.cfaColor(CinemaDng.RGGB, 1, 1) == 2 && CinemaDng.cfaColor(CinemaDng.BGGR, 0, 0) == 2, "CFA colours");
+    check(CinemaDng.shadingChannel(CinemaDng.RGGB, 0, 1) == 1 && CinemaDng.shadingChannel(CinemaDng.RGGB, 1, 0) == 2 && CinemaDng.shadingChannel(CinemaDng.GRBG, 1, 0) == 3, "shading channels");
+    byte[] t = CinemaDng.smpte(23, 59, 58, 29, true);
+    check(t[0] == (byte) 0x69 && t[1] == 0x58 && t[2] == 0x59 && t[3] == 0x23, "SMPTE BCD timecode with drop flag");
+
+    ByteBuffer in = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+    in.putShort((short) 0xABC).putShort((short) 0x123).putShort((short) 4095).putShort((short) 5000); in.flip();
+    byte[] packed = new byte[6]; CinemaDng.pack12(in, 4, packed);
+    check(packed[0] == (byte) 0xAB && packed[1] == (byte) 0xC1 && packed[2] == 0x23, "12-bit packing is MSB first");
+    check(packed[3] == (byte) 0xFF && packed[4] == (byte) 0xFF && packed[5] == (byte) 0xFF, "12-bit packing clips to 4095");
+
+    for (int bits : new int[] {12, 16}) {
+      CinemaDng.Meta m = sampleMeta(bits);
+      byte[] h = CinemaDng.header(m);
+      ByteBuffer f = ByteBuffer.wrap(sampleFile(bits)).order(ByteOrder.LITTLE_ENDIAN);
+      check(f.get(0) == 'I' && f.get(1) == 'I' && f.getShort(2) == 42, bits + "-bit TIFF header");
+      check(tag(f, 273) == h.length && h.length % 16 == 0, bits + "-bit strip starts right after the header");
+      check(tag(f, 279) == CinemaDng.stripBytes(m) && f.capacity() == h.length + CinemaDng.stripBytes(m), bits + "-bit strip size");
+      check(tag(f, 256) == 64 && tag(f, 257) == 48 && tag(f, 258) == bits && tag(f, 262) == 32803, bits + "-bit CFA image tags");
+      long tc = tag(f, 51043);
+      check(tag(f, 50717) == 4095 && tag(f, 51009) > 0 && tc > 0 && f.getInt((int) tc) == 0x01020304 && tag(f, 51081) > 0, bits + "-bit DNG and CinemaDNG tags");
+    }
+    check(CinemaDng.stripBytes(sampleMeta(12)) * 4 == CinemaDng.stripBytes(sampleMeta(16)) * 3, "12-bit is 25% smaller");
+  }
+
+  /** Writes sample DNGs so an external reader (LibRaw) can verify them: see tools/verify_dng.py. */
+  static void writeSampleDngs(String dir) throws IOException {
+    for (int bits : new int[] {12, 16}) try (FileOutputStream o = new FileOutputStream(dir + "/sample" + bits + ".dng")) { o.write(sampleFile(bits)); }
   }
 }

@@ -11,6 +11,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.ImageFormat;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.Paint;
@@ -33,8 +34,10 @@ import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
+import android.hardware.camera2.params.BlackLevelPattern;
 import android.hardware.camera2.params.ColorSpaceTransform;
 import android.hardware.camera2.params.DynamicRangeProfiles;
+import android.hardware.camera2.params.LensShadingMap;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.RggbChannelVector;
@@ -82,7 +85,9 @@ import android.widget.TextView;
 
 import org.json.JSONObject;
 
+import java.io.File;
 import java.io.FileOutputStream;
+import java.io.RandomAccessFile;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.channels.FileChannel;
@@ -124,6 +129,11 @@ public class CinemaActivity extends Activity {
   private final Handler ui = new Handler(Looper.getMainLooper());
   private Surface previewSurface, encoderSurface;
   private CinemaRecorder recorder;
+  private RawRecorder raw;
+  private volatile float[] liveBlack;
+  private volatile float[][] liveShading;
+  private volatile int shadingRows, shadingCols;
+  private int shadingCounter;
   private final CinemaRecorder.AudioEngine audio = new CinemaRecorder.AudioEngine();
   private volatile boolean recording, opening;
   private boolean triedFallback;
@@ -139,6 +149,9 @@ public class CinemaActivity extends Activity {
   // ------------------------------------------------------------------ settings
   private SharedPreferences prefs;
   private Size videoSize = new Size(1920, 1080);
+  /** RAW mode records CinemaDNG frame sequences instead of MP4. */
+  private boolean rawMode = false, rawPack12 = true;
+  private Size rawSize;
   private double fps = 24, conformFps = 0;
   private boolean hevc = true, tenBit = false, cbr = false, wavOn = true, shutterAsAngle = true, todTimecode = false, audioOn = true;
   private int quality = 2, gop = 0, lookIndex = 0, detail = 0, stabilization = 0, antibanding = 0, reel = 1, clip = 1;
@@ -228,8 +241,9 @@ public class CinemaActivity extends Activity {
     final Object done = new Object();
     final boolean[] finished = {false};
     if (cameraHandler != null) cameraHandler.post(() -> {
-      if (recording) stopRecordingOnCamera();
+      if (recording) { if (rawMode) stopRawOnCamera(); else stopRecordingOnCamera(); }
       closeCamera();
+      if (raw != null) { raw.release(); raw = null; }
       synchronized (done) { finished[0] = true; done.notifyAll(); }
     });
     synchronized (done) { long until = SystemClock.elapsedRealtime() + 6000; while (!finished[0] && SystemClock.elapsedRealtime() < until) { try { done.wait(200); } catch (InterruptedException e) { break; } } }
@@ -269,6 +283,9 @@ public class CinemaActivity extends Activity {
     Range<Integer>[] fpsRanges; Range<Integer> evRange = new Range<>(0, 0); Rational evStep = new Rational(1, 3);
     int[] stab, ois, tonemapModes, edgeModes, nrModes, antibanding; boolean realtimeClock;
     float[] cm1, cm2; int k1, k2;
+    // RAW (CinemaDNG) support
+    boolean raw; Size[] rawSizes = new Size[0]; int cfa, whiteLevel = 1023, ill1 = 21, ill2 = 17;
+    float[] black = {64, 64, 64, 64}, fm1, fm2, cal1, cal2;
     CinemaMath.WbModel wb = CinemaMath.GENERIC_WB;
   }
 
@@ -318,6 +335,7 @@ public class CinemaActivity extends Activity {
         double diag = Math.hypot(phys.getWidth(), phys.getHeight());
         mm = " " + Math.round(focal[0] * 43.27 / diag) + "mm";
       }
+      setUpRaw(l, caps);
       l.label = (l.front ? "Front" : facing != null && facing == CameraMetadata.LENS_FACING_EXTERNAL ? "USB" : "Back") + mm;
       if (l.map != null) lenses.add(l);
     }
@@ -339,6 +357,57 @@ public class CinemaActivity extends Activity {
     l.cm2 = t2 != null && i2 != null ? matrix(t2) : l.cm1; l.k2 = t2 != null && i2 != null ? CinemaMath.illuminantKelvin(i2) : l.k1;
     final float[] a = l.cm1, b = l.cm2; final int ka = l.k1, kb = l.k2;
     l.wb = (k, tint) -> CinemaMath.calibratedGains(a, ka, b, kb, k, tint);
+  }
+
+  /** RAW needs the RAW capability, a Bayer sensor and RAW_SENSOR output sizes. */
+  private static void setUpRaw(Lens l, int[] caps) {
+    if (!contains(caps, CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW) || l.map == null) return;
+    Integer cfa = l.chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT);
+    Size[] sizes = l.map.getOutputSizes(ImageFormat.RAW_SENSOR);
+    if (cfa == null || cfa > 3 || sizes == null || sizes.length == 0) return;
+    l.raw = true; l.cfa = cfa; l.rawSizes = sizes;
+    Arrays.sort(l.rawSizes, (a, b) -> Long.compare((long) b.getWidth() * b.getHeight(), (long) a.getWidth() * a.getHeight()));
+    Integer white = l.chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL); if (white != null) l.whiteLevel = white;
+    BlackLevelPattern bl = l.chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN);
+    if (bl != null) for (int i = 0; i < 4; i++) l.black[i] = bl.getOffsetForIndex(i % 2, i / 2);
+    Integer i1 = l.chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1); if (i1 != null) l.ill1 = i1;
+    Byte i2 = l.chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2); if (i2 != null) l.ill2 = i2;
+    ColorSpaceTransform t;
+    if ((t = l.chars.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)) != null) l.fm1 = matrix(t);
+    if ((t = l.chars.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)) != null) l.fm2 = matrix(t);
+    if ((t = l.chars.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)) != null) l.cal1 = matrix(t);
+    if ((t = l.chars.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)) != null) l.cal2 = matrix(t);
+  }
+
+  /** The recorded frame: the RAW size in RAW mode, otherwise the video size. */
+  private Size frameSize() { return rawMode && rawSize != null ? rawSize : videoSize; }
+
+  /** RAW sizes the sensor can deliver at the current frame rate. */
+  private List<Size> rawSizesForRate() {
+    List<Size> out = new ArrayList<>();
+    if (lens == null || !lens.raw) return out;
+    long frameNs = CinemaMath.frameDurationNs(fps);
+    for (Size s : lens.rawSizes) if (lens.map.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, s) <= frameNs + 1000) out.add(s);
+    return out;
+  }
+
+  /** A preview buffer with the RAW frame's aspect ratio, at most 1920 wide (RAW sizes are too big to preview). */
+  private Size previewSizeFor(Size frame) {
+    Size[] sizes = lens.map.getOutputSizes(SurfaceTexture.class);
+    double aspect = frame.getWidth() / (double) frame.getHeight();
+    Size best = null;
+    if (sizes != null) for (Size s : sizes) {
+      if (s.getWidth() > 1920 || Math.abs(s.getWidth() / (double) s.getHeight() - aspect) > 0.02) continue;
+      if (best == null || s.getWidth() > best.getWidth()) best = s;
+    }
+    return best != null ? best : new Size(1440, (int) Math.round(1440 / aspect));
+  }
+
+  /** On-disk data rate of RAW recording in bytes per second. */
+  private long rawBytesPerSecond() {
+    Size s = frameSize();
+    boolean packed = rawPack12 && lens != null && lens.whiteLevel <= 4095;
+    return (long) (s.getWidth() * (long) s.getHeight() * (packed ? 1.5 : 2) * CinemaMath.exactFps(fps));
   }
 
   private static float[] matrix(ColorSpaceTransform t) {
@@ -383,6 +452,12 @@ public class CinemaActivity extends Activity {
     if (lens.fpsRanges != null) for (Range<Integer> r : lens.fpsRanges) maxAe = Math.max(maxAe, r.getUpper());
     List<Integer> hs = new ArrayList<>();
     if (lens.highSpeed) for (Range<Integer> r : lens.map.getHighSpeedVideoFpsRanges()) hs.add(r.getUpper());
+    if (rawMode && lens.raw) {
+      Size smallest = lens.rawSizes[lens.rawSizes.length - 1];
+      long min = lens.map.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, smallest);
+      for (double f : CinemaMath.FRAME_RATES) if (f <= 60 && CinemaMath.frameDurationNs(f) + 1000 >= min && (CinemaMath.nominalFps(f) <= maxAe || lens.manualSensor)) out.add(f);
+      return out;
+    }
     for (double f : CinemaMath.FRAME_RATES) {
       if (f <= 60) { if (CinemaMath.nominalFps(f) <= maxAe || (lens.manualSensor && f <= 30)) out.add(f); }
       else if (hs.contains(CinemaMath.nominalFps(f))) out.add(f);
@@ -392,6 +467,19 @@ public class CinemaActivity extends Activity {
 
   /** Keeps the saved format inside what the selected lens and encoder can do. */
   private void validateFormat() {
+    if (rawMode && !lens.raw) { rawMode = false; message(lens.label + " can't record RAW. Switched to MP4."); }
+    if (rawMode) {
+      tenBit = false;
+      List<Double> rates = availableRates();
+      if (!rates.isEmpty() && !rates.contains(fps)) {
+        double pick = rates.get(0);
+        for (double r : rates) if (r <= 30) pick = r; // the fastest rate up to 30, unless 24 is available
+        fps = rates.contains(24.0) ? 24 : pick;
+      }
+      List<Size> rs = rawSizesForRate();
+      if (rs.isEmpty()) rs = Arrays.asList(lens.rawSizes);
+      if (rawSize == null || !rs.contains(rawSize)) rawSize = rs.get(0);
+    }
     List<Double> rates = availableRates();
     if (!rates.isEmpty() && !rates.contains(fps)) fps = rates.contains(24.0) ? 24 : rates.get(0);
     if (fps > 60) tenBit = false;
@@ -431,7 +519,13 @@ public class CinemaActivity extends Activity {
         closeCamera();
         if (encoderSurface == null) encoderSurface = MediaCodec.createPersistentInputSurface();
         if (recorder == null) recorder = new CinemaRecorder(encoderSurface);
-        recorder.prepare(recorderConfig());
+        if (rawMode) {
+          if (raw != null && (raw.isRecording() || !rawSize.equals(rawDims))) { raw.release(); raw = null; }
+          if (raw == null) { raw = new RawRecorder(rawSize.getWidth(), rawSize.getHeight()); rawDims = rawSize; }
+        } else {
+          if (raw != null) { raw.release(); raw = null; }
+          recorder.prepare(recorderConfig());
+        }
         manager.openCamera(lens.id, cameraExecutor, deviceCallback);
       } catch (CameraAccessException | IOException | RuntimeException e) {
         opening = false; Log.w(TAG, "open", e); message("Couldn't open camera: " + e.getMessage());
@@ -439,6 +533,8 @@ public class CinemaActivity extends Activity {
       }
     });
   }
+
+  private Size rawDims;
 
   private final CameraDevice.StateCallback deviceCallback = new CameraDevice.StateCallback() {
     @Override public void onOpened(CameraDevice d) { device = d; createSession(); }
@@ -450,12 +546,13 @@ public class CinemaActivity extends Activity {
     try {
       SurfaceTexture st = texture.getSurfaceTexture();
       if (st == null || device == null) { opening = false; return; }
-      st.setDefaultBufferSize(videoSize.getWidth(), videoSize.getHeight());
+      Size buffer = rawMode ? previewSizeFor(rawSize) : videoSize;
+      st.setDefaultBufferSize(buffer.getWidth(), buffer.getHeight());
       if (previewSurface != null) previewSurface.release();
       previewSurface = new Surface(st);
-      OutputConfiguration preview = new OutputConfiguration(previewSurface), video = new OutputConfiguration(encoderSurface);
+      OutputConfiguration preview = new OutputConfiguration(previewSurface), video = new OutputConfiguration(rawMode ? raw.surface() : encoderSurface);
       if (tenBit && Build.VERSION.SDK_INT >= 33) { preview.setDynamicRangeProfile(DynamicRangeProfiles.HLG10); video.setDynamicRangeProfile(DynamicRangeProfiles.HLG10); }
-      highSpeedSession = fps > 60;
+      highSpeedSession = fps > 60 && !rawMode;
       SessionConfiguration config = new SessionConfiguration(highSpeedSession ? SessionConfiguration.SESSION_HIGH_SPEED : SessionConfiguration.SESSION_REGULAR,
           Arrays.asList(preview, video), cameraExecutor, new CameraCaptureSession.StateCallback() {
             @Override public void onConfigured(CameraCaptureSession s) { session = s; opening = false; triedFallback = false; applyRepeating(); ui.post(() -> refreshUi()); }
@@ -471,7 +568,8 @@ public class CinemaActivity extends Activity {
     triedFallback = true;
     String what = tenBit ? "10-bit HLG" : fps > 60 ? CinemaMath.fpsLabel(fps) + " fps" : "this format";
     message("Camera couldn't run " + what + ". Switched to a safer format.");
-    if (tenBit) tenBit = false; else if (fps > 60) fps = 30; else { hevc = false; List<Size> s = videoSizes(); if (s.size() > 1) videoSize = s.get(1); }
+    if (rawMode) { List<Size> rs = rawSizesForRate(); int i = rs.indexOf(rawSize); if (i >= 0 && i + 1 < rs.size()) rawSize = rs.get(i + 1); else { rawMode = false; message("This camera couldn't stream RAW here. Switched to MP4."); } }
+    else if (tenBit) tenBit = false; else if (fps > 60) fps = 30; else { hevc = false; List<Size> s = videoSizes(); if (s.size() > 1) videoSize = s.get(1); }
     ui.post(this::reopen);
   }
 
@@ -480,6 +578,7 @@ public class CinemaActivity extends Activity {
     if (device != null) { device.close(); device = null; }
     if (recorder != null && !recorder.isRecording()) recorder.release();
   }
+
 
   /** Re-opens the camera after a lens or format change. */
   private void reopen() {
@@ -530,7 +629,8 @@ public class CinemaActivity extends Activity {
     try {
       CaptureRequest.Builder b = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
       b.addTarget(previewSurface);
-      if (recording) b.addTarget(encoderSurface);
+      if (recording) b.addTarget(rawMode ? raw.surface() : encoderSurface);
+      if (rawMode) b.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON);
       if (highSpeedSession) {
         int f = CinemaMath.nominalFps(fps);
         b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, highSpeedRange(f, recording));
@@ -644,6 +744,16 @@ public class CinemaActivity extends Activity {
       Long e = res.get(CaptureResult.SENSOR_EXPOSURE_TIME); if (e != null) liveExposure = e;
       Float f = res.get(CaptureResult.LENS_FOCUS_DISTANCE); if (f != null) liveFocus = f;
       liveAfState = res.get(CaptureResult.CONTROL_AF_STATE);
+      if (rawMode) {
+        float[] bl = res.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL); if (bl != null && bl.length == 4) liveBlack = bl;
+        LensShadingMap map;
+        if (shadingCounter++ % 15 == 0 && (map = res.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)) != null) {
+          int rows = map.getRowCount(), cols = map.getColumnCount();
+          float[][] g = new float[4][rows * cols];
+          for (int c = 0; c < 4; c++) for (int y = 0; y < rows; y++) for (int x = 0; x < cols; x++) g[c][y * cols + x] = map.getGainFactor(c, x, y);
+          shadingRows = rows; shadingCols = cols; liveShading = g;
+        }
+      }
       if (awbAuto) {
         RggbChannelVector g = res.get(CaptureResult.COLOR_CORRECTION_GAINS);
         if (g != null) liveGains = new float[] {g.getRed(), g.getGreenEven(), g.getGreenOdd(), g.getBlue()};
@@ -659,7 +769,12 @@ public class CinemaActivity extends Activity {
     if (cameraHandler == null || session == null) { message("Camera not ready."); return; }
     if (recordBusy) return;
     recordBusy = true;
-    cameraHandler.post(() -> { try { if (recording) stopRecordingOnCamera(); else startRecordingOnCamera(); } finally { recordBusy = false; ui.post(this::refreshUi); } });
+    cameraHandler.post(() -> {
+      try {
+        if (recording) { if (rawMode) stopRawOnCamera(); else stopRecordingOnCamera(); }
+        else { if (rawMode) startRawOnCamera(); else startRecordingOnCamera(); }
+      } finally { recordBusy = false; ui.post(this::refreshUi); }
+    });
   }
 
   private volatile boolean recordBusy;
@@ -779,6 +894,156 @@ public class CinemaActivity extends Activity {
 
   private static void closeQuietly(java.io.Closeable c) { if (c != null) try { c.close(); } catch (IOException ignored) {} }
 
+  // ================================================================== RAW (CinemaDNG) recording
+
+  private File rawClipDir;
+  private RandomAccessFile rawWav;
+  private int rawFrameBase;
+
+  /** Where RAW clips go: app storage, so thousands of frames don't flood the gallery. Visible over USB. */
+  File rawRoot() {
+    File base = getExternalFilesDir(Environment.DIRECTORY_MOVIES);
+    return new File(base != null ? base : getFilesDir(), "RAW");
+  }
+
+  private long rawFreeBytes() {
+    File root = rawRoot(); root.mkdirs();
+    return new StatFs(root.getPath()).getAvailableBytes();
+  }
+
+  /** The parts of the DNG header that stay the same for the whole clip. */
+  private CinemaDng.Meta rawTemplate() {
+    CinemaDng.Meta m = new CinemaDng.Meta();
+    m.cfa = lens.cfa; m.whiteLevel = lens.whiteLevel; m.black = lens.black.clone();
+    m.colorMatrix1 = lens.cm1; m.colorMatrix2 = lens.cm1 != null && lens.cm2 != lens.cm1 ? lens.cm2 : null;
+    m.illuminant1 = lens.ill1; m.illuminant2 = lens.ill2;
+    m.forward1 = lens.fm1; m.forward2 = m.colorMatrix2 != null ? lens.fm2 : null;
+    m.calibration1 = lens.cal1; m.calibration2 = m.colorMatrix2 != null ? lens.cal2 : null;
+    m.orientation = relativeRotation() == 180 ? 3 : 1;
+    m.make = Build.MANUFACTURER; m.model = Build.MODEL; m.uniqueModel = Build.MANUFACTURER + " " + Build.MODEL + " " + lens.label;
+    m.software = "City Cinema"; m.reel = String.format(Locale.US, "%c%03d", cameraLetter, reel);
+    m.dateTime = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(new Date());
+    return m;
+  }
+
+  /** As-shot neutral (camera RGB, green = 1) from the white balance gains in use. */
+  private float[] neutral() {
+    float[] g = awbAuto ? liveGains : lens.wb.gains(kelvin, tint);
+    if (g == null) return new float[] {0.5f, 1, 0.5f};
+    float green = (g[1] + g[2]) / 2;
+    return new float[] {green / g[0], 1, green / g[3]};
+  }
+
+  private void startRawOnCamera() {
+    if (raw == null) { message("RAW isn't ready yet."); return; }
+    long rate = rawBytesPerSecond();
+    if (rawFreeBytes() < rate * 10 + 500L * 1024 * 1024) { message("Not enough free space for RAW."); return; }
+    String date = new SimpleDateFormat("yyyyMMdd", Locale.US).format(new Date());
+    clipName = CinemaMath.clipName(cameraLetter, reel, clip, date);
+    rawClipDir = new File(rawRoot(), clipName);
+    if (!rawClipDir.mkdirs() && !rawClipDir.isDirectory()) { message("Couldn't create " + rawClipDir); return; }
+    try {
+      rawWav = null;
+      if (audioOn && wavOn && audio.isRunning()) {
+        rawWav = new RandomAccessFile(new File(rawClipDir, clipName + ".wav"), "rw");
+        rawWav.setLength(0);
+        audio.beginTake(null, rawWav.getChannel());
+      }
+      final CinemaDng.Meta template = rawTemplate();
+      takeStartWall = System.currentTimeMillis();
+      long startFrames = todTimecode ? todFrames(takeStartWall) : recordRunBase;
+      raw.start(rawClipDir, clipName, fps, rawPack12, startFrames, () -> {
+        CinemaDng.Meta m = template.copy();
+        float[] bl = liveBlack; if (bl != null) m.black = bl.clone();
+        m.neutral = neutral();
+        m.iso = aeAuto ? liveIso : iso; m.exposureNs = aeAuto ? liveExposure : exposureNs();
+        m.shading = liveShading; m.shadingRows = shadingRows; m.shadingCols = shadingCols;
+        return m;
+      });
+      recording = true;
+      recordStartNs = SystemClock.elapsedRealtimeNanos();
+      applyRepeatingOnCamera();
+      ui.post(() -> { scopes.invalidate(); refreshUi(); });
+    } catch (IOException | RuntimeException e) {
+      Log.w(TAG, "raw start", e);
+      recording = false;
+      if (raw.isRecording()) raw.stop(1000);
+      if (rawWav != null) { audio.endTake(); closeQuietly(rawWav); rawWav = null; }
+      message("Couldn't start RAW: " + e.getMessage());
+    }
+  }
+
+  private void stopRawOnCamera() {
+    if (!recording) return;
+    recording = false;
+    applyRepeatingOnCamera();
+    long durationNs = SystemClock.elapsedRealtimeNanos() - recordStartNs;
+    if (rawWav != null) audio.endTake();
+    ui.post(() -> message("Writing RAW buffer to storage…"));
+    long frames = raw.stop(60_000);
+    closeQuietly(rawWav);
+    boolean hadWav = rawWav != null; rawWav = null;
+    if (frames == 0) { message("No RAW frames were captured."); return; }
+    writeRawSidecar(frames, durationNs, hadWav);
+    recordRunBase += frames;
+    clip++;
+    savePrefs();
+    long drops = raw.dropped, errors = raw.writeErrors;
+    message("Saved " + clipName + ": " + frames + " DNG frames" + (drops > 0 ? " · " + drops + " dropped (filled)" : "") + (errors > 0 ? " · " + errors + " write errors" : ""));
+    ui.post(() -> { scopes.invalidate(); refreshUi(); });
+  }
+
+  private long todFrames(long wallMs) {
+    Calendar c = Calendar.getInstance(); c.setTimeInMillis(wallMs);
+    long since = ((c.get(Calendar.HOUR_OF_DAY) * 60L + c.get(Calendar.MINUTE)) * 60 + c.get(Calendar.SECOND)) * CinemaMath.NS + c.get(Calendar.MILLISECOND) * 1_000_000L;
+    return CinemaMath.framesFor(since, fps);
+  }
+
+  private void writeRawSidecar(long frames, long durationNs, boolean hadWav) {
+    try {
+      JSONObject j = new JSONObject();
+      j.put("clip", clipName).put("format", "CinemaDNG, uncompressed " + (rawPack12 && lens.whiteLevel <= 4095 ? "12-bit packed" : "16-bit"))
+          .put("camera", String.valueOf(cameraLetter)).put("reel", reel).put("clipNumber", clip)
+          .put("startedAt", new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(new Date(takeStartWall)))
+          .put("device", Build.MANUFACTURER + " " + Build.MODEL).put("lens", lens.label).put("cameraId", lens.id)
+          .put("resolution", rawSize.getWidth() + "x" + rawSize.getHeight()).put("fps", CinemaMath.fpsLabel(fps))
+          .put("cfa", new String[] {"RGGB", "GRBG", "GBRG", "BGGR"}[lens.cfa]).put("whiteLevel", lens.whiteLevel)
+          .put("exposure", aeAuto ? "auto" : "manual").put("iso", aeAuto ? liveIso : iso).put("shutter", CinemaMath.speedLabel(aeAuto ? liveExposure : exposureNs()))
+          .put("whiteBalance", awbAuto ? "auto (as-shot neutral per frame)" : kelvin + "K tint " + tint)
+          .put("lensShadingGainMap", liveShading != null).put("sensorCalibrated", lens.cm1 != null)
+          .put("framesOnDisk", frames).put("framesCaptured", raw.written.get()).put("framesFilledForSync", raw.filled.get())
+          .put("droppedFrames", raw.dropped).put("writeErrors", raw.writeErrors).put("bytes", raw.bytes.get()).put("durationSeconds", durationNs / 1e9);
+      if (hadWav) {
+        long offsetNs = audio.wavStartNs >= 0 && raw.firstFrameTimestampNs >= 0 ? audio.wavStartNs - raw.firstFrameTimestampNs : 0;
+        j.put("wav", clipName + ".wav (32-bit float, 48 kHz)")
+            .put("audioOffsetSeconds", offsetNs / 1e9)
+            .put("audioSync", offsetNs >= 0 ? "audio starts " + Math.round(offsetNs / 1e6) + " ms after frame 0" : "audio starts " + Math.round(-offsetNs / 1e6) + " ms before frame 0");
+      }
+      try (FileOutputStream o = new FileOutputStream(new File(rawClipDir, clipName + ".json"))) { o.write(j.toString(2).getBytes(StandardCharsets.UTF_8)); }
+    } catch (Exception e) { Log.w(TAG, "raw sidecar", e); }
+  }
+
+  private void chooseRawOptions() {
+    if (recording) return;
+    if (!lens.raw) { message(lens.label + " doesn't offer RAW output."); return; }
+    List<Size> sizes = rawSizesForRate();
+    if (sizes.isEmpty()) sizes = Arrays.asList(lens.rawSizes);
+    final List<Size> list = sizes;
+    boolean canPack = lens.whiteLevel <= 4095;
+    String[] options = new String[list.size() * (canPack ? 2 : 1)];
+    int sel = 0, k = 0;
+    for (Size sz : list) for (int bits : canPack ? new int[] {12, 16} : new int[] {16}) {
+      long mb = (long) (sz.getWidth() * (long) sz.getHeight() * (bits == 12 ? 1.5 : 2) * CinemaMath.exactFps(fps) / 1_000_000);
+      options[k] = sz.getWidth() + "×" + sz.getHeight() + " · " + bits + "-bit · " + mb + " MB/s at " + CinemaMath.fpsLabel(fps);
+      if (sz.equals(rawSize) && (bits == 12) == rawPack12) sel = k;
+      k++;
+    }
+    choose("RAW size and bit depth", options, sel, i -> {
+      int per = canPack ? 2 : 1;
+      rawSize = list.get(i / per); rawPack12 = canPack && i % per == 0; reopen();
+    });
+  }
+
   // ================================================================== audio
 
   private void startAudio() {
@@ -828,7 +1093,11 @@ public class CinemaActivity extends Activity {
     recLabel.setVisibility(recording ? View.VISIBLE : View.INVISIBLE);
     if (recording) {
       long ms = (SystemClock.elapsedRealtimeNanos() - recordStartNs) / 1_000_000;
-      recLabel.setText(String.format(Locale.US, "● REC %s  %d:%02d", clipName == null ? "" : clipName.substring(0, 9), ms / 60000, (ms / 1000) % 60));
+      String buf = "";
+      RawRecorder r = raw;
+      if (rawMode && r != null) buf = String.format(Locale.US, "  RAW BUF %d/%d%s", r.backlog(), r.poolSize(), r.dropped > 0 ? "  DROP " + r.dropped : "");
+      recLabel.setText(String.format(Locale.US, "● REC %s  %d:%02d%s", clipName == null ? "" : clipName.substring(0, 9), ms / 60000, (ms / 1000) % 60, buf));
+      recLabel.setTextColor(r != null && rawMode && (r.dropped > 0 || r.backlog() >= r.poolSize() - 1) ? ACCENT : REC);
     }
     // exposure readouts: live values in auto, set values in manual
     long exp = aeAuto ? liveExposure : exposureNs();
@@ -843,8 +1112,11 @@ public class CinemaActivity extends Activity {
     long nowMs = SystemClock.uptimeMillis();
     if (nowMs - lastSlowStatus < 2000) return;
     lastSlowStatus = nowMs;
-    long free = new StatFs(Environment.getExternalStorageDirectory().getPath()).getAvailableBytes();
-    double minutes = CinemaMath.minutesRemaining(free, targetBitrate() + (audioOn ? 320_000 + (wavOn ? 48_000 * 64 : 0) : 0));
+    long free = rawMode ? rawFreeBytes() : new StatFs(Environment.getExternalStorageDirectory().getPath()).getAvailableBytes();
+    long bitsPerSecond = rawMode ? rawBytesPerSecond() * 8 + (audioOn && wavOn ? 48_000 * 64 : 0) : targetBitrate() + (audioOn ? 320_000 + (wavOn ? 48_000 * 64 : 0) : 0);
+    double minutes = CinemaMath.minutesRemaining(free, bitsPerSecond);
+    // Stop cleanly before the card is full, so the clip (and its last frames) are kept intact.
+    if (recording && free < Math.max(300L * 1024 * 1024, bitsPerSecond / 8 * 4) && !recordBusy) { message("Storage full: recording stopped."); toggleRecord(); }
     storageView.setText(CinemaMath.formatMinutes(minutes));
     storageView.setTextColor(minutes < 10 ? REC : TEXT);
     Intent bat = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
@@ -968,7 +1240,8 @@ public class CinemaActivity extends Activity {
     if (aw <= 0 || ah <= 0) return;
     // the top and bottom bars float over the picture; keep the full height available
     double d = CinemaMath.DESQUEEZE[prefs.getInt("desqueeze", 0)];
-    double aspect = videoSize.getWidth() / (double) videoSize.getHeight();
+    Size frame = frameSize();
+    double aspect = frame.getWidth() / (double) frame.getHeight();
     double shown = aspect * d;
     int w, h;
     if (aw / (double) ah > shown) { h = ah; w = (int) Math.round(ah * shown); } else { w = aw; h = (int) Math.round(aw / shown); }
@@ -980,12 +1253,12 @@ public class CinemaActivity extends Activity {
     // Camera buffers arrive in the sensor's orientation; rotate them for the landscape display.
     Matrix m = new Matrix();
     int rotation = getDisplay() == null ? Surface.ROTATION_90 : getDisplay().getRotation();
-    RectF view = new RectF(0, 0, baseW, h), buffer = new RectF(0, 0, videoSize.getHeight(), videoSize.getWidth());
+    RectF view = new RectF(0, 0, baseW, h), buffer = new RectF(0, 0, frame.getHeight(), frame.getWidth());
     float cx = view.centerX(), cy = view.centerY();
     if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
       buffer.offset(cx - buffer.centerX(), cy - buffer.centerY());
       m.setRectToRect(view, buffer, Matrix.ScaleToFit.FILL);
-      float scale = Math.max(h / (float) videoSize.getHeight(), baseW / (float) videoSize.getWidth());
+      float scale = Math.max(h / (float) frame.getHeight(), baseW / (float) frame.getWidth());
       m.postScale(scale, scale, cx, cy);
       m.postRotate(90 * (rotation - 2), cx, cy);
     } else if (rotation == Surface.ROTATION_180) m.postRotate(180, cx, cy);
@@ -1004,9 +1277,10 @@ public class CinemaActivity extends Activity {
     lensView.setText(lens.label);
     String codec = tenBit ? "HEVC 10-bit HLG" : hevc ? "HEVC" : "H.264";
     String speed = fps > 60 && conformFps > 0 ? " → " + CinemaMath.fpsLabel(conformFps) : "";
-    formatView.setText(resolutionName(videoSize) + "  " + CinemaMath.fpsLabel(fps) + speed + "p  " + codec + "  " + CinemaMath.formatBitrate(targetBitrate()));
+    if (rawMode && rawSize != null) formatView.setText("RAW " + rawSize.getWidth() + "×" + rawSize.getHeight() + "  " + CinemaMath.fpsLabel(fps) + "p  CinemaDNG " + (rawPack12 && lens.whiteLevel <= 4095 ? 12 : 16) + "-bit  " + rawBytesPerSecond() / 1_000_000 + " MB/s");
+    else formatView.setText(resolutionName(videoSize) + "  " + CinemaMath.fpsLabel(fps) + speed + "p  " + codec + "  " + CinemaMath.formatBitrate(targetBitrate()));
     fpsCell.set(CinemaMath.fpsLabel(fps) + speed, false);
-    lookCell.set(tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
+    lookCell.set(rawMode ? "RAW" : tenBit ? "HLG" : CinemaMath.LOOKS[lookIndex], false);
     recButton.recording = recording; recButton.invalidate();
     for (Toggle t : toggles) t.sync();
     scopes.invalidate();
@@ -1238,7 +1512,7 @@ public class CinemaActivity extends Activity {
 
   private void lookPanel() {
     boolean curves = lens.curvePoints >= 16 && contains(lens.tonemapModes, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE);
-    panelHeader("LOOK", tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curves ? "" : "  · this camera doesn't allow custom tone curves"));
+    panelHeader("LOOK", rawMode ? CinemaMath.LOOKS[lookIndex] + " · monitoring only: RAW frames are recorded ungraded" : tenBit ? "HLG (10-bit HDR uses its own curve)" : CinemaMath.LOOKS[lookIndex] + (curves ? "" : "  · this camera doesn't allow custom tone curves"));
     LinearLayout c = chips();
     for (int i = 0; i < CinemaMath.LOOKS.length; i++) { final int k = i; addChip(c, CinemaMath.LOOKS[i], lookIndex == i, () -> { lookIndex = k; applyRepeating(); refreshUi(); }); }
     LinearLayout d = chips();
@@ -1281,7 +1555,8 @@ public class CinemaActivity extends Activity {
   }
 
   private void formatPanel() {
-    panelHeader("FORMAT", resolutionName(videoSize) + " " + videoSize.getWidth() + "×" + videoSize.getHeight() + " · " + CinemaMath.fpsLabel(fps) + " fps");
+    Size fs = frameSize();
+    panelHeader("FORMAT", (rawMode ? "RAW " : resolutionName(fs) + " ") + fs.getWidth() + "×" + fs.getHeight() + " · " + CinemaMath.fpsLabel(fps) + " fps");
     LinearLayout c = chips();
     for (double f : availableRates()) addChip(c, CinemaMath.fpsLabel(f), Math.abs(f - fps) < 0.001, () -> { if (recording) return; fps = f; if (f <= 60) conformFps = 0; reopen(); });
     if (fps > 60) {
@@ -1290,6 +1565,11 @@ public class CinemaActivity extends Activity {
       for (double f : new double[] {23.976, 24, 25, 29.97, 30}) addChip(o, "Slow-mo → " + CinemaMath.fpsLabel(f), Math.abs(conformFps - f) < 0.001, () -> { conformFps = f; reopen(); });
     }
     LinearLayout r = chips();
+    if (rawMode) {
+      for (Size s : rawSizesForRate()) addChip(r, "RAW " + s.getWidth() + "×" + s.getHeight(), s.equals(rawSize), () -> { if (recording) return; rawSize = s; reopen(); });
+      addChip(r, rawPack12 ? "12-bit" : "16-bit", false, this::chooseRawOptions);
+      return;
+    }
     for (Size s : videoSizes()) addChip(r, resolutionName(s) + (resolutionName(s).contains("×") ? "" : " " + s.getWidth() + "×" + s.getHeight()), s.equals(videoSize), () -> { if (recording) return; videoSize = s; reopen(); });
   }
 
@@ -1300,6 +1580,8 @@ public class CinemaActivity extends Activity {
     CinemaRecorder.EncoderCaps hevcCaps = CinemaRecorder.caps(MediaFormat.MIMETYPE_VIDEO_HEVC);
     boolean hlgPossible = lens.hlg && hevcCaps.main10 && fps <= 60;
     String[] items = {
+      "Recording: " + (rawMode ? "CinemaDNG RAW" : "MP4 (H.264 / HEVC)") + (lens.raw ? "" : " · RAW not offered by this lens"),
+      "RAW: " + (rawSize != null ? rawSize.getWidth() + "×" + rawSize.getHeight() : "–") + " · " + (rawPack12 && lens.whiteLevel <= 4095 ? "12-bit packed" : "16-bit") + " · " + rawBytesPerSecond() / 1_000_000 + " MB/s",
       "Codec: " + (tenBit ? "HEVC 10-bit" : hevc ? "HEVC (H.265)" : "H.264"),
       "Dynamic range: " + (tenBit ? "HDR HLG 10-bit BT.2020" : "SDR 8-bit BT.709") + (hlgPossible ? "" : " (10-bit not supported here)"),
       "Quality: " + CinemaMath.QUALITY[quality] + " · " + CinemaMath.formatBitrate(targetBitrate()),
@@ -1319,8 +1601,17 @@ public class CinemaActivity extends Activity {
     new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("City Cinema · Menu").setItems(items, (d, which) -> onSetting(which, hlgPossible)).show();
   }
 
-  private void onSetting(int which, boolean hlgPossible) {
+  private void onSetting(int item, boolean hlgPossible) {
     boolean busy = recording;
+    if (item == 0) {
+      if (busy) return;
+      if (!lens.raw) { message(lens.label + " doesn't offer RAW output (needs the Camera2 RAW capability and a Bayer sensor)."); return; }
+      choose("Recording format", new String[] {"MP4 · H.264 / HEVC, sound inside", "CinemaDNG RAW · DNG frame sequence + WAV (needs fast storage)"}, rawMode ? 1 : 0, i -> { rawMode = i == 1; reopen(); });
+      return;
+    }
+    if (item == 1) { if (!rawMode) { message("Switch Recording to CinemaDNG RAW first."); return; } chooseRawOptions(); return; }
+    if (rawMode && item >= 2 && item <= 6) { message("Codec settings apply to MP4. RAW frames are uncompressed CinemaDNG."); return; }
+    int which = item - 2;
     switch (which) {
       case 0: if (busy) break; choose("Codec", new String[] {"HEVC (H.265) · smaller files", "H.264 · most compatible"}, hevc ? 0 : 1, i -> { hevc = i == 0; if (!hevc) tenBit = false; reopen(); }); break;
       case 1: if (busy) break;
@@ -1377,7 +1668,9 @@ public class CinemaActivity extends Activity {
         + "\nZoom " + lens.minZoom + "–" + lens.maxZoom + "x · min focus " + (lens.minFocus > 0 ? focusLabel(lens.minFocus) : "fixed")
         + "\nHEVC encoder: " + h.name + " · max " + CinemaMath.formatBitrate(h.maxBitrate) + " · Main10 " + yes(h.main10)
         + "\nH.264 encoder: " + a.name + " · max " + CinemaMath.formatBitrate(a.maxBitrate)
+        + "\nRAW (CinemaDNG): " + (lens.raw ? "yes, " + lens.rawSizes[0].getWidth() + "×" + lens.rawSizes[0].getHeight() + ", white level " + lens.whiteLevel + ", " + new String[] {"RGGB", "GRBG", "GBRG", "BGGR"}[lens.cfa] : "no")
         + "\n\nClips: Movies/City Cinema · WAV: Music/City Cinema · metadata: Documents/City Cinema"
+        + "\nRAW clips: " + rawRoot().getPath() + " (one folder of DNG frames + WAV + JSON per clip; copy them off over USB. They are removed if the app is uninstalled.)"
         + "\nVolume keys start and stop recording. Tap the picture to set the focus/exposure point; double-tap to clear it. Tap the timecode to reset it.";
     new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("About City Cinema").setMessage(s).setPositiveButton("OK", null).show();
   }
@@ -1408,6 +1701,8 @@ public class CinemaActivity extends Activity {
     stabilization = p.getInt("stab", 1); antibanding = p.getInt("antibanding", 0); reel = p.getInt("reel", 1); clip = p.getInt("clip", 1);
     cameraLetter = (char) p.getInt("camLetter", 'A'); wavOn = p.getBoolean("wav", true); audioOn = p.getBoolean("audio", true);
     audioSource = p.getString("audioSource", "Camcorder"); audioDeviceId = p.getInt("audioDevice", 0);
+    rawMode = p.getBoolean("rawMode", false); rawPack12 = p.getBoolean("raw12", true);
+    if (p.contains("rawW")) rawSize = new Size(p.getInt("rawW", 0), p.getInt("rawH", 0));
     shutterAsAngle = p.getBoolean("angle", true); todTimecode = p.getBoolean("tod", false); recordRunBase = p.getLong("rr", 0);
     aeAuto = p.getBoolean("aeAuto", true); iso = p.getInt("iso", 400); shutterAngle = p.getFloat("shutterAngle", 180); shutterNs = p.getLong("shutterNs", 0);
     awbAuto = p.getBoolean("awbAuto", true); kelvin = p.getInt("kelvin", 5600); tint = p.getInt("tint", 0);
@@ -1430,7 +1725,8 @@ public class CinemaActivity extends Activity {
         .putBoolean("audio", audioOn).putString("audioSource", audioSource).putInt("audioDevice", audioDeviceId).putBoolean("angle", shutterAsAngle)
         .putBoolean("tod", todTimecode).putLong("rr", recordRunBase).putBoolean("aeAuto", aeAuto).putInt("iso", iso).putFloat("shutterAngle", (float) shutterAngle)
         .putLong("shutterNs", shutterNs).putBoolean("awbAuto", awbAuto).putInt("kelvin", kelvin).putInt("tint", tint).putBoolean("mf", manualFocus)
-        .putFloat("focus", focus).putFloat("zoom", zoom)
+        .putFloat("focus", focus).putFloat("zoom", zoom).putBoolean("rawMode", rawMode).putBoolean("raw12", rawPack12)
+        .putInt("rawW", rawSize == null ? 0 : rawSize.getWidth()).putInt("rawH", rawSize == null ? 0 : rawSize.getHeight())
         .putBoolean("zebra", scopes.zebra).putBoolean("peak", scopes.peaking).putInt("scope", scopes.scopeMode).putInt("guide", scopes.guide)
         .putBoolean("grid", scopes.grid).putBoolean("level", scopes.level).putBoolean("center", scopes.center).putInt("zebraIre", scopes.zebraIre)
         .putInt("peakColor", scopes.peakColor).putFloat("peakSens", scopes.peakSensitivity).apply();

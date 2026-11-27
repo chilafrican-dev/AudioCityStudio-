@@ -312,6 +312,9 @@ final class CinemaRecorder {
     volatile boolean clipped;
     private long holdUntilL, holdUntilR;
     private volatile CinemaRecorder target;
+    private volatile boolean inTake;
+    /** Camera-clock time of the current/last take's first WAV sample, or -1. */
+    volatile long wavStartNs = -1;
     private volatile FileChannel wav;
     private volatile boolean endRequested;
     private MediaCodec aac;
@@ -356,8 +359,14 @@ final class CinemaRecorder {
       if (record != null) { try { record.stop(); } catch (RuntimeException ignored) {} record.release(); record = null; }
     }
 
+    /**
+     * Starts a take. With a recorder, AAC is encoded into its MP4; with recorder == null (RAW mode) only the WAV is
+     * written. wavStartNs then holds the camera-clock time of the WAV's first sample, for sync.
+     */
     void beginTake(CinemaRecorder recorder, FileChannel wavOut) throws IOException {
       synchronized (takeLock) {
+        wavStartNs = -1;
+        if (recorder != null) {
         MediaFormat f = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, RATE, channels);
         f.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
         f.setInteger(MediaFormat.KEY_BIT_RATE, channels == 2 ? 320_000 : 192_000);
@@ -365,9 +374,11 @@ final class CinemaRecorder {
         aac = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
         aac.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         aac.start();
+        }
         wav = wavOut; wavDataBytes = 0; endRequested = false;
         if (wav != null) { wav.position(0); wav.write(wavHeader(channels, 0)); }
         target = recorder;
+        inTake = true;
       }
     }
 
@@ -375,7 +386,7 @@ final class CinemaRecorder {
     void endTake() {
       endRequested = true;
       long deadline = SystemClock.elapsedRealtime() + 2000;
-      while (target != null && SystemClock.elapsedRealtime() < deadline) {
+      while (inTake && SystemClock.elapsedRealtime() < deadline) {
         if (!running) { synchronized (takeLock) { finishTake(); } break; }
         try { Thread.sleep(10); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
       }
@@ -414,17 +425,20 @@ final class CinemaRecorder {
         if (channels == 1) pr = pl;
         updateMeters(pl, pr, clip);
         synchronized (takeLock) {
-          if (target == null) continue;
+          if (!inTake) continue;
+          if (wavStartNs < 0) wavStartNs = ptsNs;
           if (wav != null) {
             pcm32.clear(); for (int i = 0; i < n; i++) pcm32.putFloat(f[i]); pcm32.flip();
             try { while (pcm32.hasRemaining()) wavDataBytes += wav.write(pcm32); } catch (IOException e) { Log.w(TAG, "wav", e); wav = null; }
           }
-          pcm16.clear(); for (int i = 0; i < n; i++) pcm16.putShort((short) Math.round(f[i] * 32767f)); pcm16.flip();
-          feedAac(pcm16, ptsNs / 1000, endRequested, info);
+          if (aac != null) {
+            pcm16.clear(); for (int i = 0; i < n; i++) pcm16.putShort((short) Math.round(f[i] * 32767f)); pcm16.flip();
+            feedAac(pcm16, ptsNs / 1000, endRequested, info);
+          }
           if (endRequested) finishTake();
         }
       }
-      synchronized (takeLock) { if (target != null) finishTake(); }
+      synchronized (takeLock) { if (inTake) finishTake(); }
     }
 
     private void feedAac(ByteBuffer pcm, long ptsUs, boolean eos, MediaCodec.BufferInfo info) {
@@ -469,6 +483,7 @@ final class CinemaRecorder {
         wav = null;
       }
       target = null;
+      inTake = false;
     }
 
     private void updateMeters(float l, float r, boolean clip) {

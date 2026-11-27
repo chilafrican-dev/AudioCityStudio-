@@ -279,8 +279,8 @@ final class CinemaMath {
 
   // ---------------------------------------------------------------- timecode
 
-  /** SMPTE timecode HH:MM:SS:FF (drop-frame uses ';' before the frames, per convention). */
-  static String timecode(long frames, double fps) {
+  /** SMPTE timecode fields {hours, minutes, seconds, frames} for a frame count, with drop-frame counting at 29.97/59.94. */
+  static int[] timecodeFields(long frames, double fps) {
     int base = nominalFps(fps);
     if (frames < 0) frames = 0;
     if (isDropFrameRate(fps)) {
@@ -289,8 +289,14 @@ final class CinemaMath {
       long tens = frames / perTenMinutes, rest = frames % perTenMinutes;
       frames += drop * 9L * tens + (rest > drop ? drop * ((rest - drop) / perMinute) : 0);
     }
-    long ff = frames % base, totalSeconds = frames / base;
-    return String.format(Locale.US, "%02d:%02d:%02d%s%02d", (totalSeconds / 3600) % 24, (totalSeconds / 60) % 60, totalSeconds % 60, isDropFrameRate(fps) ? ";" : ":", ff);
+    long totalSeconds = frames / base;
+    return new int[] {(int) ((totalSeconds / 3600) % 24), (int) ((totalSeconds / 60) % 60), (int) (totalSeconds % 60), (int) (frames % base)};
+  }
+
+  /** SMPTE timecode HH:MM:SS:FF (drop-frame uses ';' before the frames, per convention). */
+  static String timecode(long frames, double fps) {
+    int[] t = timecodeFields(frames, fps);
+    return String.format(Locale.US, "%02d:%02d:%02d%s%02d", t[0], t[1], t[2], isDropFrameRate(fps) ? ";" : ":", t[3]);
   }
 
   /** Frame count for elapsed nanoseconds at a real (possibly fractional) frame rate. */

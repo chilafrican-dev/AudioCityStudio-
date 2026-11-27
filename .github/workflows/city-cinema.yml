@@ -31,6 +31,13 @@ jobs:
       - name: Host tests
         run: ./run-tests.sh
 
+      - name: Verify CinemaDNG output with LibRaw
+        run: |
+          python3 -m venv /tmp/venv && /tmp/venv/bin/pip install -q rawpy numpy
+          mkdir -p /tmp/dng
+          java -cp "build/test/tests:build/test/classes:$ANDROID_SDK_ROOT/platforms/android-35/android.jar" ug.audiocity.cinema.CinemaTests /tmp/dng
+          /tmp/venv/bin/python -I tools/verify_dng.py /tmp/dng
+
       - name: Restore the signing key (from the CINEMA_KEYSTORE_BASE64 secret)
         env:
           CINEMA_KEYSTORE_BASE64: ${{ secrets.CINEMA_KEYSTORE_BASE64 }}

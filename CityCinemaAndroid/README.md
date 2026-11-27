@@ -1,4 +1,4 @@
-# City Cinema 1.0
+# City Cinema 1.1
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -44,6 +44,21 @@ no third-party libraries.
 - Anamorphic desqueeze preview at 1.33x, 1.5x, 1.8x or 2x.
 - A red tally border while recording, plus storage time remaining, battery level and a thermal warning.
 
+**RAW video (CinemaDNG)**
+- Menu → Recording → **CinemaDNG RAW** records the sensor's Bayer data as a folder of DNG frames per clip. DaVinci Resolve and other CinemaDNG tools open the folder as one clip.
+- Every frame is a valid DNG 1.4 containing:
+  - the sensor's own color matrices, forward matrices and calibration
+  - black and white levels (dynamic black level per frame where the camera reports it)
+  - the as-shot white balance
+  - a **lens-shading GainMap**, so phone vignetting and color shading are corrected in the raw developer
+  - CinemaDNG **TimeCodes**, **FrameRate** (exact 24000/1001 for 23.976) and **ReelName** tags
+- **12-bit packed** (lossless for 10/12-bit sensors, 25% smaller) or **16-bit**. Data is uncompressed.
+- You can pick from the camera's RAW sizes, for example full sensor or a binned size. Frame rates are limited to what the sensor can stream in RAW.
+- Frames are copied into a pool of preallocated buffers and written by parallel threads. If storage can't keep up, the next frame fills the missing frame number(s), so the sequence stays continuous and in sync with the sound. `RAW BUF` on screen shows how full the buffer is, and drops are counted.
+- Each clip folder holds `A001_C001_…_000000.dng` …, a 32-bit float WAV, and a JSON sidecar with the measured audio offset to frame 0.
+- RAW clips are saved in the app's storage at `Android/data/ug.audiocity.cinema/files/Movies/RAW/`, so thousands of frames don't flood the gallery. Copy them off over USB. **They are deleted if you uninstall the app.**
+- The look you choose is for monitoring only: RAW frames are recorded ungraded.
+
 **Audio**
 - Always-on 48 kHz capture, so the meters work before you press record. Records 32-bit float where the device allows it.
 - Stereo peak meters with hold and a clip latch, and digital gain from -12 to +24 dB.
@@ -61,7 +76,8 @@ Files are saved to `Movies/City Cinema` (MP4), `Music/City Cinema` (WAV) and `Do
 
 City Cinema can only use what the phone's Camera2 HAL and hardware encoder expose:
 - Manual exposure, manual white balance, custom tone curves, high frame rates and 10-bit each need the matching camera capability. The Menu → About screen shows what your phone supports, and unsupported controls fall back to auto.
-- There is no RAW or ProRes recording: Android phones don't expose a ProRes encoder, and RAW video needs a per-frame DNG pipeline that this version doesn't have.
+- There is no ProRes: Android phones don't expose a ProRes encoder. RAW is uncompressed CinemaDNG, which needs the Camera2 RAW capability.
+- RAW data rates are very high. For example, 12 MP at 24 fps in 12-bit is about 430 MB/s, which is more than most phones can write steadily. A binned or smaller RAW size, or a lower frame rate, gives drop-free recording. Watch `RAW BUF`.
 - "AC Log" is a tone curve applied to the ISP's output. It flattens and protects highlights, but it can't recover range the ISP has already clipped.
 - The camera stays locked to landscape. The preview analysis for scopes, peaking and zebras runs at about 12 fps on a 480-pixel-wide copy of the picture, so peaking is coarser than the recorded image.
 
@@ -79,4 +95,4 @@ export ANDROID_SDK_ROOT=/path/to/Android/Sdk   # platform 35 + build-tools 35.0.
 
 ## Status
 
-The host tests pass (`CinemaTests`: shutter/angle maths, flicker-free angles, ISO stops, white balance round trips, tone curves, false color, guides, drop-frame timecode, ramps, bitrate and the WAV header). The app has **not yet been run on a phone**. Before relying on it for a shoot, test on your device: recording, audio sync, 10-bit, high frame rate, and the look/WB on your sensor.
+The host tests pass, and in CI the sample DNGs (12- and 16-bit, with GainMap and CinemaDNG tags) are decoded with LibRaw, which confirms every sample, the levels, the CFA pattern and the as-shot white balance (`tools/verify_dng.py`). `CinemaTests` covers shutter/angle maths, flicker-free angles, ISO stops, white balance round trips, tone curves, false color, guides, drop-frame timecode, ramps, bitrate and the WAV header). The app has **not yet been run on a phone**. Before relying on it for a shoot, test on your device: recording, audio sync, 10-bit, high frame rate, and the look/WB on your sensor.
