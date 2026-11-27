@@ -145,6 +145,9 @@ public class ClipPlayerActivity extends Activity {
     lutButton = chip("LUT: None", v -> chooseLut());
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(38)); lp.leftMargin = dp(8);
     controls.addView(lutButton, lp);
+    Button bake = chip("709 COPY", v -> bakeLut());
+    LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, dp(38)); bp.leftMargin = dp(6);
+    controls.addView(bake, bp);
     Button share = chip("SHARE", v -> share());
     LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, dp(38)); sp.leftMargin = dp(6);
     controls.addView(share, sp);
@@ -300,6 +303,56 @@ public class ClipPlayerActivity extends Activity {
       data.flip();
       renderer.setLut(data);
     });
+  }
+
+  /**
+   * Saves a normal-colour copy of a log clip (the LUT baked in), next to the original, for phone editors, messaging
+   * and the Gallery, which can't apply .cube LUTs. The log original stays for proper grading.
+   */
+  private void bakeLut() {
+    final Clip k = current;
+    if (k == null) { toastLike("Choose a clip first."); return; }
+    if (k.name.endsWith(".mov")) { toastLike("ProRes clips can't be decoded on the phone; apply the LUT in Resolve or Final Cut."); return; }
+    final String look = !"None".equals(lut) ? lut : k.look != null && CinemaMath.isLogLook(k.look) ? k.look : null;
+    if (look == null) { toastLike("This clip isn't log. Pick its log under LUT if it is."); return; }
+    releasePlayer();
+    final TextView status = text("Converting " + k.name + " with " + look + " → Rec.709 …  0%", 14, TEXT);
+    status.setPadding(dp(20), dp(16), dp(20), dp(16));
+    final AlertDialog dialog = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Normal-colour copy")
+        .setView(status).setCancelable(false).show();
+    background.execute(() -> {
+      String name = k.name.replaceAll("\\.mp4$", "") + "_Rec709.mp4";
+      android.content.ContentResolver cr = getContentResolver();
+      android.content.ContentValues v = new android.content.ContentValues();
+      v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+      v.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
+      v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/City Cinema");
+      v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+      Uri out = null;
+      String result;
+      try {
+        out = cr.insert(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
+        if (out == null) throw new java.io.IOException("couldn't create the copy");
+        try (android.os.ParcelFileDescriptor fd = cr.openFileDescriptor(out, "rw")) {
+          LutTranscoder.run(this, k.uri, look, fd.getFileDescriptor(),
+              f -> ui.post(() -> status.setText(String.format(Locale.US, "Converting %s with %s → Rec.709 …  %d%%", k.name, look, Math.round(f * 100)))));
+        }
+        android.content.ContentValues done = new android.content.ContentValues();
+        done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+        cr.update(out, done, null, null);
+        result = "Saved " + name + " in Movies/City Cinema. It has normal colours for any editor or app; the log original is kept for grading.";
+      } catch (Exception e) {
+        Log.w(TAG, "bake", e);
+        if (out != null) try { cr.delete(out, null, null); } catch (RuntimeException ignored) {}
+        result = "Couldn't convert: " + e.getMessage();
+      }
+      final String msg = result;
+      ui.post(() -> { dialog.dismiss(); toastLike(msg); loadClips(); });
+    });
+  }
+
+  private void toastLike(String msg) {
+    new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setMessage(msg).setPositiveButton("OK", null).show();
   }
 
   private void share() {

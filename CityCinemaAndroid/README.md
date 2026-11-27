@@ -1,4 +1,4 @@
-# City Cinema 2.1
+# City Cinema 2.2
 
 A standalone manual cinema camera for Android phones (package `ug.audiocity.cinema`, Android 11+). It is a separate
 app from Audio City Studio, built the same way: plain Java, Camera2, MediaCodec and MediaMuxer, with no Gradle and
@@ -78,6 +78,7 @@ Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra)
 **Clips and player.** **CLIPS** on the side panel opens the clip browser:
 - Thumbnails, length, size and look of everything in `Movies/City Cinema`.
 - A player with seek, share, and a **live viewing LUT** for log clips. The LUT is chosen automatically from the clip's sidecar and applied on the GPU, while the file stays untouched.
+- **709 COPY** makes a normal-colour copy of a log clip (`…_Rec709.mp4`), for phone editors, messaging apps and the Gallery, which can't load `.cube` LUTs (their built-in filters can't undo log). It decodes the clip, applies the clip's log → Rec.709 LUT on the GPU and re-encodes at the original codec and bitrate, copying the sound unchanged. The log original is kept for grading.
 - ProRes `.mov` clips are listed but don't play on the phone, because Android has no ProRes decoder. Play them in Resolve, Final Cut, Premiere or VLC.
 
 **STAB** on the side panel cycles the stabilization modes the camera offers:
