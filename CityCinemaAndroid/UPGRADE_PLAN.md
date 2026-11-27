@@ -36,8 +36,14 @@ already integer microseconds (good); project format is unversioned JSON (add a v
 1. Audit — done (this file).
 2. Camera — **done**: Rec.709 VIEW (3.7, Android 13+, monitor only), vectorscope and clip warnings on all scopes,
    audio limiter (3.7.1). Left for later: wind-noise filter, headphone monitoring.
-3. Timeline engine: tracks (video layers, audio, music, voice-over, titles), gaps, snapping, ripple/roll/slip/slide,
-   redo, markers, versioned project format with migration.
+3. Timeline engine — **in progress**.
+   - 3.8: **layer tracks** (3 video layers above the main track: B-roll, picture-in-picture) with free placement,
+     opacity, framing incl. PiP (zoom below 100%), their own sound in the mix; **drag to move** layers, titles and
+     music with **magnetic snapping** (clip/layer/title edges and the playhead, with a guide line); split layers;
+     **redo**; project format **version 2** (version-1 projects load unchanged, tested).
+   - The main track stays magnetic (clips butt together, like a primary storyline); gaps live on layer tracks.
+   - Next: several audio tracks (music, voice-over, effects) replacing the single music slot, timeline
+     thumbnails and audio waveforms, ripple/roll/slip/slide on the main track, markers, multi-select.
 4. GPU compositing: per-layer transform with opacity and blend modes, FP16 intermediates, PiP.
 5. Colour: lift/gamma/gain/offset wheels, curves, HSL qualifier, masks, before/after; LUT manager (rename, delete,
    favourites, thumbnails).

@@ -103,6 +103,7 @@ public class EditTests {
     logDetectTests();
     autoGradeTests();
     toolTests();
+    layerTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -113,6 +114,46 @@ public class EditTests {
   /** Log footage shown without conversion is recognised; normal and dark/flat frames are not. */
   /** Auto colour: a dark, warm-cast frame comes out neutral and at normal brightness; a good frame is left alone. */
   /** Speed changes the clip's length and maps timeline time to source time; split keeps both halves in sync. */
+  /** Layer tracks: drawn above the main track in track order, extend the timeline, snap, split, keep their sound. */
+  static void layerTests() {
+    EditModel.Project p = new EditModel.Project();
+    p.fadeIn = p.fadeOut = false;
+    EditModel.Clip main = new EditModel.Clip();
+    main.inUs = 0; main.outUs = 10_000_000; main.sourceDurationUs = 10_000_000;
+    p.clips.add(main);
+    EditModel.Clip b2 = new EditModel.Clip(), b1 = new EditModel.Clip();
+    for (EditModel.Clip k : new EditModel.Clip[] {b2, b1}) { k.inUs = 2_000_000; k.outUs = 6_000_000; k.sourceDurationUs = 8_000_000; }
+    b2.track = 2; b2.startUs = 3_000_000; b2.opacity = 0.5;
+    b1.track = 1; b1.startUs = 4_000_000;
+    p.overlays.add(b2); p.overlays.add(b1);
+    java.util.List<EditModel.Layer> ls = EditModel.layersAt(p, 5_000_000);
+    check(ls.size() == 3 && ls.get(0).ref == main && ls.get(1).ref == b1 && ls.get(2).ref == b2, "main, then layer 1, then layer 2");
+    check(ls.get(1).sourceUs == 3_000_000 && ls.get(2).sourceUs == 4_000_000, "layer source times");
+    check(Math.abs(ls.get(2).alpha - 0.5) < 1e-9 && ls.get(1).clip == -1, "layer opacity and marker");
+    check(EditModel.layersAt(p, 2_000_000).size() == 1, "layers only while they run");
+    // a layer past the end extends the timeline
+    b1.startUs = 9_000_000;
+    check(EditModel.duration(p) == 13_000_000, "layer extends the timeline");
+    // snapping: within tolerance to the nearest edge, otherwise unchanged
+    long[] pts = EditModel.snapPoints(p, b1, 5_500_000);
+    check(EditModel.snap(9_950_000, pts, 100_000) == 10_000_000, "snaps to the main clip's end");
+    check(EditModel.snap(5_430_000, pts, 100_000) == 5_500_000, "snaps to the playhead");
+    check(EditModel.snap(8_000_000, pts, 100_000) == 8_000_000, "no snap when nothing is near");
+    boolean ownEdge = false; for (long q : pts) if (q == 9_000_000) ownEdge = true;
+    check(!ownEdge, "an item never snaps to its own edge");
+    // split a layer clip
+    EditModel.Clip second = EditModel.splitOverlay(p, b2, 4_000_000);
+    check(second != null && b2.outUs == 3_000_000 && second.inUs == 3_000_000 && second.startUs == 4_000_000 && second.track == 2, "layer split");
+    check(b2.durationUs() + second.durationUs() == 4_000_000, "layer split keeps its length");
+    check(EditModel.splitOverlay(p, b2, 9_000_000) == null, "split outside the clip refused");
+    // copies carry layer settings; the project copy for the preview thread includes layers
+    EditModel.Project q = EditModel.snapshot(p);
+    check(q.overlays.size() == 3 && q.overlays.get(0).track == 2 && q.overlays.get(0).opacity == 0.5, "layers in the preview copy");
+    // project fades
+    p.fadeIn = true; p.fadeUs = 1_000_000;
+    check(Math.abs(EditModel.projectFade(p, 500_000) - 0.5) < 1e-9 && EditModel.projectFade(p, 2_000_000) == 1, "project fade");
+  }
+
   static void toolTests() {
     EditModel.Project p = new EditModel.Project();
     EditModel.Clip c = new EditModel.Clip();

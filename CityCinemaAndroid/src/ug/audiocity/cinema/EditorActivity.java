@@ -65,7 +65,7 @@ import javax.microedition.khronos.opengles.GL10;
 public class EditorActivity extends Activity {
   static final String TAG = "CityCinemaEditor";
   static final int BG = CinemaActivity.BG, TEXT = CinemaActivity.TEXT, DIM = CinemaActivity.DIM, ACCENT = CinemaActivity.ACCENT;
-  static final int PICK_VIDEO = 11, PICK_MUSIC = 12, PICK_LUT = 13;
+  static final int PICK_VIDEO = 11, PICK_MUSIC = 12, PICK_LUT = 13, PICK_LAYER = 14;
 
   private EditModel.Project project = new EditModel.Project();
   private volatile EditModel.Project shown = new EditModel.Project(); // snapshot drawn by the preview
@@ -122,11 +122,13 @@ public class EditorActivity extends Activity {
     HorizontalScrollView actionsScroll = new HorizontalScrollView(this);
     LinearLayout actions = new LinearLayout(this);
     actions.addView(chip("+ VIDEO", v -> pick(PICK_VIDEO, "video/*")), lp(-2));
+    actions.addView(chip("+ LAYER", v -> pick(PICK_LAYER, "video/*")), lp(-2));
     actions.addView(chip("+ TITLE", v -> addTitle()), lp(-2));
     actions.addView(chip("+ MUSIC", v -> pick(PICK_MUSIC, "audio/*")), lp(-2));
     actions.addView(chip("SPLIT", v -> splitAtPlayhead()), lp(-2));
     actions.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
     actions.addView(chip("UNDO", v -> undo()), lp(-2));
+    actions.addView(chip("REDO", v -> redo()), lp(-2));
     actions.addView(chip("PROJECT", v -> select(null)), lp(-2));
     actions.addView(chip("NEW", v -> newProject()), lp(-2));
     Button export = chip("EXPORT", v -> exportDialog());
@@ -138,7 +140,7 @@ public class EditorActivity extends Activity {
     root.addView(bar);
 
     timeline = new Timeline(this);
-    root.addView(timeline, new LinearLayout.LayoutParams(-1, dp(118)));
+    root.addView(timeline, new LinearLayout.LayoutParams(-1, dp(160)));
     setContentView(root);
     changed(false);
   }
@@ -212,7 +214,7 @@ public class EditorActivity extends Activity {
     Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
     i.addCategory(Intent.CATEGORY_OPENABLE);
     i.setType(type);
-    if (code == PICK_VIDEO) i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+    if (code == PICK_VIDEO || code == PICK_LAYER) i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
     startActivityForResult(i, code);
   }
 
@@ -228,7 +230,19 @@ public class EditorActivity extends Activity {
     }
     jobs.execute(() -> {
       for (Uri u : uris) {
-        if (code == PICK_VIDEO) {
+        if (code == PICK_LAYER) {
+          EditModel.Clip c = probeVideo(u);
+          if (c != null) ui.post(() -> {
+            snapshot();
+            c.startUs = playhead;
+            c.track = freeTrack(c.startUs, c.durationUs());
+            project.overlays.add(c);
+            selected = c; changed(true);
+            verifyLog(c);
+            toast("Added as layer " + c.track + " at the playhead. Drag it on the timeline to move it; in Edit use Zoom below 100% for picture-in-picture and Opacity to blend.");
+          });
+          else ui.post(() -> toast("Couldn't read that video."));
+        } else if (code == PICK_VIDEO) {
           EditModel.Clip c = probeVideo(u);
           if (c != null) ui.post(() -> {
             // add after the selected clip, or at the end
@@ -533,24 +547,41 @@ public class EditorActivity extends Activity {
   // ---- undo: snapshots of the project before each change that removes or cuts something
   private final java.util.ArrayDeque<String> undoStack = new java.util.ArrayDeque<>();
 
+  private final java.util.ArrayDeque<String> redoStack = new java.util.ArrayDeque<>();
+
   private void snapshot() {
-    try { undoStack.push(project.json().toString()); while (undoStack.size() > 40) undoStack.removeLast(); }
+    try { undoStack.push(project.json().toString()); while (undoStack.size() > 40) undoStack.removeLast(); redoStack.clear(); }
     catch (Exception e) { Log.w(TAG, "snapshot", e); }
   }
 
-  private void undo() {
-    if (undoStack.isEmpty()) { toast("Nothing to undo."); return; }
+  private void undo() { swapState(undoStack, redoStack, "Undone.", "Nothing to undo."); }
+
+  private void redo() { swapState(redoStack, undoStack, "Redone.", "Nothing to redo."); }
+
+  private void swapState(java.util.ArrayDeque<String> from, java.util.ArrayDeque<String> to, String done, String empty) {
+    if (from.isEmpty()) { toast(empty); return; }
     try {
       stopPlayback();
-      project = EditModel.Project.from(new JSONObject(undoStack.pop()));
+      to.push(project.json().toString());
+      project = EditModel.Project.from(new JSONObject(from.pop()));
       selected = null; changed(true);
-      toast("Undone.");
-    } catch (Exception e) { Log.w(TAG, "undo", e); toast("Couldn't undo."); }
+      toast(done);
+    } catch (Exception e) { Log.w(TAG, "undo", e); toast("Couldn't change the project."); }
+  }
+
+  /** The lowest layer track with room for [start, start + length). */
+  private int freeTrack(long start, long length) {
+    for (int t = 1; t <= EditModel.Project.MAX_TRACKS; t++) {
+      boolean free = true;
+      for (EditModel.Clip o : project.overlays) if (o.track == t && o.startUs < start + length && start < o.startUs + o.durationUs()) free = false;
+      if (free) return t;
+    }
+    return EditModel.Project.MAX_TRACKS;
   }
 
   /** Deletes what is selected on the timeline: a clip, a title or the music. */
   private void deleteSelected() {
-    if (selected instanceof EditModel.Clip) { snapshot(); project.clips.remove(selected); toast("Clip deleted. UNDO brings it back."); }
+    if (selected instanceof EditModel.Clip) { snapshot(); if (!project.clips.remove(selected)) project.overlays.remove(selected); toast("Clip deleted. UNDO brings it back."); }
     else if (selected instanceof EditModel.Title) { snapshot(); project.titles.remove(selected); toast("Title deleted. UNDO brings it back."); }
     else if (selected instanceof EditModel.Music) { snapshot(); project.music = null; toast("Music removed. UNDO brings it back."); }
     else { toast("Tap a clip, title or the music on the timeline first, then DELETE."); return; }
@@ -558,6 +589,12 @@ public class EditorActivity extends Activity {
   }
 
   private void splitAtPlayhead() {
+    if (selected instanceof EditModel.Clip && project.overlays.contains(selected)) {
+      snapshot();
+      EditModel.Clip b = EditModel.splitOverlay(project, (EditModel.Clip) selected, playhead);
+      if (b != null) { selected = b; changed(true); } else { undoStack.pop(); toast("Move the playhead inside the selected layer clip to split it."); }
+      return;
+    }
     long[] s = EditModel.starts(project);
     for (int i = 0; i < project.clips.size(); i++)
       if (playhead > s[i] && playhead < s[i] + project.clips.get(i).durationUs()) {
@@ -574,7 +611,7 @@ public class EditorActivity extends Activity {
 
   private void buildInspector() {
     inspector.removeAllViews();
-    if (selected instanceof EditModel.Clip && project.clips.contains(selected)) clipInspector((EditModel.Clip) selected);
+    if (selected instanceof EditModel.Clip && (project.clips.contains(selected) || project.overlays.contains(selected))) clipInspector((EditModel.Clip) selected);
     else if (selected instanceof EditModel.Title && project.titles.contains(selected)) titleInspector((EditModel.Title) selected);
     else if (selected instanceof EditModel.Music && selected == project.music) musicInspector((EditModel.Music) selected);
     else projectInspector();
@@ -583,8 +620,11 @@ public class EditorActivity extends Activity {
   private void clipInspector(EditModel.Clip c) {
     heading(c.name, (c.width + "×" + c.height) + " · " + fmt(c.durationUs()) + (c.speed != 1 ? " · " + trimNum(c.speed) + "x" : "") + (CinemaMath.convertsInPost(c.look) ? " · " + c.look : !c.shotIn.isEmpty() ? " · " + c.shotIn + " (flat)" : ""));
     LinearLayout tabs = row();
-    for (String t : new String[] {"Edit", "Colour", "Transition"}) tabs.addView(chip(t, v -> { clipTab = t; buildInspector(); }, clipTab.equals(t)), lp(-2));
+    final boolean layer = project.overlays.contains(c);
+    if (layer && clipTab.equals("Transition")) clipTab = "Edit";
+    for (String t : layer ? new String[] {"Edit", "Colour"} : new String[] {"Edit", "Colour", "Transition"}) tabs.addView(chip(t, v -> { clipTab = t; buildInspector(); }, clipTab.equals(t)), lp(-2));
     inspector.addView(tabs);
+    if (layer) label("Layer " + c.track + " · starts at " + fmt(c.startUs) + " · drawn above the main track");
     int i = project.clips.indexOf(c);
     if (clipTab.equals("Edit")) {
       slider("Start (trim)", 0, c.sourceDurationUs, c.inUs, v -> { c.inUs = Math.min(v, c.outUs - 200_000); }, x -> fmt(x));
@@ -592,11 +632,21 @@ public class EditorActivity extends Activity {
       slider("Volume", 0, 200, (long) Math.round(c.volume * 100), v -> c.volume = v / 100.0, x -> x + "%");
       LinearLayout r = row();
       r.addView(chip(c.muted ? "UNMUTE" : "MUTE", v -> { c.muted = !c.muted; changed(true); }, c.muted), lp(-2));
-      r.addView(chip("◀ MOVE", v -> { if (i > 0) { project.clips.remove(i); project.clips.add(i - 1, c); changed(true); } }), lp(-2));
-      r.addView(chip("MOVE ▶", v -> { if (i < project.clips.size() - 1) { project.clips.remove(i); project.clips.add(i + 1, c); changed(true); } }), lp(-2));
+      if (layer) {
+        r.addView(chip("LAYER ▲", v -> { if (c.track < EditModel.Project.MAX_TRACKS) { snapshot(); c.track++; changed(true); } }), lp(-2));
+        r.addView(chip("LAYER ▼", v -> { if (c.track > 1) { snapshot(); c.track--; changed(true); } }), lp(-2));
+        r.addView(chip("START AT PLAYHEAD", v -> { snapshot(); c.startUs = playhead; changed(true); }), lp(-2));
+      } else {
+        r.addView(chip("◀ MOVE", v -> { if (i > 0) { snapshot(); project.clips.remove(i); project.clips.add(i - 1, c); changed(true); } }), lp(-2));
+        r.addView(chip("MOVE ▶", v -> { if (i < project.clips.size() - 1) { snapshot(); project.clips.remove(i); project.clips.add(i + 1, c); changed(true); } }), lp(-2));
+      }
       inspector.addView(r);
       LinearLayout r2 = row();
-      r2.addView(chip("DUPLICATE", v -> { snapshot(); EditModel.Clip k = c.copy(); k.id = EditModel.NEXT_ID.incrementAndGet(); project.clips.add(i + 1, k); selected = k; changed(true); }), lp(-2));
+      r2.addView(chip("DUPLICATE", v -> {
+        snapshot(); EditModel.Clip k = c.copy(); k.id = EditModel.NEXT_ID.incrementAndGet();
+        if (layer) { k.startUs = c.startUs + c.durationUs(); project.overlays.add(k); } else project.clips.add(i + 1, k);
+        selected = k; changed(true);
+      }), lp(-2));
       r2.addView(chip("DELETE", v -> deleteSelected()), lp(-2));
       inspector.addView(r2);
       // speed (sound follows, with its pitch)
@@ -613,7 +663,8 @@ public class EditorActivity extends Activity {
       fr.addView(chip("FLIP ↔", v -> { c.flip = !c.flip; changed(true); }, c.flip), lp(-2));
       fr.addView(chip("RESET", v -> { c.fill = false; c.zoom = 1; c.panX = c.panY = 0; c.turn = 0; c.flip = false; changed(true); }), lp(-2));
       inspector.addView(scroll(fr));
-      slider("Zoom / crop", 100, 400, Math.round(c.zoom * 100), v -> c.zoom = v / 100.0, x -> x + "%");
+      slider("Opacity", 0, 100, Math.round(c.opacity * 100), v -> c.opacity = v / 100.0, x -> x + "%");
+      slider("Zoom / crop", 25, 400, Math.round(c.zoom * 100), v -> c.zoom = v / 100.0, x -> x + "%" + (x < 100 ? " (picture-in-picture)" : ""));
       slider("Move left / right", -100, 100, Math.round(c.panX * 100), v -> c.panX = v / 100.0, x -> x + "");
       slider("Move up / down", -100, 100, Math.round(c.panY * 100), v -> c.panY = v / 100.0, x -> x + "");
     } else if (clipTab.equals("Colour")) {
@@ -896,6 +947,8 @@ public class EditorActivity extends Activity {
     private float pxPerSecond = 60, lastX, downX;
     private boolean dragging;
     private final android.view.ScaleGestureDetector zoom;
+    // moving a layer clip, title or the music: what, where it started, and the snap guide shown while moving
+    private Object moving; private long moveFrom, guideUs = -1; private boolean moved;
 
     Timeline(Context c) {
       super(c);
@@ -907,9 +960,34 @@ public class EditorActivity extends Activity {
 
     private float x(long us) { return getWidth() / 2f + (us - playhead) / 1e6f * pxPerSecond * density / 2; }
 
+    private long timeAt(float px) { return (long) (playhead + (px - getWidth() / 2f) / (pxPerSecond * density / 2) * 1e6); }
+
+    // rows: layers (lanes, highest track on top), main video, titles, music
+    private float rowL() { return dp(4); }
+    private float rowLh() { return dp(36); }
+    private float rowV() { return rowL() + rowLh() + dp(4); }
+    private float rowVh() { return dp(52); }
+    private float rowT() { return rowV() + rowVh() + dp(4); }
+    private float rowM() { return rowT() + dp(22) + dp(4); }
+
+    private RectF layerRect(EditModel.Clip o) {
+      float lane = rowLh() / EditModel.Project.MAX_TRACKS, top = rowL() + (EditModel.Project.MAX_TRACKS - o.track) * lane;
+      return new RectF(x(o.startUs) + 1, top + 1, x(o.startUs + o.durationUs()) - 1, top + lane - 1);
+    }
+
     @Override protected void onDraw(Canvas c) {
-      float h = getHeight(), rowV = dp(6), rowVh = dp(52), rowT = rowV + rowVh + dp(4), rowTh = dp(22), rowM = rowT + rowTh + dp(4), rowMh = dp(22);
+      float h = getHeight(), rowV = rowV(), rowVh = rowVh(), rowT = rowT(), rowTh = dp(22), rowM = rowM(), rowMh = dp(22);
       p.setTextSize(dp(10)); p.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD));
+      // layer lanes
+      p.setColor(0xff15191d); c.drawRect(0, rowL(), getWidth(), rowL() + rowLh(), p);
+      p.setColor(0x55ffffff); c.drawText("LAYERS", dp(4), rowL() + dp(11), p);
+      for (EditModel.Clip o : project.overlays) {
+        RectF r = layerRect(o);
+        p.setColor(o == selected ? ACCENT : 0xff4a3f6e); c.drawRoundRect(r, dp(3), dp(3), p);
+        p.setColor(o == selected ? BG : TEXT); c.save(); c.clipRect(r);
+        c.drawText(o.track + " · " + o.name + (o.opacity < 1 ? " · " + Math.round(o.opacity * 100) + "%" : "") + (o.zoom < 1 ? " · PiP" : ""), r.left + dp(4), r.centerY() + dp(4), p);
+        c.restore();
+      }
       long[] s = EditModel.starts(project);
       for (int i = 0; i < project.clips.size(); i++) {
         EditModel.Clip k = project.clips.get(i);
@@ -932,41 +1010,78 @@ public class EditorActivity extends Activity {
       }
       if (project.music != null) {
         EditModel.Music m = project.music;
-        RectF r = new RectF(x(m.startUs), rowM, x(Math.min(m.startUs + m.sourceDurationUs, EditModel.duration(project))), rowM + rowMh);
+        RectF r = new RectF(x(m.startUs), rowM, x(Math.min(m.startUs + m.sourceDurationUs, Math.max(m.startUs + 1, EditModel.duration(project)))), rowM + rowMh);
         p.setColor(m == selected ? ACCENT : 0xff5a3a6a); c.drawRoundRect(r, dp(3), dp(3), p);
         p.setColor(m == selected ? BG : TEXT); c.save(); c.clipRect(r); c.drawText("♪  " + m.name, r.left + dp(4), rowM + dp(15), p); c.restore();
       }
+      if (guideUs >= 0) { p.setColor(ACCENT); float gx = x(guideUs); c.drawRect(gx - dp(1), 0, gx + dp(1), h, p); } // snap guide
       p.setColor(TEXT);
       c.drawRect(getWidth() / 2f - dp(1), 0, getWidth() / 2f + dp(1), h, p);
     }
 
+    /** The selected item under the finger that can be dragged along the timeline (layer clip, title or music). */
+    private Object movableAt(float tx, float ty) {
+      long t = timeAt(tx);
+      if (selected instanceof EditModel.Clip && project.overlays.contains(selected) && layerRect((EditModel.Clip) selected).contains(tx, ty)) return selected;
+      if (selected instanceof EditModel.Title && ty >= rowT() && ty < rowM()) { EditModel.Title k = (EditModel.Title) selected; if (t >= k.startUs && t < k.startUs + k.durationUs) return k; }
+      if (selected instanceof EditModel.Music && ty >= rowM() && selected == project.music) { EditModel.Music m = (EditModel.Music) selected; if (t >= m.startUs && t < m.startUs + m.sourceDurationUs) return m; }
+      return null;
+    }
+
+    private long startOf(Object o) { return o instanceof EditModel.Clip ? ((EditModel.Clip) o).startUs : o instanceof EditModel.Title ? ((EditModel.Title) o).startUs : ((EditModel.Music) o).startUs; }
+
+    private void setStart(Object o, long v) {
+      if (o instanceof EditModel.Clip) ((EditModel.Clip) o).startUs = v; else if (o instanceof EditModel.Title) ((EditModel.Title) o).startUs = v; else ((EditModel.Music) o).startUs = v;
+    }
+
+    private long lengthOf(Object o) { return o instanceof EditModel.Clip ? ((EditModel.Clip) o).durationUs() : o instanceof EditModel.Title ? ((EditModel.Title) o).durationUs : 0; }
+
     @Override public boolean onTouchEvent(MotionEvent e) {
       zoom.onTouchEvent(e);
-      if (e.getPointerCount() > 1) { dragging = true; return true; }
+      if (e.getPointerCount() > 1) { dragging = true; moving = null; guideUs = -1; return true; }
       switch (e.getActionMasked()) {
-        case MotionEvent.ACTION_DOWN: lastX = downX = e.getX(); dragging = false; return true;
+        case MotionEvent.ACTION_DOWN:
+          lastX = downX = e.getX(); dragging = false; moved = false;
+          moving = movableAt(e.getX(), e.getY());
+          if (moving != null) moveFrom = startOf(moving);
+          return true;
         case MotionEvent.ACTION_MOVE:
           if (Math.abs(e.getX() - downX) > dp(6)) dragging = true;
-          if (dragging) {
-            if (playing) stopPlayback();
-            long d = (long) ((lastX - e.getX()) / (pxPerSecond * density / 2) * 1e6);
-            playhead = Math.max(0, Math.min(Math.max(0, EditModel.duration(project) - 1), playhead + d));
-            lastX = e.getX(); updateTime(); invalidate(); preview.requestRender();
+          if (!dragging) return true;
+          if (playing) stopPlayback();
+          if (moving != null) { // drag the selected item, snapping its start or end to nearby edges and the playhead
+            if (!moved) { snapshot(); moved = true; }
+            long dt = (long) ((e.getX() - downX) / (pxPerSecond * density / 2) * 1e6);
+            long start = Math.max(0, moveFrom + dt), len = lengthOf(moving);
+            long tol = (long) (dp(10) / (pxPerSecond * density / 2) * 1e6);
+            long[] pts = EditModel.snapPoints(project, moving, playhead);
+            long a = EditModel.snap(start, pts, tol), b = len > 0 ? EditModel.snap(start + len, pts, tol) - len : start;
+            if (a != start) { start = a; guideUs = a; } else if (b != start) { start = b; guideUs = b + len; } else guideUs = -1;
+            setStart(moving, Math.max(0, start));
+            shown = EditModel.snapshot(project);
+            updateTime(); invalidate(); preview.requestRender();
+            return true;
           }
+          long d = (long) ((lastX - e.getX()) / (pxPerSecond * density / 2) * 1e6);
+          playhead = Math.max(0, Math.min(Math.max(0, EditModel.duration(project) - 1), playhead + d));
+          lastX = e.getX(); updateTime(); invalidate(); preview.requestRender();
           return true;
         case MotionEvent.ACTION_UP:
+          if (moving != null && moved) { guideUs = -1; moving = null; changed(true); return true; }
+          moving = null; guideUs = -1;
           if (!dragging) tap(e.getX(), e.getY());
+          invalidate();
           return true;
         default: return true;
       }
     }
 
     private void tap(float tx, float ty) {
-      long t = (long) (playhead + (tx - getWidth() / 2f) / (pxPerSecond * density / 2) * 1e6);
-      float rowT = dp(6) + dp(52) + dp(4), rowM = rowT + dp(22) + dp(4);
+      long t = timeAt(tx);
       Object hit = null;
-      if (ty < rowT) { long[] s = EditModel.starts(project); for (int i = project.clips.size() - 1; i >= 0 && hit == null; i--) if (t >= s[i] && t < s[i] + project.clips.get(i).durationUs()) hit = project.clips.get(i); }
-      else if (ty < rowM) { for (EditModel.Title k : project.titles) if (t >= k.startUs && t < k.startUs + k.durationUs) hit = k; }
+      if (ty < rowV()) { for (EditModel.Clip o : project.overlays) if (layerRect(o).contains(tx, ty)) hit = o; }
+      else if (ty < rowT()) { long[] s = EditModel.starts(project); for (int i = project.clips.size() - 1; i >= 0 && hit == null; i--) if (t >= s[i] && t < s[i] + project.clips.get(i).durationUs()) hit = project.clips.get(i); }
+      else if (ty < rowM()) { for (EditModel.Title k : project.titles) if (t >= k.startUs && t < k.startUs + k.durationUs) hit = k; }
       else if (project.music != null && t >= project.music.startUs && t < project.music.startUs + project.music.sourceDurationUs) hit = project.music;
       select(hit);
     }

@@ -108,7 +108,8 @@ final class EditEngine {
       // fit (letterbox) or fill (crop to the frame), then zoom; pan moves a zoomed picture up to its edges
       double scale = (c.fill ? Math.max(outW / (double) dw, outH / (double) dh) : Math.min(outW / (double) dw, outH / (double) dh)) * Math.max(1, c.zoom);
       float sx = (float) (dw * scale / outW), sy = (float) (dh * scale / outH);
-      float ox = (float) (-c.panX * Math.max(0, sx - 1)), oy = (float) (c.panY * Math.max(0, sy - 1));
+      // +-1 lines the picture's edge up with the frame's: a zoomed-in picture shows that side, a picture-in-picture moves there
+      float ox = (float) (c.panX * (1 - sx)), oy = (float) (-c.panY * (1 - sy));
       // texture corners for BL, BR, TL, TR of the displayed picture, by rotation (clockwise)
       float[][] uv = rot == 90 ? new float[][] {{1, 0}, {1, 1}, {0, 0}, {0, 1}} : rot == 180 ? new float[][] {{1, 1}, {0, 1}, {1, 0}, {0, 0}}
           : rot == 270 ? new float[][] {{0, 1}, {0, 0}, {1, 1}, {1, 0}} : new float[][] {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
@@ -446,7 +447,7 @@ final class EditEngine {
       List<EditModel.Layer> layers = EditModel.layersAt(p, t);
       List<Long> used = new ArrayList<>();
       for (EditModel.Layer l : layers) {
-        EditModel.Clip c = p.clips.get(l.clip);
+        EditModel.Clip c = l.ref;
         used.add(c.id);
         FrameSource s = sources.get(c.id);
         try {
@@ -583,6 +584,12 @@ final class EditEngine {
         live.add(c.id);
         double g0 = EditModel.clipGain(p, i, Math.max(t, starts[i])), g1 = EditModel.clipGain(p, i, Math.min(t1, starts[i] + c.durationUs() - 1));
         add(c.id, c.uri, c.sourceAt(Math.max(0, t - starts[i])), Math.max(0, starts[i] - t), frames, g0, g1, out, c.speed);
+      }
+      for (EditModel.Clip o : p.overlays) { // layer clips' own sound, with their volume and the project fades
+        if (t1 <= o.startUs || t >= o.startUs + o.durationUs() || o.muted || !o.hasAudio) continue;
+        live.add(o.id);
+        double g0 = o.volume * EditModel.projectFade(p, Math.max(t, o.startUs)), g1 = o.volume * EditModel.projectFade(p, Math.min(t1, o.startUs + o.durationUs() - 1));
+        add(o.id, o.uri, o.sourceAt(Math.max(0, t - o.startUs)), Math.max(0, o.startUs - t), frames, g0, g1, out, o.speed);
       }
       EditModel.Music m = p.music;
       if (m != null && t1 > m.startUs && t < m.startUs + m.sourceDurationUs) {

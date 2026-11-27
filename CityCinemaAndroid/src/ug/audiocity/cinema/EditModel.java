@@ -68,7 +68,9 @@ final class EditModel {
     String lut = "";
     String shotIn = ""; // the log the clip was recorded in (kept flat unless look converts it)
     /** Edit tools: playback speed (sound follows, with its pitch), framing (fit or fill, zoom, pan), turn and flip. */
-    double speed = 1, zoom = 1, panX, panY;
+    double speed = 1, zoom = 1, panX, panY, opacity = 1;
+    /** Layer clips only (Project.overlays): where the clip starts on the timeline and which layer it is on (1 = just above the main track). */
+    long startUs; int track = 1;
     int turn; // extra clockwise rotation: 0, 90, 180, 270
     boolean flip, fill;
     double lutStrength = 1;
@@ -82,7 +84,7 @@ final class EditModel {
       return new JSONObject().put("uri", uri).put("name", name).put("look", look).put("sourceDurationUs", sourceDurationUs).put("inUs", inUs)
           .put("outUs", outUs).put("width", width).put("height", height).put("rotation", rotation).put("fps", fps).put("volume", volume)
           .put("muted", muted).put("hasAudio", hasAudio).put("transition", transition).put("transitionUs", transitionUs).put("grade", grade.json())
-          .put("lut", lut).put("lutStrength", lutStrength).put("shotIn", shotIn).put("speed", speed).put("zoom", zoom).put("panX", panX).put("panY", panY).put("turn", turn).put("flip", flip).put("fill", fill);
+          .put("lut", lut).put("lutStrength", lutStrength).put("shotIn", shotIn).put("speed", speed).put("zoom", zoom).put("panX", panX).put("panY", panY).put("turn", turn).put("flip", flip).put("fill", fill).put("opacity", opacity).put("startUs", startUs).put("track", track);
     }
 
     static Clip from(JSONObject j) {
@@ -95,6 +97,7 @@ final class EditModel {
       c.lut = j.optString("lut", ""); c.lutStrength = j.optDouble("lutStrength", 1); c.shotIn = j.optString("shotIn", "");
       c.speed = Math.max(0.1, j.optDouble("speed", 1)); c.zoom = j.optDouble("zoom", 1); c.panX = j.optDouble("panX", 0); c.panY = j.optDouble("panY", 0);
       c.turn = j.optInt("turn", 0); c.flip = j.optBoolean("flip"); c.fill = j.optBoolean("fill");
+      c.opacity = j.optDouble("opacity", 1); c.startUs = j.optLong("startUs", 0); c.track = Math.max(1, j.optInt("track", 1));
       return c;
     }
 
@@ -103,7 +106,7 @@ final class EditModel {
       c.id = id; c.uri = uri; c.name = name; c.look = look; c.sourceDurationUs = sourceDurationUs; c.inUs = inUs; c.outUs = outUs;
       c.width = width; c.height = height; c.rotation = rotation; c.fps = fps; c.volume = volume; c.muted = muted; c.hasAudio = hasAudio;
       c.transition = transition; c.transitionUs = transitionUs; c.grade = grade.copy(); c.lut = lut; c.lutStrength = lutStrength; c.shotIn = shotIn;
-      c.speed = speed; c.zoom = zoom; c.panX = panX; c.panY = panY; c.turn = turn; c.flip = flip; c.fill = fill;
+      c.speed = speed; c.zoom = zoom; c.panX = panX; c.panY = panY; c.turn = turn; c.flip = flip; c.fill = fill; c.opacity = opacity; c.startUs = startUs; c.track = track;
       return c;
     }
   }
@@ -150,17 +153,22 @@ final class EditModel {
   }
 
   static final class Project {
+    static final int VERSION = 2; // 1: main track only; 2: adds layer tracks (overlays)
+    static final int MAX_TRACKS = 3;
     final List<Clip> clips = new ArrayList<>();
+    /** Video layers above the main track (B-roll, picture-in-picture): placed freely, drawn above by track. */
+    final List<Clip> overlays = new ArrayList<>();
     final List<Title> titles = new ArrayList<>();
     Music music;
     boolean fadeIn = true, fadeOut = true;
     long fadeUs = 700_000;
 
     JSONObject json() throws JSONException {
-      JSONArray c = new JSONArray(), t = new JSONArray();
+      JSONArray c = new JSONArray(), t = new JSONArray(), o = new JSONArray();
       for (Clip k : clips) c.put(k.json());
+      for (Clip k : overlays) o.put(k.json());
       for (Title k : titles) t.put(k.json());
-      JSONObject j = new JSONObject().put("version", 1).put("clips", c).put("titles", t).put("fadeIn", fadeIn).put("fadeOut", fadeOut).put("fadeUs", fadeUs);
+      JSONObject j = new JSONObject().put("version", VERSION).put("clips", c).put("overlays", o).put("titles", t).put("fadeIn", fadeIn).put("fadeOut", fadeOut).put("fadeUs", fadeUs);
       if (music != null) j.put("music", music.json());
       return j;
     }
@@ -169,6 +177,8 @@ final class EditModel {
       Project p = new Project();
       JSONArray c = j.optJSONArray("clips"), t = j.optJSONArray("titles");
       if (c != null) for (int i = 0; i < c.length(); i++) p.clips.add(Clip.from(c.optJSONObject(i)));
+      JSONArray o = j.optJSONArray("overlays"); // absent in version-1 projects: nothing to migrate
+      if (o != null) for (int i = 0; i < o.length(); i++) p.overlays.add(Clip.from(o.optJSONObject(i)));
       if (t != null) for (int i = 0; i < t.length(); i++) p.titles.add(Title.from(t.optJSONObject(i)));
       p.music = Music.from(j.optJSONObject("music"));
       p.fadeIn = j.optBoolean("fadeIn", true); p.fadeOut = j.optBoolean("fadeOut", true); p.fadeUs = j.optLong("fadeUs", 700_000);
@@ -182,6 +192,7 @@ final class EditModel {
   static Project snapshot(Project p) {
     Project q = new Project();
     for (Clip c : p.clips) q.clips.add(c.copy());
+    for (Clip c : p.overlays) q.overlays.add(c.copy());
     for (Title t : p.titles) { Title u = new Title(); u.text = t.text; u.startUs = t.startUs; u.durationUs = t.durationUs; u.place = t.place; u.color = t.color; u.box = t.box; u.size = t.size; q.titles.add(u); }
     if (p.music != null) { Music m = new Music(); Music o = p.music; m.uri = o.uri; m.name = o.name; m.startUs = o.startUs; m.sourceDurationUs = o.sourceDurationUs; m.volume = o.volume; m.fadeInUs = o.fadeInUs; m.fadeOutUs = o.fadeOutUs; q.music = m; }
     q.fadeIn = p.fadeIn; q.fadeOut = p.fadeOut; q.fadeUs = p.fadeUs;
@@ -213,16 +224,49 @@ final class EditModel {
   }
 
   static long duration(Project p) {
-    if (p.clips.isEmpty()) return 0;
+    long end = 0;
+    if (!p.clips.isEmpty()) { long[] s = starts(p); int last = s.length - 1; end = s[last] + p.clips.get(last).durationUs(); }
+    for (Clip o : p.overlays) end = Math.max(end, o.startUs + o.durationUs());
+    return end;
+  }
+
+  /** Moves t onto the nearest point within tolerance (clip edges, layer edges, titles, the playhead), else keeps t. */
+  static long snap(long t, long[] points, long tolerance) {
+    long best = t, bestD = tolerance + 1;
+    for (long q : points) { long d = Math.abs(q - t); if (d < bestD) { bestD = d; best = q; } }
+    return bestD <= tolerance ? best : t;
+  }
+
+  /** Edges a moving item can snap to: every clip, layer and title edge except the item's own, plus extra points. */
+  static long[] snapPoints(Project p, Object moving, long... extra) {
+    List<Long> pts = new ArrayList<>();
+    pts.add(0L);
     long[] s = starts(p);
-    int last = s.length - 1;
-    return s[last] + p.clips.get(last).durationUs();
+    for (int i = 0; i < s.length; i++) { pts.add(s[i]); pts.add(s[i] + p.clips.get(i).durationUs()); }
+    for (Clip o : p.overlays) if (o != moving) { pts.add(o.startUs); pts.add(o.startUs + o.durationUs()); }
+    for (Title t : p.titles) if (t != moving) { pts.add(t.startUs); pts.add(t.startUs + t.durationUs); }
+    for (long e : extra) pts.add(e);
+    long[] out = new long[pts.size()];
+    for (int i = 0; i < out.length; i++) out[i] = pts.get(i);
+    return out;
+  }
+
+  /** Splits layer clip o at timeline time t; the second half becomes a new layer clip right after it. */
+  static Clip splitOverlay(Project p, Clip o, long t) {
+    long local = t - o.startUs;
+    if (local < 100_000 || local > o.durationUs() - 100_000) return null;
+    Clip b = o.copy();
+    b.id = NEXT_ID.incrementAndGet();
+    b.inUs = o.sourceAt(local); b.startUs = t;
+    o.outUs = o.sourceAt(local);
+    p.overlays.add(p.overlays.indexOf(o) + 1, b);
+    return b;
   }
 
   /** What to draw at a timeline time: the clip, the time inside its source, its opacity, and the black-dip factor. */
   static final class Layer {
-    final int clip; final long sourceUs; final double alpha, brightness;
-    Layer(int clip, long sourceUs, double alpha, double brightness) { this.clip = clip; this.sourceUs = sourceUs; this.alpha = alpha; this.brightness = brightness; }
+    final int clip; final Clip ref; final long sourceUs; final double alpha, brightness; // clip: index on the main track, -1 for layer clips
+    Layer(int clip, Clip ref, long sourceUs, double alpha, double brightness) { this.clip = clip; this.ref = ref; this.sourceUs = sourceUs; this.alpha = alpha; this.brightness = brightness; }
   }
 
   /**
@@ -249,9 +293,26 @@ final class EditModel {
         long tout = transitionUs(p, i + 1);
         if (next.transition == 2 && tout > 0 && local > c.durationUs() - tout / 2) bright *= Math.max(0, (c.durationUs() - local) / (tout / 2.0)); // dip: fade down
       }
-      out.add(new Layer(i, c.sourceAt(local), alpha, bright));
+      out.add(new Layer(i, c, c.sourceAt(local), alpha * c.opacity, bright));
     }
+    // layer tracks above the main track, lowest track first (drawn in this order)
+    for (int track = 1; track <= Project.MAX_TRACKS; track++)
+      for (Clip o : p.overlays) {
+        if (o.track != track) continue;
+        long local = t - o.startUs;
+        if (local < 0 || local >= o.durationUs()) continue;
+        out.add(new Layer(-1, o, o.sourceAt(local), o.opacity, fade));
+      }
     return out;
+  }
+
+  /** The project fade in/out factor at timeline time t. */
+  static double projectFade(Project p, long t) {
+    long total = duration(p);
+    double f = 1;
+    if (p.fadeIn && t < p.fadeUs) f = Math.min(f, t / (double) p.fadeUs);
+    if (p.fadeOut && t > total - p.fadeUs) f = Math.min(f, Math.max(0, (total - t) / (double) p.fadeUs));
+    return Math.max(0, f);
   }
 
   static double ease(double x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
