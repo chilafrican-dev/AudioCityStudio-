@@ -57,8 +57,22 @@ final class Apps {
         return true;
     }
 
+    /**
+     * Whether this build includes App Guard. The standard build leaves it out of the manifest because
+     * Google Play Protect blocks sideloaded apps that declare an Accessibility service.
+     */
+    static boolean guardAvailable(Context context) {
+        try {
+            context.getPackageManager().getServiceInfo(new ComponentName(context, GuardService.class), 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
     /** Whether the user has switched on App Guard in Accessibility settings. */
     static boolean guardEnabled(Context context) {
+        if (!guardAvailable(context)) return false;
         String enabled = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
         if (enabled == null) return false;
         ComponentName me = new ComponentName(context, GuardService.class);

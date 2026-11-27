@@ -40,12 +40,27 @@ jobs:
             echo "::warning::No APPVAULT_KEYSTORE_BASE64 secret: a new key is generated, so this APK cannot update an install signed with a different key."
           fi
 
-      - name: Build and sign the APK
-        run: ./build.sh
+      - name: Build and sign the APKs
+        run: |
+          ./build.sh standard
+          ./build.sh guard
 
-      - name: Upload APK
+      - name: Check the standard APK has no Accessibility service (Play Protect blocks those)
+        run: |
+          dump="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml AppVault.apk)"
+          if grep -q BIND_ACCESSIBILITY_SERVICE <<<"$dump"; then echo "::error::AppVault.apk declares an Accessibility service"; exit 1; fi
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml AppVault-Guard.apk | grep -q BIND_ACCESSIBILITY_SERVICE
+
+      - name: Upload standard APK
         uses: actions/upload-artifact@v4
         with:
           name: AppVault-apk
           path: AppVault/AppVault.apk
+          retention-days: 30
+
+      - name: Upload App Guard APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppVault-Guard-apk
+          path: AppVault/AppVault-Guard.apk
           retention-days: 30

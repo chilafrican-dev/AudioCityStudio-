@@ -214,7 +214,7 @@ public final class MainActivity extends Activity {
     private void showVault() {
         lockView.setVisibility(View.GONE);
         vaultView.setVisibility(View.VISIBLE);
-        guardBanner.setVisibility(Apps.guardEnabled(this) ? View.GONE : View.VISIBLE);
+        guardBanner.setVisibility(Apps.guardAvailable(this) && !Apps.guardEnabled(this) ? View.VISIBLE : View.GONE);
         grid.setAdapter(gridAdapter);
         reloadVault();
     }
@@ -363,10 +363,12 @@ public final class MainActivity extends Activity {
     // ---------------------------------------------------------------- settings
 
     private void showSettings() {
+        String guard = !Apps.guardAvailable(this) ? "App Guard: not in this version"
+                : "App Guard: " + (Apps.guardEnabled(this) ? "On" : "Off");
         String[] items = {
                 "Lock again: " + VaultStore.graceLabel(store.graceMs()),
                 "Phone PIN as backup: " + (store.allowDeviceCredential() ? "On" : "Off"),
-                "App Guard: " + (Apps.guardEnabled(this) ? "On" : "Off"),
+                guard,
         };
         new AlertDialog.Builder(this)
                 .setTitle("Settings")
@@ -404,6 +406,16 @@ public final class MainActivity extends Activity {
     }
 
     private void explainGuard() {
+        if (!Apps.guardAvailable(this)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("App Guard")
+                    .setMessage("This version of AppVault doesn't include App Guard, so apps in your vault still open normally from the home screen. "
+                            + "App Guard needs Android's Accessibility access, and Google Play Protect blocks apps that ask for it unless they come from the Play Store.\n\n"
+                            + "The separate AppVault-Guard download includes it.")
+                    .setPositiveButton("OK", null)
+                    .show();
+            return;
+        }
         new AlertDialog.Builder(this)
                 .setTitle("App Guard")
                 .setMessage("Without App Guard, the apps in your vault can still be opened from the home screen. "
