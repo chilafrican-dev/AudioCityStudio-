@@ -1047,11 +1047,12 @@ public class CinemaActivity extends Activity {
     int isoMax = lens.isoRange.getUpper();
     long[] e;
     if (aeKeepShutter) {
-      double[] k = CinemaMath.keepShutter(isoSeconds, clampExposure(logAePreferredShutter(), CinemaMath.frameDurationNs(fps)), lens.isoRange.getLower(), isoMax);
+      long pref = clampExposure(logAePreferredShutter(), CinemaMath.frameDurationNs(fps));
+      double[] k = CinemaMath.cinemaAe(isoSeconds, pref, CinemaMath.frameDurationNs(fps), lens.isoRange.getLower(), isoMax, lens.expRange.getLower(), lens.expRange.getUpper());
       e = new long[] {(long) k[0], (long) k[1]};
       if (Math.abs(k[2]) > 0.7 && now - lastExposureHint > 15_000) {
         lastExposureHint = now;
-        message(k[2] < 0 ? String.format(Locale.US, "Too bright for %s at the lowest ISO: about %.0f stops over. Add an ND filter, or allow auto shutter in the menu.", CinemaMath.angleLabel(CinemaMath.angleForExposure(e[1], fps)), -k[2])
+        message(k[2] < 0 ? String.format(Locale.US, "Bright light: shutter shortened to %s so the picture isn't overexposed (%.0f stops). An ND filter keeps %s and smoother motion.", CinemaMath.speedLabel(e[1]), -k[2], CinemaMath.angleLabel(CinemaMath.angleForExposure(pref, fps)))
             : String.format(Locale.US, "Too dark even at ISO %d: about %.0f stops under. Add light, open the shutter, or allow auto shutter in the menu.", e[0], k[2]));
       }
     } else {

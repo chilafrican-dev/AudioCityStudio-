@@ -422,6 +422,19 @@ final class CinemaMath {
     return new double[] {Math.round(iso), shutterNs, Math.log(needed / iso) / Math.log(2)};
   }
 
+  /**
+   * Cinema auto exposure without an ND filter: keep the chosen shutter angle and move ISO, but when the light is too
+   * bright even at the lowest ISO, shorten the shutter rather than overexpose (a blown picture can't be fixed; a
+   * crisper motion can). Too dark keeps the shutter (more ISO, then the "add light" hint).
+   * Returns {iso, exposure ns, stops beyond the range at the chosen shutter (negative = brighter than ISO min allows)}.
+   */
+  static double[] cinemaAe(double isoSeconds, long preferredNs, long frameNs, int isoMin, int isoMax, long expMin, long expMax) {
+    double[] k = keepShutter(isoSeconds, preferredNs, isoMin, isoMax);
+    if (k[2] >= -0.3) return k;
+    long ns = Math.max(expMin, Math.min(preferredNs, Math.round(isoSeconds / isoMin * NS)));
+    return new double[] {isoMin, ns, k[2]};
+  }
+
   /** Exposure change in stops to bring a metered value to the target: damped, with a small dead band, at most 3 stops. */
   static double logAeCorrection(double metered, double target) {
     double stops = Math.log(target / Math.max(1e-4, metered)) / Math.log(2);

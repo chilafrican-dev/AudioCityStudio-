@@ -20,6 +20,7 @@ public class CinemaTests {
   }
 
   public static void main(String[] args) throws IOException {
+    cinemaAeTests();
     nameAndHighlightTests();
     ccmTests();
     frameRates();
@@ -451,6 +452,27 @@ public class CinemaTests {
       double[] o = CinemaMath.logToRec709(look, clip, clip - 0.03, clip); // a pink speckle at the clip point
       near(o[1], o[0], 1e-9, look + ": no pink in clipped highlights");
     }
+  }
+
+  static void cinemaAeTests() {
+    long pref = CinemaMath.exposureForAngle(180, 24), frame = CinemaMath.frameDurationNs(24);
+    // indoors: ISO moves, shutter stays at 180 degrees
+    double[] in = CinemaMath.cinemaAe(400 * pref / 1e9, pref, frame, 50, 3200, 10_000, 500_000_000L);
+    check(in[1] == pref && Math.abs(in[0] - 400) < 1, "indoors keeps the shutter");
+    // bright daylight: 4 stops too bright at ISO 50 -> shutter shortened, exposure correct, never overexposed
+    double isoSec = 50 * pref / 1e9 / 16;
+    double[] sun = CinemaMath.cinemaAe(isoSec, pref, frame, 50, 3200, 10_000, 500_000_000L);
+    check(sun[0] == 50 && sun[1] < pref, "daylight shortens the shutter");
+    near(sun[0] * sun[1] / 1e9, isoSec, isoSec * 0.01, "daylight exposure is correct");
+    // a little over at ISO min is tolerated (no shutter hunting)
+    double[] edge = CinemaMath.cinemaAe(50 * pref / 1e9 / 1.15, pref, frame, 50, 3200, 10_000, 500_000_000L);
+    check(edge[1] == pref, "slightly bright keeps the shutter");
+    // too dark keeps the shutter at max ISO
+    double[] dark = CinemaMath.cinemaAe(12800 * pref / 1e9, pref, frame, 50, 3200, 10_000, 500_000_000L);
+    check(dark[1] == pref && dark[0] == 3200 && dark[2] > 1.9, "dark keeps the shutter, reports stops under");
+    // never shorter than the sensor's minimum exposure
+    double[] blaze = CinemaMath.cinemaAe(50 * 1e-7, pref, frame, 50, 3200, 10_000, 500_000_000L);
+    check(blaze[1] == 10_000, "shutter limited by the sensor");
   }
 
   static void ccmTests() {
