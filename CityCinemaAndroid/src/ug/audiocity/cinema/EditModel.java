@@ -27,12 +27,41 @@ final class EditModel {
     double exposure, contrast, saturation, temperature, tint, shadows, highlights; // stops; -1..1 for the rest
     int film; // index into FILM_LOOKS
     double filmStrength = 1;
+    // ---- primary wheels: colour (hue in degrees, amount 0..1) and master (-1..1) for lift, gamma, gain and offset
+    double liftH, liftA, liftM, gammaH, gammaA, gammaM, gainH, gainA, gainM, offH, offA, offM;
+    double blacks, whites, vibrance, pivot = 0.5;
+    /** Curves as x,y pairs in 0..1 (empty = straight): master, then red, green, blue. */
+    double[] curveM = new double[0], curveR = new double[0], curveG = new double[0], curveB = new double[0];
+    // ---- HSL qualifier: pick a range of hues (centre, width in degrees, softness 0..1) and shift hue / saturation / lightness there
+    boolean hslOn, hslShow;
+    double hslHue = 25, hslWidth = 30, hslSoft = 0.5, hslShift, hslSat, hslLum;
 
-    boolean neutral() { return exposure == 0 && contrast == 0 && saturation == 0 && temperature == 0 && tint == 0 && shadows == 0 && highlights == 0 && film == 0; }
+    boolean wheelsNeutral() { return liftA == 0 && liftM == 0 && gammaA == 0 && gammaM == 0 && gainA == 0 && gainM == 0 && offA == 0 && offM == 0; }
+    boolean curvesNeutral() { return curveM.length == 0 && curveR.length == 0 && curveG.length == 0 && curveB.length == 0; }
+
+    boolean neutral() {
+      return exposure == 0 && contrast == 0 && saturation == 0 && temperature == 0 && tint == 0 && shadows == 0 && highlights == 0 && film == 0
+          && wheelsNeutral() && blacks == 0 && whites == 0 && vibrance == 0 && curvesNeutral() && !(hslOn && (hslShift != 0 || hslSat != 0 || hslLum != 0));
+    }
 
     JSONObject json() throws JSONException {
-      return new JSONObject().put("exposure", exposure).put("contrast", contrast).put("saturation", saturation).put("temperature", temperature)
-          .put("tint", tint).put("shadows", shadows).put("highlights", highlights).put("film", film).put("filmStrength", filmStrength);
+      JSONObject j = new JSONObject().put("exposure", exposure).put("contrast", contrast).put("saturation", saturation).put("temperature", temperature)
+          .put("tint", tint).put("shadows", shadows).put("highlights", highlights).put("film", film).put("filmStrength", filmStrength)
+          .put("liftH", liftH).put("liftA", liftA).put("liftM", liftM).put("gammaH", gammaH).put("gammaA", gammaA).put("gammaM", gammaM)
+          .put("gainH", gainH).put("gainA", gainA).put("gainM", gainM).put("offH", offH).put("offA", offA).put("offM", offM)
+          .put("blacks", blacks).put("whites", whites).put("vibrance", vibrance).put("pivot", pivot)
+          .put("hslOn", hslOn).put("hslHue", hslHue).put("hslWidth", hslWidth).put("hslSoft", hslSoft).put("hslShift", hslShift).put("hslSat", hslSat).put("hslLum", hslLum);
+      j.put("curveM", arr(curveM)).put("curveR", arr(curveR)).put("curveG", arr(curveG)).put("curveB", arr(curveB));
+      return j;
+    }
+
+    private static JSONArray arr(double[] a) throws JSONException { JSONArray r = new JSONArray(); for (double v : a) r.put(v); return r; }
+
+    private static double[] arr(JSONArray a) {
+      if (a == null) return new double[0];
+      double[] r = new double[a.length() & ~1];
+      for (int i = 0; i < r.length; i++) r[i] = a.optDouble(i);
+      return r;
     }
 
     static Grade from(JSONObject j) {
@@ -41,6 +70,14 @@ final class EditModel {
       g.exposure = j.optDouble("exposure", 0); g.contrast = j.optDouble("contrast", 0); g.saturation = j.optDouble("saturation", 0);
       g.temperature = j.optDouble("temperature", 0); g.tint = j.optDouble("tint", 0); g.shadows = j.optDouble("shadows", 0);
       g.highlights = j.optDouble("highlights", 0); g.film = j.optInt("film", 0); g.filmStrength = j.optDouble("filmStrength", 1);
+      g.liftH = j.optDouble("liftH", 0); g.liftA = j.optDouble("liftA", 0); g.liftM = j.optDouble("liftM", 0);
+      g.gammaH = j.optDouble("gammaH", 0); g.gammaA = j.optDouble("gammaA", 0); g.gammaM = j.optDouble("gammaM", 0);
+      g.gainH = j.optDouble("gainH", 0); g.gainA = j.optDouble("gainA", 0); g.gainM = j.optDouble("gainM", 0);
+      g.offH = j.optDouble("offH", 0); g.offA = j.optDouble("offA", 0); g.offM = j.optDouble("offM", 0);
+      g.blacks = j.optDouble("blacks", 0); g.whites = j.optDouble("whites", 0); g.vibrance = j.optDouble("vibrance", 0); g.pivot = j.optDouble("pivot", 0.5);
+      g.hslOn = j.optBoolean("hslOn"); g.hslHue = j.optDouble("hslHue", 25); g.hslWidth = j.optDouble("hslWidth", 30); g.hslSoft = j.optDouble("hslSoft", 0.5);
+      g.hslShift = j.optDouble("hslShift", 0); g.hslSat = j.optDouble("hslSat", 0); g.hslLum = j.optDouble("hslLum", 0);
+      g.curveM = arr(j.optJSONArray("curveM")); g.curveR = arr(j.optJSONArray("curveR")); g.curveG = arr(j.optJSONArray("curveG")); g.curveB = arr(j.optJSONArray("curveB"));
       return g;
     }
 
@@ -48,6 +85,11 @@ final class EditModel {
       Grade g = new Grade();
       g.exposure = exposure; g.contrast = contrast; g.saturation = saturation; g.temperature = temperature; g.tint = tint;
       g.shadows = shadows; g.highlights = highlights; g.film = film; g.filmStrength = filmStrength;
+      g.liftH = liftH; g.liftA = liftA; g.liftM = liftM; g.gammaH = gammaH; g.gammaA = gammaA; g.gammaM = gammaM;
+      g.gainH = gainH; g.gainA = gainA; g.gainM = gainM; g.offH = offH; g.offA = offA; g.offM = offM;
+      g.blacks = blacks; g.whites = whites; g.vibrance = vibrance; g.pivot = pivot;
+      g.curveM = curveM.clone(); g.curveR = curveR.clone(); g.curveG = curveG.clone(); g.curveB = curveB.clone();
+      g.hslOn = hslOn; g.hslShow = hslShow; g.hslHue = hslHue; g.hslWidth = hslWidth; g.hslSoft = hslSoft; g.hslShift = hslShift; g.hslSat = hslSat; g.hslLum = hslLum;
       return g;
     }
   }
@@ -548,23 +590,124 @@ final class EditModel {
    * The grade on one display-referred RGB value (0..1). Mirrors the editor's GLSL so previews, exports and tests
    * agree: exposure and white balance in linear light, then shadows/highlights, contrast, film look, saturation.
    */
+  /** The full grade on one display-referred RGB value (0..1). The GLSL in EditEngine runs exactly these steps. */
   static double[] grade(double[] rgb, Grade g) {
     double[] c = new double[3];
     double[] wb = {1 + TEMP_RANGE * g.temperature, 1 - TINT_RANGE * g.tint, 1 - TEMP_RANGE * g.temperature};
     double gain = Math.pow(2, g.exposure);
+    double[] lift = wheel(g.liftH, g.liftA, g.liftM, 0.25), gam = wheel(g.gammaH, g.gammaA, g.gammaM, 0.5), gn = wheel(g.gainH, g.gainA, g.gainM, 0.5), off = wheel(g.offH, g.offA, g.offM, 0.1);
+    double bp = -0.1 * g.blacks, wp = 1 - 0.1 * g.whites;
     for (int i = 0; i < 3; i++) {
       double lin = Math.pow(Math.max(0, rgb[i]), 2.2) * gain * wb[i];
       double v = Math.pow(Math.min(1, lin), 1 / 2.2);
+      v = (v - bp) / (wp - bp);                                   // blacks / whites: move the ends
+      v = (v + lift[i] * (1 - v)) * (1 + gn[i]);                  // lift (shadows) and gain (highlights)
+      v = Math.pow(Math.max(0, v), 1 / Math.max(0.1, 1 + gam[i])); // gamma (mid tones)
+      v += off[i];                                                  // offset (everything)
       v += g.shadows * 0.35 * (1 - v) * (1 - v) * v * 2;      // lift or crush the low end
       v -= g.highlights * 0.35 * v * v * (1 - v) * 2;          // pull down or push the top end
-      v = (v - 0.5) * (1 + g.contrast) + 0.5;
+      v = (v - g.pivot) * (1 + g.contrast) + g.pivot;
       c[i] = Math.max(0, Math.min(1, v));
     }
+    if (!g.curvesNeutral()) {
+      c[0] = curve(g.curveR, curve(g.curveM, c[0])); c[1] = curve(g.curveG, curve(g.curveM, c[1])); c[2] = curve(g.curveB, curve(g.curveM, c[2]));
+    }
     c = film(c, g.film, g.filmStrength);
+    if (g.hslOn) c = hsl(c, g);
     double y = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-    double sat = 1 + g.saturation;
+    double mx = Math.max(c[0], Math.max(c[1], c[2])), mn = Math.min(c[0], Math.min(c[1], c[2]));
+    double sat = (1 + g.saturation) * (1 + g.vibrance * (1 - Math.min(1, (mx - mn) * 2))); // vibrance: muted colours more than vivid ones
     for (int i = 0; i < 3; i++) c[i] = Math.max(0, Math.min(1, y + (c[i] - y) * sat));
     return c;
+  }
+
+  /** A colour wheel as an RGB push: the hue's colour minus its own brightness (so colour moves, brightness doesn't), plus master. */
+  static double[] wheel(double hueDeg, double amount, double master, double range) {
+    double[] h = hueRgb(hueDeg);
+    double y = 0.2126 * h[0] + 0.7152 * h[1] + 0.0722 * h[2];
+    double[] o = new double[3];
+    for (int i = 0; i < 3; i++) o[i] = (amount * (h[i] - y) + master) * range;
+    return o;
+  }
+
+  /** Fully saturated colour of a hue (degrees). */
+  static double[] hueRgb(double h) {
+    h = ((h % 360) + 360) % 360 / 60;
+    double x = 1 - Math.abs(h % 2 - 1);
+    int k = (int) h;
+    switch (k) { case 0: return new double[] {1, x, 0}; case 1: return new double[] {x, 1, 0}; case 2: return new double[] {0, 1, x};
+      case 3: return new double[] {0, x, 1}; case 4: return new double[] {x, 0, 1}; default: return new double[] {1, 0, x}; }
+  }
+
+  /**
+   * A curve through points (x,y pairs, any order) as a smooth monotone cubic (Fritsch-Carlson: no overshoot), with the
+   * ends at (0,0) and (1,1) unless points are placed there. No points = straight line.
+   */
+  static double curve(double[] pts, double x) {
+    if (pts == null || pts.length < 2) return x;
+    int n = pts.length / 2;
+    java.util.TreeMap<Double, Double> m = new java.util.TreeMap<>();
+    m.put(0.0, 0.0); m.put(1.0, 1.0);
+    for (int i = 0; i < n; i++) m.put(Math.max(0, Math.min(1, pts[i * 2])), Math.max(0, Math.min(1, pts[i * 2 + 1])));
+    double[] xs = new double[m.size()], ys = new double[m.size()];
+    int k = 0;
+    for (java.util.Map.Entry<Double, Double> e : m.entrySet()) { xs[k] = e.getKey(); ys[k] = e.getValue(); k++; }
+    int len = xs.length;
+    double[] d = new double[len - 1], t = new double[len];
+    for (int i = 0; i < len - 1; i++) d[i] = (ys[i + 1] - ys[i]) / Math.max(1e-9, xs[i + 1] - xs[i]);
+    t[0] = d[0]; t[len - 1] = d[len - 2];
+    for (int i = 1; i < len - 1; i++) t[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
+    for (int i = 0; i < len - 1; i++) {
+      if (d[i] == 0) { t[i] = 0; t[i + 1] = 0; continue; }
+      double a = t[i] / d[i], b = t[i + 1] / d[i], h = a * a + b * b;
+      if (h > 9) { double s = 3 / Math.sqrt(h); t[i] = s * a * d[i]; t[i + 1] = s * b * d[i]; }
+    }
+    x = Math.max(0, Math.min(1, x));
+    int i = 0;
+    while (i < len - 2 && x > xs[i + 1]) i++;
+    double hgt = xs[i + 1] - xs[i], u = hgt <= 0 ? 0 : (x - xs[i]) / hgt;
+    double h00 = 2 * u * u * u - 3 * u * u + 1, h10 = u * u * u - 2 * u * u + u, h01 = -2 * u * u * u + 3 * u * u, h11 = u * u * u - u * u;
+    return Math.max(0, Math.min(1, h00 * ys[i] + h10 * hgt * t[i] + h01 * ys[i + 1] + h11 * hgt * t[i + 1]));
+  }
+
+  /** The curves baked into 256 steps per channel (master then the channel's own curve), for the GPU. */
+  static byte[] curveTable(Grade g) {
+    byte[] out = new byte[256 * 4];
+    double[][] ch = {g.curveR, g.curveG, g.curveB};
+    for (int i = 0; i < 256; i++) {
+      double m = curve(g.curveM, i / 255.0);
+      for (int k = 0; k < 3; k++) out[i * 4 + k] = (byte) Math.round(curve(ch[k], m) * 255);
+      out[i * 4 + 3] = (byte) 255;
+    }
+    return out;
+  }
+
+  /** How much a hue (degrees) and saturation are inside the HSL qualifier (0..1, soft edge; greys are never selected). */
+  static double hslWeight(Grade g, double hue, double sat) {
+    double dist = Math.abs(((hue - g.hslHue) % 360 + 540) % 360 - 180);
+    double half = Math.max(1, g.hslWidth / 2), soft = Math.max(0.01, g.hslSoft) * half;
+    double w = 1 - smooth(half - soft, half + soft, dist);
+    return w * smooth(0.04, 0.12, sat);
+  }
+
+  private static double smooth(double a, double b, double x) { double t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+
+  /** The HSL qualifier's change (or, with hslShow, the selection as white on black). */
+  static double[] hsl(double[] c, Grade g) {
+    double mx = Math.max(c[0], Math.max(c[1], c[2])), mn = Math.min(c[0], Math.min(c[1], c[2])), dl = mx - mn;
+    double hue = 0;
+    if (dl > 1e-9) {
+      if (mx == c[0]) hue = 60 * (((c[1] - c[2]) / dl) % 6);
+      else if (mx == c[1]) hue = 60 * ((c[2] - c[0]) / dl + 2);
+      else hue = 60 * ((c[0] - c[1]) / dl + 4);
+    }
+    double sat = mx <= 0 ? 0 : dl / mx;
+    double w = hslWeight(g, (hue + 360) % 360, sat);
+    if (g.hslShow) return new double[] {w, w, w};
+    if (w <= 0) return c;
+    double nh = hue + g.hslShift * w, ns = Math.max(0, Math.min(1, sat * (1 + g.hslSat * w))), nv = Math.max(0, Math.min(1, mx * (1 + g.hslLum * w * 0.5)));
+    double[] h = hueRgb(nh);
+    return new double[] {nv * (1 - ns + ns * h[0]), nv * (1 - ns + ns * h[1]), nv * (1 - ns + ns * h[2])};
   }
 
   static double[] film(double[] c, int look, double strength) {

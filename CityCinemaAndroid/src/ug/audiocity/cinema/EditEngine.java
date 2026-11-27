@@ -54,6 +54,30 @@ final class EditEngine {
   /** Draws layers and titles with the current GL context (preview GLSurfaceView or the exporter's EGL surface). */
   static final class Compositor {
     private int clipProgram, titleProgram, copyProgram;
+    /** BEFORE view: draw clips with only their technical log conversion (no grade, creative LUT or look). */
+    volatile boolean bypass;
+    private final Map<String, Integer> curveTextures = new HashMap<>();
+
+    /** The grade's curves as a 256 x 1 texture (an identity table when the curves are straight). */
+    private int curveTexture(EditModel.Grade g) {
+      String key = g.curvesNeutral() ? "" : java.util.Arrays.toString(g.curveM) + java.util.Arrays.toString(g.curveR) + java.util.Arrays.toString(g.curveG) + java.util.Arrays.toString(g.curveB);
+      Integer t = curveTextures.get(key);
+      if (t != null) return t;
+      if (curveTextures.size() > 64) { for (int id : curveTextures.values()) GLES30.glDeleteTextures(1, new int[] {id}, 0); curveTextures.clear(); }
+      int[] id = new int[1];
+      GLES30.glGenTextures(1, id, 0);
+      GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, id[0]);
+      ByteBuffer data = ByteBuffer.allocateDirect(256 * 4).order(ByteOrder.nativeOrder());
+      data.put(EditModel.curveTable(g)).flip();
+      GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1);
+      GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, 256, 1, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, data);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE);
+      GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE);
+      curveTextures.put(key, id[0]);
+      return id[0];
+    }
     // the frame is built in two off-screen buffers (16-bit float where the GPU can render to it): each layer reads what is
     // under it from one and writes the result into the other
     private final int[] fbo = new int[2], fboTex = new int[2];
@@ -71,6 +95,22 @@ final class EditEngine {
               + "uniform mediump sampler3D uLut2; uniform float uLut2On, uLut2Strength; uniform vec3 uDomMin, uDomMax; uniform float uL2Scale, uL2Off;\n"
               + "uniform float uExposure, uContrast, uSat, uTemp, uTint, uShadows, uHighlights, uFilm, uFilmStrength;\n"
               + "uniform sampler2D uDst; uniform vec2 uDstSize; uniform int uBlend; uniform vec4 uCrop;\n"
+              + "uniform float uBp, uWp, uPivot, uVib, uCurveOn, uHslOn, uHslShow, uHslHue, uHslWidth, uHslSoft, uHslShift, uHslSat, uHslLum;\n"
+              + "uniform vec3 uLift, uGamma, uGain, uOffset; uniform sampler2D uCurve;\n"
+              + "vec3 hueRgb(float h) {\n" // same as EditModel.hueRgb
+              + "  h = mod(h, 360.0) / 60.0; float x = 1.0 - abs(mod(h, 2.0) - 1.0);\n"
+              + "  if (h < 1.0) return vec3(1.0, x, 0.0); if (h < 2.0) return vec3(x, 1.0, 0.0); if (h < 3.0) return vec3(0.0, 1.0, x);\n"
+              + "  if (h < 4.0) return vec3(0.0, x, 1.0); if (h < 5.0) return vec3(x, 0.0, 1.0); return vec3(1.0, 0.0, x);\n}\n"
+              + "vec3 hslq(vec3 c) {\n" // same as EditModel.hsl
+              + "  float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b)), dl = mx - mn, hue = 0.0;\n"
+              + "  if (dl > 1e-6) { if (mx == c.r) hue = 60.0 * mod((c.g - c.b) / dl, 6.0); else if (mx == c.g) hue = 60.0 * ((c.b - c.r) / dl + 2.0); else hue = 60.0 * ((c.r - c.g) / dl + 4.0); }\n"
+              + "  float sat = mx <= 0.0 ? 0.0 : dl / mx;\n"
+              + "  float dist = abs(mod(hue - uHslHue + 540.0, 360.0) - 180.0), hw = max(1.0, uHslWidth / 2.0), soft = max(0.01, uHslSoft) * hw;\n"
+              + "  float w = (1.0 - smoothstep(hw - soft, hw + soft, dist)) * smoothstep(0.04, 0.12, sat);\n"
+              + "  if (uHslShow > 0.5) return vec3(w);\n"
+              + "  if (w <= 0.0) return c;\n"
+              + "  float ns = clamp(sat * (1.0 + uHslSat * w), 0.0, 1.0), nv = clamp(mx * (1.0 + uHslLum * w * 0.5), 0.0, 1.0);\n"
+              + "  return nv * (1.0 - ns + ns * hueRgb(hue + uHslShift * w));\n}\n"
               + "in vec2 vTex; in vec2 vQ; out vec4 o;\n"
               + "float bl(int m, float s, float d) {\n" // same as EditModel.blend
               + "  if (m == 1) return s * d;\n"
@@ -100,12 +140,20 @@ final class EditEngine {
               + "  vec3 wb = vec3(1.0 + " + EditModel.TEMP_RANGE + " * uTemp, 1.0 - " + EditModel.TINT_RANGE + " * uTint, 1.0 - " + EditModel.TEMP_RANGE + " * uTemp);\n"
               + "  vec3 lin = pow(max(c, 0.0), vec3(2.2)) * exp2(uExposure) * wb;\n"
               + "  c = pow(min(lin, vec3(1.0)), vec3(1.0 / 2.2));\n"
+              + "  c = (c - uBp) / (uWp - uBp);\n"
+              + "  c = (c + uLift * (1.0 - c)) * (1.0 + uGain);\n"
+              + "  c = pow(max(c, 0.0), 1.0 / max(vec3(0.1), 1.0 + uGamma));\n"
+              + "  c += uOffset;\n"
               + "  c += uShadows * 0.35 * (1.0 - c) * (1.0 - c) * c * 2.0;\n"
               + "  c -= uHighlights * 0.35 * c * c * (1.0 - c) * 2.0;\n"
-              + "  c = clamp((c - 0.5) * (1.0 + uContrast) + 0.5, 0.0, 1.0);\n"
+              + "  c = clamp((c - uPivot) * (1.0 + uContrast) + uPivot, 0.0, 1.0);\n"
+              + "  if (uCurveOn > 0.5) { vec3 t = c * (255.0 / 256.0) + 0.5 / 256.0;\n"
+              + "    c = vec3(texture(uCurve, vec2(t.r, 0.5)).r, texture(uCurve, vec2(t.g, 0.5)).g, texture(uCurve, vec2(t.b, 0.5)).b); }\n"
               + "  if (uFilm > 0.5) c = film(c, uFilm, uFilmStrength);\n"
+              + "  if (uHslOn > 0.5) c = hslq(c);\n"
               + "  float y = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
-              + "  c = clamp(vec3(y) + (c - vec3(y)) * (1.0 + uSat), 0.0, 1.0);\n"
+              + "  float vmx = max(c.r, max(c.g, c.b)), vmn = min(c.r, min(c.g, c.b));\n"
+              + "  c = clamp(vec3(y) + (c - vec3(y)) * (1.0 + uSat) * (1.0 + uVib * (1.0 - min(1.0, (vmx - vmn) * 2.0))), 0.0, 1.0);\n"
               + "  vec3 s = c * uBright;\n"
               + "  vec3 d = texture(uDst, gl_FragCoord.xy / uDstSize).rgb;\n" // what is already in the frame underneath
               + "  vec3 b = vec3(bl(uBlend, s.r, d.r), bl(uBlend, s.g, d.g), bl(uBlend, s.b, d.b));\n"
@@ -163,7 +211,30 @@ final class EditEngine {
       GLES30.glUniform2f(loc(clipProgram, "uDstSize"), fboW, fboH);
       GLES30.glUniform1i(loc(clipProgram, "uBlend"), c.blend);
       GLES30.glUniform4f(loc(clipProgram, "uCrop"), (float) c.cropL, (float) c.cropR, (float) c.cropT, (float) c.cropB);
-      EditModel.Grade g = c.grade;
+      EditModel.Grade g = bypass ? new EditModel.Grade() : c.grade; // BEFORE: only the technical log conversion
+      if (bypass) GLES30.glUniform1f(loc(clipProgram, "uLut2On"), 0);
+      double[] lift = EditModel.wheel(g.liftH, g.liftA, g.liftM, 0.25), gam = EditModel.wheel(g.gammaH, g.gammaA, g.gammaM, 0.5);
+      double[] gn = EditModel.wheel(g.gainH, g.gainA, g.gainM, 0.5), off = EditModel.wheel(g.offH, g.offA, g.offM, 0.1);
+      GLES30.glUniform3f(loc(clipProgram, "uLift"), (float) lift[0], (float) lift[1], (float) lift[2]);
+      GLES30.glUniform3f(loc(clipProgram, "uGamma"), (float) gam[0], (float) gam[1], (float) gam[2]);
+      GLES30.glUniform3f(loc(clipProgram, "uGain"), (float) gn[0], (float) gn[1], (float) gn[2]);
+      GLES30.glUniform3f(loc(clipProgram, "uOffset"), (float) off[0], (float) off[1], (float) off[2]);
+      GLES30.glUniform1f(loc(clipProgram, "uBp"), (float) (-0.1 * g.blacks));
+      GLES30.glUniform1f(loc(clipProgram, "uWp"), (float) (1 - 0.1 * g.whites));
+      GLES30.glUniform1f(loc(clipProgram, "uPivot"), (float) g.pivot);
+      GLES30.glUniform1f(loc(clipProgram, "uVib"), (float) g.vibrance);
+      GLES30.glActiveTexture(GLES30.GL_TEXTURE4);
+      GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTexture(g));
+      GLES30.glUniform1i(loc(clipProgram, "uCurve"), 4);
+      GLES30.glUniform1f(loc(clipProgram, "uCurveOn"), g.curvesNeutral() ? 0 : 1);
+      GLES30.glUniform1f(loc(clipProgram, "uHslOn"), g.hslOn ? 1 : 0);
+      GLES30.glUniform1f(loc(clipProgram, "uHslShow"), g.hslShow ? 1 : 0);
+      GLES30.glUniform1f(loc(clipProgram, "uHslHue"), (float) g.hslHue);
+      GLES30.glUniform1f(loc(clipProgram, "uHslWidth"), (float) g.hslWidth);
+      GLES30.glUniform1f(loc(clipProgram, "uHslSoft"), (float) g.hslSoft);
+      GLES30.glUniform1f(loc(clipProgram, "uHslShift"), (float) g.hslShift);
+      GLES30.glUniform1f(loc(clipProgram, "uHslSat"), (float) g.hslSat);
+      GLES30.glUniform1f(loc(clipProgram, "uHslLum"), (float) g.hslLum);
       GLES30.glUniform1f(loc(clipProgram, "uLutOn"), log ? 1 : 0);
       GLES30.glUniform1f(loc(clipProgram, "uAlpha"), (float) alpha);
       GLES30.glUniform1f(loc(clipProgram, "uBright"), (float) brightness);

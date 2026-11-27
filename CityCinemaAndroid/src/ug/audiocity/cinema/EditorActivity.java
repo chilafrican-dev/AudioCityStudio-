@@ -458,6 +458,325 @@ public class EditorActivity extends Activity {
     });
   }
 
+  // ================================================================================================ colour grading
+
+  private String colourTab = "BASIC";
+  /** BEFORE: the preview shows clips with only their technical log conversion (no grade, creative LUT or look). */
+  private volatile boolean beforeView;
+
+  /** Redraws the preview from the edited project right away (while a control is being moved). */
+  private void live() { shown = EditModel.snapshot(project); preview.requestRender(); timeline.invalidate(); }
+
+  private void colourInspector(EditModel.Clip c) {
+    EditModel.Grade g = c.grade;
+    LinearLayout top = row();
+    for (String t : new String[] {"BASIC", "WHEELS", "CURVES", "HSL", "LUT"}) top.addView(chip(t, v -> { colourTab = t; buildInspector(); }, colourTab.equals(t)), lp(-2));
+    top.addView(chip(beforeView ? "BEFORE ◐" : "AFTER ◑", v -> { beforeView = !beforeView; preview.requestRender(); buildInspector(); }, beforeView), lp(-2));
+    inspector.addView(scroll(top));
+    if (beforeView) label("Showing BEFORE: only the log conversion. Tap BEFORE ◐ again to see the grade.");
+    switch (colourTab) {
+      case "WHEELS": wheelsTab(g); break;
+      case "CURVES": curvesTab(g); break;
+      case "HSL": hslTab(g); break;
+      case "LUT": lutTab(c); break;
+      default: basicTab(c, g); break;
+    }
+    LinearLayout r = row();
+    r.addView(chip("AUTO COLOUR", v -> autoColour(c, false)), lp(-2));
+    r.addView(chip("AUTO ALL", v -> { for (EditModel.Clip k : project.clips) autoColour(k, true); toast("Auto colour on every clip."); }), lp(-2));
+    r.addView(chip("RESET GRADE", v -> { snapshot(); c.grade = new EditModel.Grade(); changed(true); }), lp(-2));
+    r.addView(chip("COPY TO ALL CLIPS", v -> { snapshot(); for (EditModel.Clip k : project.clips) { k.grade = g.copy(); k.lut = c.lut; k.lutStrength = c.lutStrength; } changed(true); toast("Grade and LUT copied to every clip."); }), lp(-2));
+    inspector.addView(scroll(r));
+  }
+
+  private void basicTab(EditModel.Clip c, EditModel.Grade g) {
+    LinearLayout looks = row();
+    for (String l : new String[] {"None", "City Log", "Flat Log", "Flat", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"})
+      looks.addView(chip("None".equals(l) ? "No LUT" : l, v -> { c.look = l; changed(true); }, l.equals(c.look)), lp(-2));
+    inspector.addView(scroll(looks));
+    if (CinemaMath.convertsInPost(c.look)) label((c.look.equals("Flat") ? "Flat profile" : "Log: " + c.look) + " → converted to normal colour. Tap No LUT to keep it flat.");
+    else if (!c.shotIn.isEmpty()) label("Shot in " + c.shotIn + ": kept flat for your grade. Grade it by hand, use a LUT made for " + c.shotIn + ", or tap " + c.shotIn + " above to convert it to normal colour.");
+    else label("Shot in log somewhere else? Pick its log above to convert it, or leave No LUT to keep it flat.");
+    LinearLayout conv = row();
+    boolean cv = convertLog();
+    conv.addView(chip(cv ? "NEW LOG CLIPS: CONVERT" : "NEW LOG CLIPS: STAY FLAT", v -> {
+      getSharedPreferences("editor", MODE_PRIVATE).edit().putBoolean("convertLog", !cv).apply();
+      toast(!cv ? "Log clips you add will be converted to normal colour." : "Log clips you add will stay flat for your own grade.");
+      buildInspector();
+    }, cv), lp(-2));
+    inspector.addView(conv);
+    slider("Exposure", -300, 300, Math.round(g.exposure * 100), v -> g.exposure = v / 100.0, x -> String.format(Locale.US, "%+.1f stops", x / 100.0));
+    slider("Contrast", -100, 100, Math.round(g.contrast * 100), v -> g.contrast = v / 100.0, x -> x + "");
+    slider("Contrast pivot", 20, 80, Math.round(g.pivot * 100), v -> g.pivot = v / 100.0, x -> x + "%");
+    slider("Saturation", -100, 100, Math.round(g.saturation * 100), v -> g.saturation = v / 100.0, x -> x + "");
+    slider("Vibrance", -100, 100, Math.round(g.vibrance * 100), v -> g.vibrance = v / 100.0, x -> x + " (muted colours more)");
+    slider("Temperature", -100, 100, Math.round(g.temperature * 100), v -> g.temperature = v / 100.0, x -> (x > 0 ? "warmer " : x < 0 ? "cooler " : "") + Math.abs(x));
+    slider("Tint", -100, 100, Math.round(g.tint * 100), v -> g.tint = v / 100.0, x -> (x > 0 ? "magenta " : x < 0 ? "green " : "") + Math.abs(x));
+    slider("Blacks", -100, 100, Math.round(g.blacks * 100), v -> g.blacks = v / 100.0, x -> x + "");
+    slider("Shadows", -100, 100, Math.round(g.shadows * 100), v -> g.shadows = v / 100.0, x -> x + "");
+    slider("Highlights", -100, 100, Math.round(g.highlights * 100), v -> g.highlights = v / 100.0, x -> x + "");
+    slider("Whites", -100, 100, Math.round(g.whites * 100), v -> g.whites = v / 100.0, x -> x + "");
+    label("Film look");
+    LinearLayout films = row();
+    for (int k = 0; k < EditModel.FILM_LOOKS.length; k++) { final int f = k; films.addView(chip(EditModel.FILM_LOOKS[k], v -> { g.film = f; changed(true); }, g.film == k), lp(-2)); }
+    inspector.addView(scroll(films));
+    if (g.film > 0) slider("Look strength", 0, 100, Math.round(g.filmStrength * 100), v -> g.filmStrength = v / 100.0, x -> x + "%");
+  }
+
+  interface WheelSet { void set(double hue, double amount); }
+  interface MasterSet { void set(double v); }
+
+  /** Lift (shadows), gamma (mid tones), gain (highlights) and offset (everything): colour wheel plus master slider each. */
+  private void wheelsTab(EditModel.Grade g) {
+    label("Drag a wheel towards a colour to tint that range; the slider under it makes the range darker or brighter. Double-tap a wheel to centre it.");
+    LinearLayout r = row();
+    r.addView(wheelBox("LIFT", g.liftH, g.liftA, g.liftM, (h, a) -> { g.liftH = h; g.liftA = a; }, m -> g.liftM = m), new LinearLayout.LayoutParams(dp(118), -2));
+    r.addView(wheelBox("GAMMA", g.gammaH, g.gammaA, g.gammaM, (h, a) -> { g.gammaH = h; g.gammaA = a; }, m -> g.gammaM = m), new LinearLayout.LayoutParams(dp(118), -2));
+    r.addView(wheelBox("GAIN", g.gainH, g.gainA, g.gainM, (h, a) -> { g.gainH = h; g.gainA = a; }, m -> g.gainM = m), new LinearLayout.LayoutParams(dp(118), -2));
+    r.addView(wheelBox("OFFSET", g.offH, g.offA, g.offM, (h, a) -> { g.offH = h; g.offA = a; }, m -> g.offM = m), new LinearLayout.LayoutParams(dp(118), -2));
+    inspector.addView(scroll(r));
+    LinearLayout b = row();
+    b.addView(chip("RESET WHEELS", v -> { snapshot(); g.liftA = g.liftM = g.gammaA = g.gammaM = g.gainA = g.gainM = g.offA = g.offM = 0; changed(true); }), lp(-2));
+    inspector.addView(b);
+  }
+
+  private LinearLayout wheelBox(String name, double hue, double amount, double master, WheelSet set, MasterSet setMaster) {
+    LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setGravity(Gravity.CENTER_HORIZONTAL);
+    TextView t = text(name, 11, DIM); t.setGravity(Gravity.CENTER); box.addView(t, new LinearLayout.LayoutParams(-1, -2));
+    ColourWheel w = new ColourWheel(this, hue, amount, set);
+    box.addView(w, new LinearLayout.LayoutParams(dp(104), dp(104)));
+    SeekBar s = new SeekBar(this);
+    s.setMax(200); s.setProgress((int) Math.round(master * 100) + 100);
+    s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+      @Override public void onProgressChanged(SeekBar b, int p, boolean user) { if (user) { setMaster.set((p - 100) / 100.0); live(); } }
+      @Override public void onStartTrackingTouch(SeekBar b) { snapshot(); }
+      @Override public void onStopTrackingTouch(SeekBar b) { changed(true); }
+    });
+    box.addView(s, new LinearLayout.LayoutParams(-1, dp(28)));
+    return box;
+  }
+
+  /** A colour wheel: the puck's angle is the hue, its distance from the centre the amount. */
+  final class ColourWheel extends View {
+    private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private double hue, amount;
+    private final WheelSet set;
+    private long lastDown;
+
+    ColourWheel(Context c, double hue, double amount, WheelSet set) { super(c); this.hue = hue; this.amount = amount; this.set = set; }
+
+    @Override protected void onDraw(Canvas c) {
+      float cx = getWidth() / 2f, cy = getHeight() / 2f, r = Math.min(cx, cy) - dp(4);
+      int[] cols = new int[13];
+      for (int i = 0; i <= 12; i++) { double[] h = EditModel.hueRgb(i * 30); cols[i] = 0xff000000 | ((int) (h[0] * 255) << 16) | ((int) (h[1] * 255) << 8) | (int) (h[2] * 255); }
+      p.setShader(new android.graphics.SweepGradient(cx, cy, cols, null)); p.setStyle(Paint.Style.FILL);
+      c.drawCircle(cx, cy, r, p);
+      p.setShader(new android.graphics.RadialGradient(cx, cy, r, 0xff3a3f44, 0x003a3f44, android.graphics.Shader.TileMode.CLAMP));
+      c.drawCircle(cx, cy, r, p);
+      p.setShader(null);
+      p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(1)); p.setColor(0x66ffffff);
+      c.drawCircle(cx, cy, r, p); c.drawLine(cx - dp(5), cy, cx + dp(5), cy, p); c.drawLine(cx, cy - dp(5), cx, cy + dp(5), p);
+      double a = Math.toRadians(hue);
+      float px = cx + (float) (Math.cos(a) * amount * r), py = cy + (float) (Math.sin(a) * amount * r);
+      p.setStyle(Paint.Style.FILL); p.setColor(0xff000000); c.drawCircle(px, py, dp(7), p);
+      p.setColor(ACCENT); c.drawCircle(px, py, dp(5), p);
+    }
+
+    @Override public boolean onTouchEvent(MotionEvent e) {
+      float cx = getWidth() / 2f, cy = getHeight() / 2f, r = Math.min(cx, cy) - dp(4);
+      switch (e.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN:
+          getParent().requestDisallowInterceptTouchEvent(true);
+          snapshot();
+          if (e.getEventTime() - lastDown < 300) { amount = 0; set.set(hue, 0); live(); invalidate(); lastDown = 0; return true; } // double tap: centre
+          lastDown = e.getEventTime();
+          return true;
+        case MotionEvent.ACTION_MOVE: {
+          double dx = e.getX() - cx, dy = e.getY() - cy;
+          hue = (Math.toDegrees(Math.atan2(dy, dx)) + 360) % 360;
+          amount = Math.min(1, Math.hypot(dx, dy) / r);
+          set.set(hue, amount); live(); invalidate();
+          return true;
+        }
+        case MotionEvent.ACTION_UP: case MotionEvent.ACTION_CANCEL:
+          changed(true); return true;
+        default: return true;
+      }
+    }
+  }
+
+  private int curveChannel; // 0 master, 1 red, 2 green, 3 blue
+
+  private void curvesTab(EditModel.Grade g) {
+    LinearLayout ch = row();
+    String[] names = {"MASTER", "RED", "GREEN", "BLUE"};
+    for (int k = 0; k < 4; k++) { final int n = k; ch.addView(chip(names[k], v -> { curveChannel = n; buildInspector(); }, curveChannel == k), lp(-2)); }
+    ch.addView(chip("RESET CURVE", v -> { snapshot(); setCurve(g, curveChannel, new double[0]); changed(true); }), lp(-2));
+    inspector.addView(scroll(ch));
+    label("Tap to add a point and drag it; drag a point off the side to remove it. MASTER changes brightness, the colours change one channel.");
+    inspector.addView(new CurveView(this, g), new LinearLayout.LayoutParams(-1, dp(220)));
+  }
+
+  private double[] curveOf(EditModel.Grade g, int ch) { return ch == 1 ? g.curveR : ch == 2 ? g.curveG : ch == 3 ? g.curveB : g.curveM; }
+
+  private void setCurve(EditModel.Grade g, int ch, double[] v) { if (ch == 1) g.curveR = v; else if (ch == 2) g.curveG = v; else if (ch == 3) g.curveB = v; else g.curveM = v; }
+
+  /** Curve editor for the chosen channel; points are x,y in 0..1. */
+  final class CurveView extends View {
+    private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final EditModel.Grade g;
+    private int dragging = -1;
+
+    CurveView(Context c, EditModel.Grade g) { super(c); this.g = g; }
+
+    private RectF box() { float s = Math.min(getWidth(), getHeight()) - dp(16); return new RectF(dp(8), dp(8), dp(8) + s, dp(8) + s); }
+
+    @Override protected void onDraw(Canvas c) {
+      RectF b = box();
+      p.setStyle(Paint.Style.FILL); p.setColor(0xff15191d); c.drawRect(b, p);
+      p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(1)); p.setColor(0x33ffffff);
+      for (int i = 1; i < 4; i++) { float x = b.left + b.width() * i / 4, y = b.top + b.height() * i / 4; c.drawLine(x, b.top, x, b.bottom, p); c.drawLine(b.left, y, b.right, y, p); }
+      c.drawLine(b.left, b.bottom, b.right, b.top, p);
+      int[] col = {0xffeef1f3, 0xffff5a5a, 0xff62ff7a, 0xff5aa0ff};
+      double[] pts = curveOf(g, curveChannel);
+      android.graphics.Path path = new android.graphics.Path();
+      for (int i = 0; i <= 64; i++) {
+        double x = i / 64.0, y = EditModel.curve(pts, x);
+        float px = b.left + (float) x * b.width(), py = b.bottom - (float) y * b.height();
+        if (i == 0) path.moveTo(px, py); else path.lineTo(px, py);
+      }
+      p.setColor(col[curveChannel]); p.setStrokeWidth(dp(2)); c.drawPath(path, p);
+      p.setStyle(Paint.Style.FILL);
+      for (int i = 0; i + 1 < pts.length; i += 2) c.drawCircle(b.left + (float) pts[i] * b.width(), b.bottom - (float) pts[i + 1] * b.height(), dp(6), p);
+    }
+
+    @Override public boolean onTouchEvent(MotionEvent e) {
+      RectF b = box();
+      double x = (e.getX() - b.left) / b.width(), y = (b.bottom - e.getY()) / b.height();
+      double[] pts = curveOf(g, curveChannel);
+      switch (e.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN: {
+          getParent().requestDisallowInterceptTouchEvent(true);
+          snapshot();
+          dragging = -1;
+          for (int i = 0; i + 1 < pts.length; i += 2) if (Math.hypot((pts[i] - x) * b.width(), (pts[i + 1] - y) * b.height()) < dp(20)) dragging = i;
+          if (dragging < 0 && x >= 0 && x <= 1) { // new point
+            double[] n = java.util.Arrays.copyOf(pts, pts.length + 2);
+            n[pts.length] = x; n[pts.length + 1] = Math.max(0, Math.min(1, y));
+            setCurve(g, curveChannel, n); dragging = pts.length;
+          }
+          live(); invalidate();
+          return true;
+        }
+        case MotionEvent.ACTION_MOVE:
+          if (dragging < 0) return true;
+          if (x < -0.08 || x > 1.08) { // dragged off the side: remove
+            double[] n = new double[pts.length - 2];
+            for (int i = 0, k = 0; i < pts.length; i += 2) if (i != dragging) { n[k++] = pts[i]; n[k++] = pts[i + 1]; }
+            setCurve(g, curveChannel, n); dragging = -1;
+          } else { pts[dragging] = Math.max(0.001, Math.min(0.999, x)); pts[dragging + 1] = Math.max(0, Math.min(1, y)); }
+          live(); invalidate();
+          return true;
+        case MotionEvent.ACTION_UP: case MotionEvent.ACTION_CANCEL:
+          dragging = -1; changed(true); return true;
+        default: return true;
+      }
+    }
+  }
+
+  /** HSL qualifier: pick a range of colours (presets or by hand) and change only those. */
+  private void hslTab(EditModel.Grade g) {
+    LinearLayout r = row();
+    r.addView(chip(g.hslOn ? "QUALIFIER ON" : "QUALIFIER OFF", v -> { snapshot(); g.hslOn = !g.hslOn; changed(true); }, g.hslOn), lp(-2));
+    r.addView(chip(g.hslShow ? "SHOWING SELECTION" : "SHOW SELECTION", v -> { g.hslShow = !g.hslShow; changed(true); }, g.hslShow), lp(-2));
+    inspector.addView(scroll(r));
+    LinearLayout pr = row();
+    String[] names = {"SKIN", "SKY", "FOLIAGE", "RED", "YELLOW"};
+    double[][] presets = {{25, 40}, {210, 50}, {100, 60}, {0, 30}, {55, 30}};
+    for (int k = 0; k < names.length; k++) { final double[] ps = presets[k]; pr.addView(chip(names[k], v -> { snapshot(); g.hslOn = true; g.hslHue = ps[0]; g.hslWidth = ps[1]; changed(true); }), lp(-2)); }
+    inspector.addView(scroll(pr));
+    label("SHOW SELECTION paints the chosen colours white and the rest black, so you can fine-tune the range.");
+    slider("Hue (centre)", 0, 359, Math.round(g.hslHue), v -> g.hslHue = v, x -> x + "°");
+    slider("Range width", 10, 180, Math.round(g.hslWidth), v -> g.hslWidth = v, x -> x + "°");
+    slider("Softness", 0, 100, Math.round(g.hslSoft * 100), v -> g.hslSoft = v / 100.0, x -> x + "%");
+    slider("Hue shift", -60, 60, Math.round(g.hslShift), v -> g.hslShift = v, x -> x + "°");
+    slider("Saturation", -100, 100, Math.round(g.hslSat * 100), v -> g.hslSat = v / 100.0, x -> x + "");
+    slider("Lightness", -100, 100, Math.round(g.hslLum * 100), v -> g.hslLum = v / 100.0, x -> x + "");
+  }
+
+  /** Creative LUTs: choose, strength, and manage imported files (favourite, rename, delete). */
+  private void lutTab(EditModel.Clip c) {
+    java.util.Set<String> fav = getSharedPreferences("editor", MODE_PRIVATE).getStringSet("lutFav", new java.util.HashSet<>());
+    label("Cinematic LUT" + (c.lut.isEmpty() ? "" : ": " + lutName(c.lut)));
+    LinearLayout lutRow = row();
+    lutRow.addView(chip("None", v -> { c.lut = ""; changed(true); }, c.lut.isEmpty()), lp(-2));
+    java.util.List<String> keys = new java.util.ArrayList<>();
+    for (String nm : CinematicLuts.NAMES) keys.add(CinematicLuts.key(nm));
+    for (String f : LutPack.list(getAssets())) keys.add(LutPack.key(f));
+    String[] files = EditEngine.lutDir(this).list();
+    if (files != null) { java.util.Arrays.sort(files); keys.addAll(java.util.Arrays.asList(files)); }
+    java.util.List<String> ordered = new java.util.ArrayList<>();
+    for (String k : keys) if (fav.contains(k)) ordered.add(k);
+    for (String k : keys) if (!fav.contains(k)) ordered.add(k);
+    for (String k : ordered) {
+      String mark = fav.contains(k) ? "♥ " : CinematicLuts.isBuiltin(k) ? "★ " : LutPack.isPack(k) ? "◆ " : "";
+      lutRow.addView(chip(mark + lutName(k), v -> { c.lut = k; changed(true); }, k.equals(c.lut)), lp(-2));
+    }
+    lutRow.addView(chip("IMPORT .cube", v -> pickLut()), lp(-2));
+    lutRow.addView(chip("GET LUTS ONLINE", v -> lutSources()), lp(-2));
+    lutRow.addView(chip("EXPORT PACK", v -> exportLutPack()), lp(-2));
+    inspector.addView(scroll(lutRow));
+    if (c.lut.isEmpty()) return;
+    slider("LUT strength", 0, 100, Math.round(c.lutStrength * 100), v -> c.lutStrength = v / 100.0, x -> x + "%");
+    if (CinemaMath.convertsInPost(c.look)) label("Note: the clip's log is converted first (" + c.look + "). If your LUT expects log input, set the log (BASIC) to No LUT.");
+    LinearLayout m = row();
+    final String key = c.lut;
+    m.addView(chip(fav.contains(key) ? "♥ FAVOURITE" : "♡ FAVOURITE", v -> {
+      java.util.Set<String> f = new java.util.HashSet<>(fav);
+      if (!f.remove(key)) f.add(key);
+      getSharedPreferences("editor", MODE_PRIVATE).edit().putStringSet("lutFav", f).apply();
+      buildInspector();
+    }, fav.contains(key)), lp(-2));
+    boolean imported = !CinematicLuts.isBuiltin(key) && !LutPack.isPack(key);
+    if (imported) {
+      m.addView(chip("RENAME", v -> renameLut(key)), lp(-2));
+      m.addView(chip("DELETE", v -> deleteLut(key)), lp(-2));
+    }
+    inspector.addView(scroll(m));
+  }
+
+  private String lutName(String key) { return LutPack.isPack(key) ? LutPack.label(key) : CinematicLuts.nameOf(key).replaceAll("(?i)\\.cube$", ""); }
+
+  private void renameLut(String file) {
+    android.widget.EditText in = new android.widget.EditText(this);
+    in.setText(file.replaceAll("(?i)\\.cube$", "")); in.setSingleLine();
+    new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Rename LUT").setView(in)
+        .setPositiveButton("Rename", (d, w) -> {
+          String name = in.getText().toString().trim().replaceAll("[^A-Za-z0-9 ._()+-]", "_");
+          if (name.isEmpty()) return;
+          String to = name + ".cube";
+          File dir = EditEngine.lutDir(this);
+          if (new File(dir, to).exists()) { toast("A LUT with that name already exists."); return; }
+          if (!new File(dir, file).renameTo(new File(dir, to))) { toast("Couldn't rename it."); return; }
+          snapshot();
+          for (EditModel.Clip k : project.clips) if (file.equals(k.lut)) k.lut = to;
+          for (EditModel.Clip k : project.overlays) if (file.equals(k.lut)) k.lut = to;
+          changed(true);
+        }).setNegativeButton("Cancel", null).show();
+  }
+
+  private void deleteLut(String file) {
+    new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setTitle("Delete LUT")
+        .setMessage("Delete " + file + " from City Cinema? Clips using it go back to no LUT.")
+        .setPositiveButton("Delete", (d, w) -> {
+          snapshot();
+          new File(EditEngine.lutDir(this), file).delete();
+          for (EditModel.Clip k : project.clips) if (file.equals(k.lut)) k.lut = "";
+          for (EditModel.Clip k : project.overlays) if (file.equals(k.lut)) k.lut = "";
+          changed(true);
+        }).setNegativeButton("Cancel", null).show();
+  }
+
   private static String trimNum(double v) { return v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(v); }
 
   private void askLog(EditModel.Clip c) {
@@ -778,55 +1097,7 @@ public class EditorActivity extends Activity {
       for (int k = 0; k < EditModel.BLEND_MODES.length; k++) { final int m = k; bm.addView(chip(EditModel.BLEND_MODES[k], v -> { c.blend = m; changed(true); }, c.blend == k), lp(-2)); }
       inspector.addView(scroll(bm));
     } else if (clipTab.equals("Colour")) {
-      EditModel.Grade g = c.grade;
-      LinearLayout looks = row();
-      for (String l : new String[] {"None", "City Log", "Flat Log", "Flat", "Sony S-Log3", "RED Log3G10", "BMD Film Gen 5"})
-        looks.addView(chip("None".equals(l) ? "No LUT" : l, v -> { c.look = l; changed(true); }, l.equals(c.look)), lp(-2));
-      inspector.addView(scroll(looks));
-      if (CinemaMath.convertsInPost(c.look)) label((c.look.equals("Flat") ? "Flat profile" : "Log: " + c.look) + " → converted to normal colour. Tap No LUT to keep it flat.");
-      else if (!c.shotIn.isEmpty()) label("Shot in " + c.shotIn + ": kept flat for your grade. Grade it by hand, use a LUT made for " + c.shotIn + ", or tap " + c.shotIn + " above to convert it to normal colour.");
-      else label("Shot in log somewhere else? Pick its log above to convert it, or leave No LUT to keep it flat.");
-      LinearLayout conv = row();
-      boolean cv = convertLog();
-      conv.addView(chip(cv ? "NEW LOG CLIPS: CONVERT" : "NEW LOG CLIPS: STAY FLAT", v -> {
-        getSharedPreferences("editor", MODE_PRIVATE).edit().putBoolean("convertLog", !cv).apply();
-        toast(!cv ? "Log clips you add will be converted to normal colour." : "Log clips you add will stay flat for your own grade.");
-        buildInspector();
-      }, cv), lp(-2));
-      inspector.addView(conv);
-      slider("Exposure", -300, 300, Math.round(g.exposure * 100), v -> g.exposure = v / 100.0, x -> String.format(Locale.US, "%+.1f stops", x / 100.0));
-      slider("Contrast", -100, 100, Math.round(g.contrast * 100), v -> g.contrast = v / 100.0, x -> x + "");
-      slider("Saturation", -100, 100, Math.round(g.saturation * 100), v -> g.saturation = v / 100.0, x -> x + "");
-      slider("Temperature", -100, 100, Math.round(g.temperature * 100), v -> g.temperature = v / 100.0, x -> (x > 0 ? "warmer " : x < 0 ? "cooler " : "") + Math.abs(x));
-      slider("Tint", -100, 100, Math.round(g.tint * 100), v -> g.tint = v / 100.0, x -> (x > 0 ? "magenta " : x < 0 ? "green " : "") + Math.abs(x));
-      slider("Shadows", -100, 100, Math.round(g.shadows * 100), v -> g.shadows = v / 100.0, x -> x + "");
-      slider("Highlights", -100, 100, Math.round(g.highlights * 100), v -> g.highlights = v / 100.0, x -> x + "");
-      // creative / custom LUT (.cube)
-      label("Cinematic LUT" + (c.lut.isEmpty() ? "" : ": " + (LutPack.isPack(c.lut) ? LutPack.label(c.lut) : CinematicLuts.nameOf(c.lut).replaceAll("\\.cube$", ""))));
-      LinearLayout lutRow = row();
-      lutRow.addView(chip("None", v -> { c.lut = ""; changed(true); }, c.lut.isEmpty()), lp(-2));
-      for (String nm : CinematicLuts.NAMES) { String key = CinematicLuts.key(nm); lutRow.addView(chip("★ " + nm, v -> { c.lut = key; changed(true); }, key.equals(c.lut)), lp(-2)); }
-      for (String f : LutPack.list(getAssets())) { String key = LutPack.key(f); lutRow.addView(chip("◆ " + LutPack.label(key), v -> { c.lut = key; changed(true); }, key.equals(c.lut)), lp(-2)); }
-      String[] files = EditEngine.lutDir(this).list();
-      if (files != null) { java.util.Arrays.sort(files); for (String f : files) lutRow.addView(chip(f.replaceAll("\\.cube$", ""), v -> { c.lut = f; changed(true); }, f.equals(c.lut)), lp(-2)); }
-      lutRow.addView(chip("IMPORT .cube", v -> pickLut()), lp(-2));
-      lutRow.addView(chip("GET LUTS ONLINE", v -> lutSources()), lp(-2));
-      lutRow.addView(chip("EXPORT PACK", v -> exportLutPack()), lp(-2));
-      inspector.addView(scroll(lutRow));
-      if (!c.lut.isEmpty()) {
-        slider("LUT strength", 0, 100, Math.round(c.lutStrength * 100), v -> c.lutStrength = v / 100.0, x -> x + "%");
-        if (CinemaMath.convertsInPost(c.look)) label("Note: the clip's log is converted first (" + c.look + "). If your LUT expects log input, set the log above to No LUT.");
-      }
-      LinearLayout films = row();
-      for (int k = 0; k < EditModel.FILM_LOOKS.length; k++) { final int f = k; films.addView(chip(EditModel.FILM_LOOKS[k], v -> { g.film = f; changed(true); }, g.film == k), lp(-2)); }
-      inspector.addView(scroll(films));
-      if (g.film > 0) slider("Look strength", 0, 100, Math.round(g.filmStrength * 100), v -> g.filmStrength = v / 100.0, x -> x + "%");
-      LinearLayout r = row();
-      r.addView(chip("AUTO COLOUR", v -> autoColour(c, false)), lp(-2));
-      r.addView(chip("AUTO ALL", v -> { for (EditModel.Clip k : project.clips) autoColour(k, true); toast("Auto colour on every clip."); }), lp(-2));
-      r.addView(chip("RESET", v -> { c.grade = new EditModel.Grade(); changed(true); }), lp(-2));
-      r.addView(chip("COPY TO ALL CLIPS", v -> { for (EditModel.Clip k : project.clips) { k.grade = g.copy(); k.lut = c.lut; k.lutStrength = c.lutStrength; } changed(true); toast("Grade and LUT copied to every clip."); }), lp(-2));
-      inspector.addView(r);
+      colourInspector(c);
     } else {
       if (i == 0) { label("The first clip fades in from black when the project's fade in is on (PROJECT)."); return; }
       label("Into this clip from the one before:");
@@ -975,6 +1246,7 @@ public class EditorActivity extends Activity {
     @Override public void onSurfaceChanged(GL10 gl, int width, int height) { w = width; h = height; }
     @Override public void onDrawFrame(GL10 gl) {
       EditModel.Project p = shown;
+      renderer.compositor.bypass = beforeView; // preview only: exports use their own renderer
       int[] out = outputSize(p);
       double scale = Math.min(w / (double) out[0], h / (double) out[1]);
       int vw = (int) (out[0] * scale), vh = (int) (out[1] * scale);

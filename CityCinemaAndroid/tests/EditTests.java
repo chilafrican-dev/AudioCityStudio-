@@ -108,6 +108,7 @@ public class EditTests {
     trackStateTests();
     editOperationTests();
     compositingTests();
+    gradingTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -123,6 +124,74 @@ public class EditTests {
   /** Track headers: hidden layers aren't drawn, muted/soloed audio tracks, muted camera sound; markers. */
   /** Ripple trims, roll, slip, slide and in-place trims keep the programme consistent and stay inside the media. */
   /** Blend modes, the clip quad (fit, PiP, rotation, flips) and programme / export sizes for each aspect ratio. */
+  /** Wheels, levels, vibrance, pivot, curves and the HSL qualifier. */
+  static void gradingTests() {
+    double[] grey = {0.5, 0.5, 0.5}, dark = {0.1, 0.1, 0.1}, light = {0.9, 0.9, 0.9};
+    EditModel.Grade g = new EditModel.Grade();
+    for (double[] c : new double[][] {grey, dark, light, {0.8, 0.3, 0.2}}) {
+      double[] o = EditModel.grade(c, g);
+      for (int i = 0; i < 3; i++) near(o[i], c[i], 0.003, "neutral grade leaves the picture");
+    }
+    check(g.neutral(), "new grade is neutral");
+    // lift raises shadows more than highlights; gain the opposite; gamma the mid tones
+    g.liftM = 0.5;
+    double dl = EditModel.grade(dark, g)[1] - 0.1, ll = EditModel.grade(light, g)[1] - 0.9;
+    check(dl > 0.05 && dl > ll * 3, "lift works on the shadows");
+    g.liftM = 0; g.gainM = -0.5;
+    double dg = 0.1 - EditModel.grade(dark, g)[1], lg = 0.9 - EditModel.grade(light, g)[1];
+    check(lg > dg * 3, "gain works on the highlights");
+    g.gainM = 0; g.gammaM = 0.5;
+    double mid = EditModel.grade(grey, g)[1];
+    check(mid > 0.55 && Math.abs(EditModel.grade(new double[] {1, 1, 1}, g)[1] - 1) < 1e-9 && EditModel.grade(new double[] {0, 0, 0}, g)[1] < 1e-9, "gamma lifts mids, keeps black and white");
+    g.gammaM = 0;
+    // a coloured wheel tints without changing brightness
+    g.liftH = 30; g.liftA = 1; // warm shadows
+    double[] w = EditModel.grade(dark, g);
+    check(w[0] > w[2] + 0.03, "warm lift tints shadows orange");
+    double[] wv = EditModel.wheel(200, 1, 0, 1);
+    near(0.2126 * wv[0] + 0.7152 * wv[1] + 0.0722 * wv[2], 0, 1e-12, "wheel colour pushes keep brightness");
+    g = new EditModel.Grade();
+    // blacks / whites
+    g.blacks = -1;
+    check(EditModel.grade(new double[] {0.05, 0.05, 0.05}, g)[0] < 0.01, "crushing blacks");
+    g.blacks = 0; g.whites = 1;
+    check(EditModel.grade(new double[] {0.92, 0.92, 0.92}, g)[0] > 0.99, "pushing whites");
+    g = new EditModel.Grade();
+    // vibrance boosts muted colours more than vivid ones
+    g.vibrance = 1;
+    double[] muted = {0.55, 0.5, 0.45}, vivid = {0.9, 0.2, 0.1};
+    double mg = spread(EditModel.grade(muted, g)) / spread(muted), vg = spread(EditModel.grade(vivid, g)) / spread(vivid);
+    check(mg > vg + 0.3, "vibrance favours muted colours: " + mg + " vs " + vg);
+    g = new EditModel.Grade();
+    // contrast pivot: the pivot value doesn't move
+    g.contrast = 0.5; g.pivot = 0.3;
+    near(EditModel.grade(new double[] {0.3, 0.3, 0.3}, g)[0], 0.3, 0.003, "contrast pivots around its pivot");
+    g = new EditModel.Grade();
+    // curves: smooth, monotone, through the points, ends fixed
+    double[] sCurve = {0.25, 0.18, 0.75, 0.82};
+    near(EditModel.curve(sCurve, 0.25), 0.18, 1e-9, "curve through its points");
+    check(EditModel.curve(sCurve, 0) == 0 && EditModel.curve(sCurve, 1) == 1 && EditModel.curve(new double[0], 0.37) == 0.37, "curve ends and straight default");
+    double prev = -1;
+    for (double x = 0; x <= 1.0001; x += 0.01) { double y = EditModel.curve(sCurve, x); check(y >= prev - 1e-12, "curve never goes down"); prev = y; }
+    g.curveB = new double[] {0.5, 0.6};
+    double[] cb = EditModel.grade(grey, g);
+    check(cb[2] > 0.58 && Math.abs(cb[0] - 0.5) < 0.004, "blue curve only changes blue");
+    byte[] table = EditModel.curveTable(g);
+    check((table[128 * 4 + 2] & 255) > 150 && Math.abs((table[128 * 4] & 255) - 128) <= 1, "baked curve table");
+    g = new EditModel.Grade();
+    // HSL: change orange (skin) only
+    g.hslOn = true; g.hslHue = 25; g.hslWidth = 40; g.hslSat = -1;
+    double[] skin = EditModel.grade(new double[] {0.8, 0.55, 0.4}, g), sky = EditModel.grade(new double[] {0.3, 0.5, 0.9}, g), gry = EditModel.grade(grey, g);
+    check(spread(skin) < 0.05 && Math.abs(sky[2] - 0.9) < 0.01 && spread(gry) < 1e-6, "HSL desaturates only the chosen hue");
+    check(EditModel.hslWeight(g, 25, 0.5) > 0.99 && EditModel.hslWeight(g, 200, 0.5) == 0 && EditModel.hslWeight(g, 25, 0.0) == 0, "qualifier weight");
+    check(EditModel.hslWeight(g, 365 % 360 + 20, 0.5) > 0.99, "hue distance wraps around 360");
+    g.hslShow = true;
+    check(EditModel.grade(new double[] {0.8, 0.55, 0.4}, g)[0] > 0.9 && EditModel.grade(new double[] {0.3, 0.5, 0.9}, g)[0] < 0.01, "show selection: white inside, black outside");
+    check(!new EditModel.Grade().copy().hslOn && g.copy().hslShow, "copies keep HSL settings");
+  }
+
+  static double spread(double[] c) { return Math.max(c[0], Math.max(c[1], c[2])) - Math.min(c[0], Math.min(c[1], c[2])); }
+
   static void compositingTests() {
     near(EditModel.blend(0, 0.3, 0.8), 0.3, 1e-12, "normal");
     near(EditModel.blend(1, 0.5, 0.5), 0.25, 1e-12, "multiply");

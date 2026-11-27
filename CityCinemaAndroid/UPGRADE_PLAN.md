@@ -61,8 +61,12 @@ already integer microseconds (good); project format is unversioned JSON (add a v
    edge, **rotation** to any angle, separate **width / height**, **vertical flip**; **project frame shape** 16:9, 9:16,
    1:1, 4:5, 2.39:1 (preview, export sizes). Fixed: picture-in-picture zoom below 100% had no effect since 3.8.
    Shaders checked with glslangValidator (compile and link).
-5. Colour: lift/gamma/gain/offset wheels, curves, HSL qualifier, masks, before/after; LUT manager (rename, delete,
-   favourites, thumbnails).
+5. Colour grading — **done in 4.4**: lift / gamma / gain / offset **colour wheels** with masters, **blacks, whites,
+   vibrance, contrast pivot**, **curves** (master, R, G, B; monotone cubic, baked to a 256-step texture), an **HSL
+   qualifier** (presets skin / sky / foliage / red / yellow, width, softness, show selection; hue shift, saturation,
+   lightness), **BEFORE / AFTER** (preview only), LUT manager (favourites first, rename and delete imported LUTs).
+   Java and GLSL run the same steps (tests on the Java; GLSL checked with glslangValidator, which caught a reserved
+   word that would have broken the preview). Not yet: LUT thumbnails, masks (Phase 7), tracked corrections (Phase 9).
 6. Audio: per-track mixer, pan, EQ / HPF / LPF / compressor / limiter / gate, LUFS + true-peak meters, ducking,
    voice-over recording, waveform display, sync by cross-correlation.
 7. Effects (grain, halation, bloom, vignette, blur, sharpen, chromatic aberration), more transitions, keyframes.
