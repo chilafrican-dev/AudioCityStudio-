@@ -1835,6 +1835,7 @@ public class CinemaActivity extends Activity {
     recButton = new RecButton(this); recButton.setOnClickListener(v -> toggleRecord());
     LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(dp(64), dp(64)); rp.bottomMargin = dp(8);
     LinearLayout togglesGrid = new LinearLayout(this); togglesGrid.setOrientation(LinearLayout.VERTICAL);
+    addToggle(togglesGrid, "709 VIEW", () -> view709, v -> { view709 = v; if (v && Build.VERSION.SDK_INT < 33) message("709 VIEW needs Android 13 or newer."); else if (v && monitorLook() == null) message("709 VIEW converts log and Flat looks; the current look is already normal colour."); updateViewLut(); });
     addToggle(togglesGrid, "ZEBRA", () -> scopes.zebra, v -> scopes.zebra = v);
     addToggle(togglesGrid, "PEAK", () -> scopes.peaking, v -> scopes.peaking = v);
     addToggle(togglesGrid, "FALSE", () -> scopes.falseColor, v -> scopes.falseColor = v);
@@ -1931,7 +1932,67 @@ public class CinemaActivity extends Activity {
     scopes.invalidate();
   }
 
+  // ================================================================== 709 VIEW (monitoring LUT)
+  // Shows log or Flat footage in normal colour on the screen only: an AGSL shader (Android 13+) on the preview view
+  // applies the same log-to-Rec.709 conversion as the editor. The camera, the recording, the scopes, zebras and auto
+  // exposure (which read the preview texture itself) all still see the real log signal.
+  private boolean view709;
+  private String viewLutKey = "";
+
+  /** The look the monitor should convert from, or null when the picture is already normal colour. */
+  private String monitorLook() {
+    String look = CinemaMath.LOOKS[lookIndex];
+    if (rawMode || tenBit || curveIgnored || !CinemaMath.convertsInPost(look)) return null;
+    return look;
+  }
+
+  private static final String VIEW_SHADER =
+      "uniform shader content; uniform shader lut; uniform float n;\n"
+      + "half3 at(float r, float g, float b) { return lut.eval(float2(r + b * n + 0.5, g + 0.5)).rgb; }\n"
+      + "half4 main(float2 xy) {\n"
+      + "  half4 c = content.eval(xy);\n"
+      + "  float3 v = clamp(float3(c.rgb), 0.0, 1.0) * (n - 1.0);\n"
+      + "  float3 i0 = floor(v); float3 i1 = min(i0 + 1.0, float3(n - 1.0)); float3 t = v - i0;\n"
+      + "  half3 c00 = mix(at(i0.r, i0.g, i0.b), at(i1.r, i0.g, i0.b), half(t.r));\n"
+      + "  half3 c10 = mix(at(i0.r, i1.g, i0.b), at(i1.r, i1.g, i0.b), half(t.r));\n"
+      + "  half3 c01 = mix(at(i0.r, i0.g, i1.b), at(i1.r, i0.g, i1.b), half(t.r));\n"
+      + "  half3 c11 = mix(at(i0.r, i1.g, i1.b), at(i1.r, i1.g, i1.b), half(t.r));\n"
+      + "  half3 o = mix(mix(c00, c10, half(t.g)), mix(c01, c11, half(t.g)), half(t.b));\n"
+      + "  return half4(o, c.a);\n}\n";
+
+  /** Applies or removes the monitoring conversion to match the toggle and the current look (cheap when unchanged). */
+  private void updateViewLut() {
+    if (texture == null) return;
+    String look = view709 && Build.VERSION.SDK_INT >= 33 ? monitorLook() : null;
+    String key = look == null ? "" : look;
+    if (key.equals(viewLutKey)) return;
+    viewLutKey = key;
+    if (Build.VERSION.SDK_INT < 33) return;
+    if (look == null) { texture.setRenderEffect(null); return; }
+    try {
+      final int n = 33;
+      int[] px = new int[n * n * n];
+      for (int b = 0; b < n; b++) for (int g = 0; g < n; g++) for (int r = 0; r < n; r++) {
+        double[] o = CinemaMath.logToRec709(look, r / (n - 1.0), g / (n - 1.0), b / (n - 1.0));
+        px[g * n * n + b * n + r] = 0xff000000 | ((int) Math.round(CinemaMath.clamp01(o[0]) * 255) << 16)
+            | ((int) Math.round(CinemaMath.clamp01(o[1]) * 255) << 8) | (int) Math.round(CinemaMath.clamp01(o[2]) * 255);
+      }
+      android.graphics.Bitmap atlas = android.graphics.Bitmap.createBitmap(px, n * n, n, android.graphics.Bitmap.Config.ARGB_8888);
+      android.graphics.BitmapShader bs = new android.graphics.BitmapShader(atlas, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP);
+      bs.setFilterMode(android.graphics.BitmapShader.FILTER_MODE_NEAREST);
+      android.graphics.RuntimeShader sh = new android.graphics.RuntimeShader(VIEW_SHADER);
+      sh.setInputShader("lut", bs);
+      sh.setFloatUniform("n", n);
+      texture.setRenderEffect(android.graphics.RenderEffect.createRuntimeShaderEffect(sh, "content"));
+    } catch (RuntimeException e) {
+      Log.w(TAG, "709 view", e);
+      texture.setRenderEffect(null);
+      message("709 VIEW isn't available on this phone.");
+    }
+  }
+
   private void refreshUi() {
+    updateViewLut();
     if (lens == null) return;
     lensView.setText(lens.label);
     String codec = tenBit ? "HEVC 10-bit HLG" : hevc ? "HEVC" : "H.264";
@@ -2415,7 +2476,7 @@ public class CinemaActivity extends Activity {
 
   private void applyMonitorPrefs() {
     SharedPreferences p = prefs;
-    scopes.zebra = p.getBoolean("zebra", false); scopes.peaking = p.getBoolean("peak", false); scopes.falseColor = false;
+    view709 = p.getBoolean("view709", false); scopes.zebra = p.getBoolean("zebra", false); scopes.peaking = p.getBoolean("peak", false); scopes.falseColor = false;
     scopes.scopeMode = p.getInt("scope", 1); scopes.guide = p.getInt("guide", 0); scopes.grid = p.getBoolean("grid", true);
     scopes.level = p.getBoolean("level", true); scopes.center = p.getBoolean("center", false); scopes.zebraIre = p.getInt("zebraIre", 95);
     scopes.peakColor = p.getInt("peakColor", 0xffff3b30); scopes.peakSensitivity = p.getFloat("peakSens", 0.5f);
@@ -2432,7 +2493,7 @@ public class CinemaActivity extends Activity {
         .putFloat("focus", focus).putFloat("zoom", zoom).putBoolean("aeKeepShutter", aeKeepShutter).putBoolean("lockWbOnRecord", lockWbOnRecord).putBoolean("rawMode", rawMode).putBoolean("raw12", rawPack12).putBoolean("rawLossless", rawCompress).putString("rawKey", rawKey)
         .putBoolean("prores", proresMode).putInt("proresProfile", proresProfile).putInt("proresW", proresSize.getWidth()).putInt("proresH", proresSize.getHeight())
         .putInt("rawW", rawSize == null ? 0 : rawSize.getWidth()).putInt("rawH", rawSize == null ? 0 : rawSize.getHeight())
-        .putBoolean("zebra", scopes.zebra).putBoolean("peak", scopes.peaking).putInt("scope", scopes.scopeMode).putInt("guide", scopes.guide)
+        .putBoolean("view709", view709).putBoolean("zebra", scopes.zebra).putBoolean("peak", scopes.peaking).putInt("scope", scopes.scopeMode).putInt("guide", scopes.guide)
         .putBoolean("grid", scopes.grid).putBoolean("level", scopes.level).putBoolean("center", scopes.center).putInt("zebraIre", scopes.zebraIre)
         .putInt("peakColor", scopes.peakColor).putFloat("peakSens", scopes.peakSensitivity).apply();
   }

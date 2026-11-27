@@ -75,6 +75,8 @@ Phone auto exposure can't be used here: some phones (seen on a Galaxy S20 Ultra)
 
 **Tone-curve check.** Some phones claim to support custom tone curves but ignore them. City Cinema reads back what the camera actually applied. If the curve is ignored, it says so, shows *Phone look*, and turns off the log exposure offset, so log looks don't just record 2 stops dark.
 
+**709 VIEW** (camera side panel, Android 13+): shows log and Flat looks in normal colour on the screen only, with the same conversion the editor uses. Recording, zebras, false colour, scopes and auto exposure keep working on the real log signal, and nothing changes in the file. To record normal colour instead, choose the Rec.709 or Film look.
+
 **Editor.** **EDIT** (on the camera's side panel, or in CLIPS) opens a full editor.
 
 *Timeline*
