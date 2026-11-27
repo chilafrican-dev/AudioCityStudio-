@@ -109,6 +109,7 @@ public class EditTests {
     editOperationTests();
     compositingTests();
     gradingTests();
+    audioDspTests();
     System.out.println("EditTests: " + passed + " checks passed");
   }
 
@@ -125,6 +126,73 @@ public class EditTests {
   /** Ripple trims, roll, slip, slide and in-place trims keep the programme consistent and stay inside the media. */
   /** Blend modes, the clip quad (fit, PiP, rotation, flips) and programme / export sizes for each aspect ratio. */
   /** Wheels, levels, vibrance, pivot, curves and the HSL qualifier. */
+  /** Filters, dynamics, ducking, and loudness / true peak against known reference signals. */
+  static void audioDspTests() {
+    AudioDsp.Biquad lp = new AudioDsp.Biquad().set(AudioDsp.lowpass(1000, 0.707));
+    near(lp.responseDb(1000), -3.01, 0.05, "low-pass -3 dB at its frequency");
+    check(Math.abs(lp.responseDb(100)) < 0.1 && lp.responseDb(10_000) < -35, "low-pass passes lows, cuts highs");
+    AudioDsp.Biquad hp = new AudioDsp.Biquad().set(AudioDsp.highpass(100, 0.707));
+    check(hp.responseDb(20) < -25 && Math.abs(hp.responseDb(2000)) < 0.1, "high-pass cuts rumble");
+    near(new AudioDsp.Biquad().set(AudioDsp.peaking(3000, 1, 6)).responseDb(3000), 6, 0.01, "peaking EQ +6 dB at its centre");
+    AudioDsp.Biquad ls = new AudioDsp.Biquad().set(AudioDsp.lowShelf(120, 6));
+    check(Math.abs(ls.responseDb(20) - 6) < 0.3 && Math.abs(ls.responseDb(5000)) < 0.1, "low shelf");
+    AudioDsp.Biquad hs = new AudioDsp.Biquad().set(AudioDsp.highShelf(8000, -6));
+    check(Math.abs(hs.responseDb(20000) + 6) < 0.6 && Math.abs(hs.responseDb(200)) < 0.1, "high shelf");
+    // compressor: a -6 dBFS tone, threshold -18, 4:1 -> about -15 dBFS once settled
+    AudioDsp.Compressor comp = new AudioDsp.Compressor(); comp.threshold = -18; comp.ratio = 4;
+    float[] tone = sine(1000, 0.5, 48_000);
+    comp.process(tone, 48_000);
+    double outPeak = 0; for (int i = 24_000 * 2; i < tone.length; i++) outPeak = Math.max(outPeak, Math.abs(tone[i]));
+    near(AudioDsp.gainToDb(outPeak), -15, 0.6, "compressor 4:1 above -18 dB");
+    // gate: quiet hiss turned down, speech-level sound kept
+    AudioDsp.Gate gate = new AudioDsp.Gate(); gate.threshold = -45;
+    float[] hiss = sine(3000, 0.001, 48_000), loud = sine(300, 0.3, 24_000);
+    gate.process(hiss, 48_000); // the gate closes over its release time (120 ms after a 60 ms hold)
+    double hp2 = 0; for (int i = 43_200 * 2; i < hiss.length; i++) hp2 = Math.max(hp2, Math.abs(hiss[i]));
+    check(AudioDsp.gainToDb(hp2) < -88, "gate turns hiss down by its 30 dB range: " + AudioDsp.gainToDb(hp2));
+    AudioDsp.Gate gate2 = new AudioDsp.Gate(); gate2.threshold = -45;
+    gate2.process(loud, 24_000);
+    double lp2 = 0; for (int i = 12_000 * 2; i < loud.length; i++) lp2 = Math.max(lp2, Math.abs(loud[i]));
+    near(lp2, 0.3, 0.01, "gate keeps speech");
+    // ducking: music goes down by the depth while the voice talks, then back up
+    AudioDsp.Ducker d = new AudioDsp.Ducker(); d.depthDb = -12;
+    float[] voice = sine(200, 0.2, 48_000), music = sine(500, 0.5, 48_000);
+    d.process(voice, music, 48_000);
+    near(d.currentDb(), -12, 0.2, "music ducked under the voice");
+    float[] silence = new float[192_000 * 2], music2 = sine(500, 0.5, 192_000);
+    d.process(silence, music2, 192_000); // 4 s: the voice's tail fades (~0.4 s), then the music returns over its 600 ms release
+    check(d.currentDb() > -0.5, "music comes back after the voice stops");
+    // loudness: 1 kHz at -20 dBFS (peak 0.1) in both channels reads -20.0 LUFS (BS.1770 reference)
+    AudioDsp.Loudness lu = new AudioDsp.Loudness();
+    float[] ref = sine(1000, 0.1, 48_000 * 10);
+    lu.process(ref, 48_000 * 10);
+    near(lu.integrated(), -20.0, 0.1, "BS.1770 1 kHz reference");
+    near(lu.momentary, -20.0, 0.1, "momentary loudness");
+    near(lu.truePeakDb(), -20, 0.1, "true peak of a plain tone");
+    // true peak between samples: a 12 kHz tone sampled at 45 degrees has sample peaks of 0.707 but a true peak of 1
+    float[] between = new float[48_000 * 2];
+    for (int i = 0; i < 48_000; i++) { float v = (float) Math.sin(2 * Math.PI * 12_000 * i / 48_000 + Math.PI / 4); between[i * 2] = v; between[i * 2 + 1] = v; }
+    AudioDsp.Loudness lu2 = new AudioDsp.Loudness();
+    lu2.process(between, 48_000);
+    check(lu2.truePeakDb() > -0.5 && lu2.truePeakDb() < 0.5, "true peak finds the peak between samples: " + lu2.truePeakDb());
+    check(new AudioDsp.Loudness().integrated() == -120, "silence has no loudness");
+    // the voice preset chain runs and stays finite
+    AudioDsp.Chain ch = new AudioDsp.Chain();
+    float[] v2 = sine(250, 0.3, 48_000);
+    ch.process(AudioDsp.Fx.voicePreset(), v2, 48_000);
+    boolean finite = true; for (float x : v2) if (Float.isNaN(x) || Float.isInfinite(x)) finite = false;
+    check(finite, "voice chain output is finite");
+    float[] untouched = sine(250, 0.3, 4800), copy = untouched.clone();
+    new AudioDsp.Chain().process(new AudioDsp.Fx(), untouched, 4800);
+    check(java.util.Arrays.equals(untouched, copy), "a flat chain leaves the sound alone");
+  }
+
+  static float[] sine(double hz, double amp, int frames) {
+    float[] b = new float[frames * 2];
+    for (int i = 0; i < frames; i++) { float v = (float) (amp * Math.sin(2 * Math.PI * hz * i / 48_000)); b[i * 2] = v; b[i * 2 + 1] = v; }
+    return b;
+  }
+
   static void gradingTests() {
     double[] grey = {0.5, 0.5, 0.5}, dark = {0.1, 0.1, 0.1}, light = {0.9, 0.9, 0.9};
     EditModel.Grade g = new EditModel.Grade();

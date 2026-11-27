@@ -67,8 +67,15 @@ already integer microseconds (good); project format is unversioned JSON (add a v
    lightness), **BEFORE / AFTER** (preview only), LUT manager (favourites first, rename and delete imported LUTs).
    Java and GLSL run the same steps (tests on the Java; GLSL checked with glslangValidator, which caught a reserved
    word that would have broken the preview). Not yet: LUT thumbnails, masks (Phase 7), tracked corrections (Phase 9).
-6. Audio: per-track mixer, pan, EQ / HPF / LPF / compressor / limiter / gate, LUFS + true-peak meters, ducking,
-   voice-over recording, waveform display, sync by cross-correlation.
+6. Audio — **6a done in 4.5**: four buses (CAMERA, MUSIC, VOICE, FX) each with level, low / high cut, 3-band EQ
+   (bass shelf, sweepable mid, treble shelf), compressor (soft knee, make-up), noise gate, de-esser, CLEAN VOICE
+   preset; **ducking** (music under the voice track, optionally under camera sound; depth, sensitivity, attack,
+   release); **master limiter** at -1 dB (on by default: the mix no longer hard-clips); **BS.1770 loudness** and
+   **4x true peak** (live in playback, MEASURE WHOLE MIX, reported after every export); **export loudness targets**
+   -14 / -16 / -9 / -23 LUFS (two-pass). Tested against the BS.1770 1 kHz reference (-20.0 LUFS) and a between-samples
+   true peak; tests also caught and fixed two compressor detector mistakes.
+   - 6b next: waveform sync (cross-correlation) to line clips up with a song; spectral noise reduction;
+     pitch-preserving speed changes.
 7. Effects (grain, halation, bloom, vignette, blur, sharpen, chromatic aberration), more transitions, keyframes.
 8. Music video workflow (beat detection, multicam sync), automatic edit from measured shot statistics.
 9. AI features — each needs an on-device model that must be added and licensed: face landmarks / segmentation

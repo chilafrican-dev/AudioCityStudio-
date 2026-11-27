@@ -726,12 +726,24 @@ final class EditEngine {
     private final Context ctx;
     private final Map<Object, AudioSource> sources = new HashMap<>();
     private final float[] block = new float[4096 * 2];
+    // four buses (camera, music, voice, fx), each with its effects; ducking; master gain and limiter; optional meter
+    private final float[][] bus = new float[4][4096 * 2];
+    private final float[] key = new float[4096 * 2];
+    private final AudioDsp.Chain[] chains = {new AudioDsp.Chain(), new AudioDsp.Chain(), new AudioDsp.Chain(), new AudioDsp.Chain()};
+    private final AudioDsp.Ducker ducker = new AudioDsp.Ducker();
+    private final CinemaMath.Limiter limiter = new CinemaMath.Limiter(-1, 150, 48_000);
+    /** Extra gain on the whole mix (export loudness normalisation). */
+    double masterGainDb;
+    /** When set, measures the finished mix (loudness, true peak). */
+    AudioDsp.Loudness meter;
+    double duckingDb() { return ducker.currentDb(); }
+    double reductionDb(int b) { return chains[b].reductionDb(); }
 
     Mixer(Context ctx) { this.ctx = ctx; }
 
     /** Mixes `frames` (<= 4096) frames of 48 kHz stereo starting at timeline time t into out. */
     void mix(EditModel.Project p, long t, int frames, float[] out) {
-      for (int i = 0; i < frames * 2; i++) out[i] = 0;
+      for (float[] b : bus) java.util.Arrays.fill(b, 0, frames * 2, 0f);
       long t1 = t + frames * 1_000_000L / 48_000;
       long[] starts = EditModel.starts(p);
       List<Object> live = new ArrayList<>();
@@ -740,26 +752,36 @@ final class EditEngine {
         if (t1 <= starts[i] || t >= starts[i] + c.durationUs() || c.muted || !c.hasAudio) continue;
         live.add(c.id);
         double g0 = EditModel.clipGain(p, i, Math.max(t, starts[i])), g1 = EditModel.clipGain(p, i, Math.min(t1, starts[i] + c.durationUs() - 1));
-        add(c.id, c.uri, c.sourceAt(Math.max(0, t - starts[i])), Math.max(0, starts[i] - t), frames, g0, g1, out, c.speed, 0);
+        add(c.id, c.uri, c.sourceAt(Math.max(0, t - starts[i])), Math.max(0, starts[i] - t), frames, g0, g1, bus[0], c.speed, 0);
       }
       for (EditModel.Clip o : p.overlays) { // layer clips' own sound, with their volume and the project fades
         if (p.layerHidden(o.track)) continue; // a hidden layer is silent too
         if (t1 <= o.startUs || t >= o.startUs + o.durationUs() || o.muted || !o.hasAudio) continue;
         live.add(o.id);
         double g0 = o.volume * EditModel.projectFade(p, Math.max(t, o.startUs)), g1 = o.volume * EditModel.projectFade(p, Math.min(t1, o.startUs + o.durationUs() - 1));
-        add(o.id, o.uri, o.sourceAt(Math.max(0, t - o.startUs)), Math.max(0, o.startUs - t), frames, g0, g1, out, o.speed, 0);
+        add(o.id, o.uri, o.sourceAt(Math.max(0, t - o.startUs)), Math.max(0, o.startUs - t), frames, g0, g1, bus[0], o.speed, 0);
       }
       for (EditModel.Music m : p.audio) { // audio tracks: music, voice-over, effects
         if (m.muted || t1 <= m.startUs || t >= m.startUs + m.playUs()) continue;
         live.add(m.id);
         add(m.id, m.uri, m.inUs + Math.max(0, t - m.startUs), Math.max(0, m.startUs - t), frames,
-            EditModel.audioGain(p, m, Math.max(t, m.startUs)), EditModel.audioGain(p, m, Math.min(t1, m.startUs + m.playUs() - 1)), out, 1, m.pan);
+            EditModel.audioGain(p, m, Math.max(t, m.startUs)), EditModel.audioGain(p, m, Math.min(t1, m.startUs + m.playUs() - 1)), bus[1 + m.track], 1, m.pan);
       }
       for (Iterator<Map.Entry<Object, AudioSource>> it = sources.entrySet().iterator(); it.hasNext(); ) {
         Map.Entry<Object, AudioSource> e = it.next();
         if (!live.contains(e.getKey())) { e.getValue().release(); it.remove(); }
       }
+      for (int b = 0; b < 4; b++) chains[b].process(p.fx[b], bus[b], frames);
+      if (p.duckOn) { // the music dips while someone speaks (voice-over, and the camera sound if chosen)
+        for (int i = 0; i < frames * 2; i++) key[i] = bus[2][i] + (p.duckFromCamera ? bus[0][i] : 0);
+        ducker.depthDb = p.duckDepth; ducker.attackMs = p.duckAttack; ducker.releaseMs = p.duckRelease; ducker.thresholdDb = p.duckThreshold;
+        ducker.process(key, bus[1], frames);
+      }
+      float mg = (float) AudioDsp.dbToGain(masterGainDb);
+      for (int i = 0; i < frames * 2; i++) out[i] = (bus[0][i] + bus[1][i] + bus[2][i] + bus[3][i]) * mg;
+      if (p.limiterOn) limiter.process(out, frames * 2, 2); // master: peaks held under -1 dBFS
       for (int i = 0; i < frames * 2; i++) out[i] = Math.max(-1f, Math.min(1f, out[i]));
+      if (meter != null) meter.process(out, frames);
     }
 
     private float[] speedBlock = new float[0];
@@ -805,7 +827,11 @@ final class EditEngine {
 
   interface Progress { void at(float fraction, String stage); }
 
-  static final class ExportSettings { int width = 1920, height = 1080; double fps = 30; boolean hevc = true; long bitrate = 40_000_000L; }
+  static final class ExportSettings {
+    int width = 1920, height = 1080; double fps = 30; boolean hevc = true; long bitrate = 40_000_000L;
+    /** Filled in by export: loudness before normalising (if asked), and the finished file's loudness and true peak. */
+    double measuredLufs = Double.NaN, finalLufs = Double.NaN, finalPeakDb = Double.NaN;
+  }
 
   /** Renders a project to one MP4 (video through the compositor, mixed sound as AAC). Runs on the calling thread. */
   static void export(Context ctx, EditModel.Project p, ExportSettings s, FileDescriptor out, Progress progress) throws IOException {
@@ -821,6 +847,23 @@ final class EditEngine {
     aac.configure(af, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
     aac.start();
     Mixer mixer = new Mixer(ctx);
+    mixer.meter = new AudioDsp.Loudness();
+    if (p.loudnessTarget != 0) { // loudness normalisation: measure the whole mix first, then mix again with the gain that hits the target
+      progress.at(0, "Measuring loudness");
+      Mixer probe = new Mixer(ctx);
+      probe.meter = new AudioDsp.Loudness();
+      float[] buf = new float[4096 * 2];
+      long total = duration * 48_000 / 1_000_000L;
+      for (long f = 0; f < total; f += 4096) {
+        int n = (int) Math.min(4096, total - f);
+        probe.mix(p, f * 1_000_000L / 48_000, n, buf);
+        if ((f / 4096) % 50 == 0) progress.at(0.05f * f / Math.max(1, total), "Measuring loudness");
+      }
+      probe.release();
+      double measured = probe.meter.integrated();
+      if (measured > -70) mixer.masterGainDb = Math.max(-20, Math.min(20, p.loudnessTarget - measured));
+      s.measuredLufs = measured;
+    }
     List<byte[]> audioData = new ArrayList<>();
     List<long[]> audioInfo = new ArrayList<>(); // {pts, flags}
     MediaFormat audioFormat = null;
@@ -859,6 +902,7 @@ final class EditEngine {
         }
       }
     } finally {
+      s.finalLufs = mixer.meter.integrated(); s.finalPeakDb = mixer.meter.truePeakDb();
       mixer.release();
       try { aac.stop(); } catch (RuntimeException ignored) {}
       aac.release();

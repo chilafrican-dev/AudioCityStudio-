@@ -135,6 +135,7 @@ public class EditorActivity extends Activity {
     actions.addView(chip("PASTE", v -> pasteItems()), lp(-2));
     actions.addView(chip("UNDO", v -> undo()), lp(-2));
     actions.addView(chip("REDO", v -> redo()), lp(-2));
+    actions.addView(chip("MIX", v -> select(MIX)), lp(-2));
     actions.addView(chip("◆ MARK", v -> { snapshot(); boolean added = EditModel.toggleMarker(project, playhead); changed(true); if (!added) toast("Marker removed."); }), lp(-2));
     actions.addView(chip("PROJECT", v -> select(null)), lp(-2));
     actions.addView(chip("NEW", v -> newProject()), lp(-2));
@@ -777,6 +778,85 @@ public class EditorActivity extends Activity {
         }).setNegativeButton("Cancel", null).show();
   }
 
+  // ================================================================================================ audio mix
+
+  /** The MIX panel (selected like a clip). */
+  private static final Object MIX = new Object();
+  private int mixBus = 2;
+  private volatile double liveLufs = -120, livePeak = -120, liveDuck;
+  private TextView meterView;
+
+  private void mixInspector() {
+    heading("Mix", "Effects per track, ducking, master limiter and loudness. Play to see the meters.");
+    meterView = text("Play the timeline to measure", 12, ACCENT); meterView.setSingleLine(false);
+    inspector.addView(meterView);
+    LinearLayout bus = row();
+    for (int k = 0; k < 4; k++) { final int b = k; bus.addView(chip(EditModel.Project.BUSES[k] + (project.fx[k].active() ? " •" : ""), v -> { mixBus = b; buildInspector(); }, mixBus == k), lp(-2)); }
+    inspector.addView(scroll(bus));
+    AudioDsp.Fx f = project.fx[mixBus];
+    LinearLayout pre = row();
+    pre.addView(chip("CLEAN VOICE", v -> { snapshot(); project.fx[mixBus] = AudioDsp.Fx.voicePreset(); changed(true); }), lp(-2));
+    pre.addView(chip("RESET", v -> { snapshot(); project.fx[mixBus] = new AudioDsp.Fx(); changed(true); }), lp(-2));
+    inspector.addView(pre);
+    slider("Level", -24, 12, Math.round(f.gainDb), v -> f.gainDb = v, x -> x + " dB");
+    slider("Low cut (high-pass)", 0, 400, Math.round(f.hpfHz), v -> f.hpfHz = v < 20 ? 0 : v, x -> x < 20 ? "off" : x + " Hz");
+    slider("High cut (low-pass)", 0, 200, f.lpfHz <= 0 ? 0 : Math.round(f.lpfHz / 100), v -> f.lpfHz = v < 10 ? 0 : v * 100, x -> x < 10 ? "off" : (x * 100) + " Hz");
+    slider("Bass (120 Hz)", -12, 12, Math.round(f.lowDb), v -> f.lowDb = v, x -> x + " dB");
+    slider("Mid", -12, 12, Math.round(f.midDb), v -> f.midDb = v, x -> x + " dB");
+    slider("Mid frequency", 2, 80, Math.round(f.midHz / 100), v -> f.midHz = v * 100, x -> (x * 100) + " Hz");
+    slider("Treble (8 kHz)", -12, 12, Math.round(f.highDb), v -> f.highDb = v, x -> x + " dB");
+    LinearLayout dyn = row();
+    dyn.addView(chip(f.compOn ? "COMPRESSOR ON" : "COMPRESSOR", v -> { f.compOn = !f.compOn; changed(true); }, f.compOn), lp(-2));
+    dyn.addView(chip(f.gateOn ? "NOISE GATE ON" : "NOISE GATE", v -> { f.gateOn = !f.gateOn; changed(true); }, f.gateOn), lp(-2));
+    inspector.addView(scroll(dyn));
+    if (f.compOn) {
+      slider("Compressor threshold", -40, 0, Math.round(f.compThreshold), v -> f.compThreshold = v, x -> x + " dB");
+      slider("Ratio", 15, 100, Math.round(f.compRatio * 10), v -> f.compRatio = v / 10.0, x -> String.format(Locale.US, "%.1f:1", x / 10.0));
+      slider("Make-up gain", 0, 18, Math.round(f.compMakeup), v -> f.compMakeup = v, x -> "+" + x + " dB");
+    }
+    if (f.gateOn) slider("Gate threshold", -80, -20, Math.round(f.gateThreshold), v -> f.gateThreshold = v, x -> x + " dB (quieter is turned down)");
+    slider("De-esser", 0, 100, Math.round(f.deEss * 100), v -> f.deEss = v / 100.0, x -> x == 0 ? "off" : x + "%");
+    // master
+    label("Master");
+    LinearLayout m = row();
+    m.addView(chip(project.limiterOn ? "LIMITER -1 dB ✓" : "LIMITER OFF", v -> { project.limiterOn = !project.limiterOn; changed(true); }, project.limiterOn), lp(-2));
+    m.addView(chip(project.duckOn ? "DUCKING ON" : "DUCKING", v -> { project.duckOn = !project.duckOn; changed(true); }, project.duckOn), lp(-2));
+    m.addView(chip(project.duckFromCamera ? "DUCK FOR VOICE + CAMERA" : "DUCK FOR VOICE TRACK", v -> { project.duckFromCamera = !project.duckFromCamera; changed(true); }, project.duckFromCamera), lp(-2));
+    inspector.addView(scroll(m));
+    if (project.duckOn) {
+      slider("Duck depth", -30, -3, Math.round(project.duckDepth), v -> project.duckDepth = v, x -> x + " dB");
+      slider("Sensitivity", -60, -20, Math.round(project.duckThreshold), v -> project.duckThreshold = v, x -> "speech above " + x + " dB");
+      slider("Duck attack", 10, 500, Math.round(project.duckAttack), v -> project.duckAttack = v, x -> x + " ms");
+      slider("Duck release", 100, 3000, Math.round(project.duckRelease), v -> project.duckRelease = v, x -> x + " ms");
+    }
+    label("Export loudness (measured over the whole mix, then the limiter keeps peaks under -1 dB)");
+    LinearLayout lt = row();
+    double[] targets = {0, -14, -16, -9, -23};
+    String[] names = {"AS MIXED", "-14 LUFS (YouTube, Spotify)", "-16 LUFS (podcasts, Apple)", "-9 LUFS (loud music video)", "-23 LUFS (broadcast)"};
+    for (int k = 0; k < targets.length; k++) { final double tg = targets[k]; lt.addView(chip(names[k], v -> { project.loudnessTarget = tg; changed(true); }, project.loudnessTarget == tg), lp(-2)); }
+    inspector.addView(scroll(lt));
+    LinearLayout ms = row();
+    ms.addView(chip("MEASURE WHOLE MIX", v -> measureMix()), lp(-2));
+    inspector.addView(ms);
+  }
+
+  /** Mixes the whole programme without playing it and reports its integrated loudness and true peak. */
+  private void measureMix() {
+    final EditModel.Project p = EditModel.snapshot(project);
+    toast("Measuring the whole mix… the result appears in a moment.");
+    new Thread(() -> {
+      EditEngine.Mixer mx = new EditEngine.Mixer(this);
+      mx.meter = new AudioDsp.Loudness();
+      float[] buf = new float[4096 * 2];
+      long total = EditModel.duration(p) * 48_000 / 1_000_000L;
+      for (long f = 0; f < total; f += 4096) mx.mix(p, f * 1_000_000L / 48_000, (int) Math.min(4096, total - f), buf);
+      mx.release();
+      double lufs = mx.meter.integrated(), peak = mx.meter.truePeakDb();
+      ui.post(() -> toast(lufs <= -70 ? "The mix is silent." : String.format(Locale.US, "Whole mix: %.1f LUFS integrated, true peak %.1f dBTP.%s", lufs, peak,
+          project.loudnessTarget != 0 ? String.format(Locale.US, " Export will apply %+.1f dB to reach %.0f LUFS.", Math.max(-20, Math.min(20, project.loudnessTarget - lufs)), project.loudnessTarget) : "")));
+    }, "measure-mix").start();
+  }
+
   private static String trimNum(double v) { return v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(v); }
 
   private void askLog(EditModel.Clip c) {
@@ -1017,6 +1097,7 @@ public class EditorActivity extends Activity {
     if (selected instanceof EditModel.Clip && (project.clips.contains(selected) || project.overlays.contains(selected))) clipInspector((EditModel.Clip) selected);
     else if (selected instanceof EditModel.Title && project.titles.contains(selected)) titleInspector((EditModel.Title) selected);
     else if (selected instanceof EditModel.Music && project.audio.contains(selected)) musicInspector((EditModel.Music) selected);
+    else if (selected == MIX) mixInspector();
     else projectInspector();
   }
 
@@ -1274,6 +1355,7 @@ public class EditorActivity extends Activity {
     final EditModel.Project p = shown;
     audioThread = new Thread(() -> {
       EditEngine.Mixer mixer = new EditEngine.Mixer(EditorActivity.this);
+      mixer.meter = new AudioDsp.Loudness();
       int min = AudioTrack.getMinBufferSize(48_000, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT);
       AudioTrack track = new AudioTrack.Builder()
           .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build())
@@ -1287,6 +1369,7 @@ public class EditorActivity extends Activity {
           long t = start + written * 1_000_000L / 48_000;
           if (t >= end) break;
           if (silent) java.util.Arrays.fill(buf, 0f); else mixer.mix(p, t, 1024, buf);
+          liveLufs = mixer.meter.momentary; livePeak = mixer.meter.truePeakDb(); liveDuck = mixer.duckingDb();
           track.write(buf, 0, buf.length, AudioTrack.WRITE_BLOCKING);
           written += 1024;
           // the picture follows the sound actually heard
@@ -1310,7 +1393,11 @@ public class EditorActivity extends Activity {
   }
 
   private final Runnable followPlayhead = new Runnable() {
-    @Override public void run() { updateTime(); timeline.invalidate(); if (playing) ui.postDelayed(this, 40); }
+    @Override public void run() {
+      updateTime(); timeline.invalidate();
+      if (meterView != null && selected == MIX) meterView.setText(String.format(Locale.US, "Now: %.1f LUFS (momentary) · true peak so far %.1f dBTP%s", liveLufs, livePeak, liveDuck < -0.5 ? String.format(Locale.US, " · music ducked %.0f dB", liveDuck) : ""));
+      if (playing) ui.postDelayed(this, 40);
+    }
   };
 
   private void updateTime() { timeView.setText(fmt(playhead) + " / " + fmt(EditModel.duration(project))); }
@@ -1394,7 +1481,9 @@ public class EditorActivity extends Activity {
         }
         ContentValues done = new ContentValues(); done.put(MediaStore.MediaColumns.IS_PENDING, 0);
         getContentResolver().update(out, done, null, null);
-        msg = "Saved " + name + " in Movies/City Cinema (" + s.width + "×" + s.height + ", " + CinemaMath.fpsLabel(s.fps) + " fps, " + (s.hevc ? "HEVC" : "H.264") + ").";
+        msg = "Saved " + name + " in Movies/City Cinema (" + s.width + "×" + s.height + ", " + CinemaMath.fpsLabel(s.fps) + " fps, " + (s.hevc ? "HEVC" : "H.264") + ")."
+            + (Double.isNaN(s.finalLufs) || s.finalLufs <= -70 ? "" : String.format(Locale.US, "\nSound: %.1f LUFS, true peak %.1f dBTP%s.", s.finalLufs, s.finalPeakDb,
+                Double.isNaN(s.measuredLufs) ? "" : String.format(Locale.US, " (mixed at %.1f LUFS, normalised to %.0f)", s.measuredLufs, p.loudnessTarget)));
       } catch (Exception e) {
         Log.w(TAG, "export", e);
         if (out != null) try { getContentResolver().delete(out, null, null); } catch (RuntimeException ignored) {}

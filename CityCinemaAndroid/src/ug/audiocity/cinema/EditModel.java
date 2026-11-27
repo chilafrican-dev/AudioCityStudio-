@@ -225,7 +225,14 @@ final class EditModel {
   }
 
   static final class Project {
-    static final int VERSION = 5; // 1: main track only; 2: layer tracks; 3: audio tracks; 4: track states and markers; 5: compositing, aspect
+    static final int VERSION = 6; // 1: main track only; 2: layer tracks; 3: audio tracks; 4: track states and markers; 5: compositing, aspect; 6: audio mix
+    static final String[] BUSES = {"CAMERA", "MUSIC", "VOICE", "FX"};
+    /** Effects of the four audio buses: camera sound (main and layer clips), then the MUSIC, VOICE and FX tracks. */
+    final AudioDsp.Fx[] fx = {new AudioDsp.Fx(), new AudioDsp.Fx(), new AudioDsp.Fx(), new AudioDsp.Fx()};
+    boolean limiterOn = true, duckOn, duckFromCamera;
+    double duckDepth = -12, duckAttack = 80, duckRelease = 600, duckThreshold = -40;
+    /** Export loudness target in LUFS (0 = leave the level as mixed). */
+    double loudnessTarget;
     static final String[] ASPECTS = {"Source", "16:9", "9:16", "1:1", "4:5", "2.39:1"};
     static final double[] ASPECT_RATIOS = {0, 16 / 9.0, 9 / 16.0, 1, 4 / 5.0, 2.39};
     /** Frame shape of the programme: index into ASPECTS (0 = the first clip's own shape). */
@@ -264,6 +271,10 @@ final class EditModel {
       for (long m : markers) mk.put(m);
       j.put("markers", mk).put("hiddenLayers", hiddenLayers).put("lockedLayers", lockedLayers).put("audioMute", audioMute).put("audioSolo", audioSolo)
           .put("titlesHidden", titlesHidden).put("mainMuted", mainMuted).put("aspect", aspect);
+      JSONArray fa = new JSONArray();
+      for (AudioDsp.Fx f : fx) fa.put(f.json());
+      j.put("fx", fa).put("limiterOn", limiterOn).put("duckOn", duckOn).put("duckFromCamera", duckFromCamera).put("duckDepth", duckDepth)
+          .put("duckAttack", duckAttack).put("duckRelease", duckRelease).put("duckThreshold", duckThreshold).put("loudnessTarget", loudnessTarget);
       return j;
     }
 
@@ -282,6 +293,11 @@ final class EditModel {
       if (mk != null) for (int i = 0; i < mk.length(); i++) p.markers.add(mk.optLong(i));
       p.hiddenLayers = j.optInt("hiddenLayers"); p.lockedLayers = j.optInt("lockedLayers"); p.audioMute = j.optInt("audioMute"); p.audioSolo = j.optInt("audioSolo");
       p.titlesHidden = j.optBoolean("titlesHidden"); p.mainMuted = j.optBoolean("mainMuted"); p.aspect = Math.max(0, Math.min(ASPECTS.length - 1, j.optInt("aspect", 0)));
+      JSONArray fa = j.optJSONArray("fx");
+      if (fa != null) for (int i = 0; i < Math.min(4, fa.length()); i++) p.fx[i] = AudioDsp.Fx.from(fa.optJSONObject(i));
+      p.limiterOn = j.optBoolean("limiterOn", true); p.duckOn = j.optBoolean("duckOn"); p.duckFromCamera = j.optBoolean("duckFromCamera");
+      p.duckDepth = j.optDouble("duckDepth", -12); p.duckAttack = j.optDouble("duckAttack", 80); p.duckRelease = j.optDouble("duckRelease", 600);
+      p.duckThreshold = j.optDouble("duckThreshold", -40); p.loudnessTarget = j.optDouble("loudnessTarget", 0);
       p.fadeIn = j.optBoolean("fadeIn", true); p.fadeOut = j.optBoolean("fadeOut", true); p.fadeUs = j.optLong("fadeUs", 700_000);
       return p;
     }
@@ -299,6 +315,9 @@ final class EditModel {
     q.markers.addAll(p.markers);
     q.hiddenLayers = p.hiddenLayers; q.lockedLayers = p.lockedLayers; q.audioMute = p.audioMute; q.audioSolo = p.audioSolo;
     q.titlesHidden = p.titlesHidden; q.mainMuted = p.mainMuted; q.aspect = p.aspect;
+    for (int i = 0; i < 4; i++) q.fx[i] = p.fx[i].copy();
+    q.limiterOn = p.limiterOn; q.duckOn = p.duckOn; q.duckFromCamera = p.duckFromCamera; q.duckDepth = p.duckDepth;
+    q.duckAttack = p.duckAttack; q.duckRelease = p.duckRelease; q.duckThreshold = p.duckThreshold; q.loudnessTarget = p.loudnessTarget;
     q.fadeIn = p.fadeIn; q.fadeOut = p.fadeOut; q.fadeUs = p.fadeUs;
     return q;
   }
